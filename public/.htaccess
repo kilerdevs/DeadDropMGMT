@@ -1,0 +1,4 @@
+# Serve only static assets from this directory
+<FilesMatch "\.php$">
+    Require all denied
+</FilesMatch>

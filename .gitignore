@@ -1,0 +1,7 @@
+config.php
+logs/
+uploads/
+fromftp/
+_obs_payload.json
+prompt.txt
+.claude/
