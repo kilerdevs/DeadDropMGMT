@@ -534,9 +534,9 @@ $init_zoom = $has_pin ? 17 : 12;
     const hasPin   = <?= json_encode($has_pin) ?>;
 
     const map = L.map('map-picker').setView([initLat, initLng], initZoom);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    L.tileLayer('/admin/tile_proxy.php?z={z}&x={x}&y={y}', {
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-        subdomains: 'abc', maxZoom: 19
+        maxZoom: 19
     }).addTo(map);
 
     const latInput   = document.getElementById('lat');
@@ -570,11 +570,7 @@ $init_zoom = $has_pin ? 17 : 12;
         this.textContent = '…';
         this.disabled = true;
         try {
-            const r = await fetch(
-                'https://nominatim.openstreetmap.org/search?q=' + encodeURIComponent(q) +
-                '&format=json&limit=1',
-                { headers: { 'Accept-Language': 'pl' } }
-            );
+            const r = await fetch('/admin/geocode_proxy.php?q=' + encodeURIComponent(q));
             const d = await r.json();
             if (d.length) {
                 const lat = parseFloat(d[0].lat), lng = parseFloat(d[0].lon);

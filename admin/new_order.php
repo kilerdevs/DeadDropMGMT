@@ -124,9 +124,9 @@ $csrf = generate_csrf();
     });
 
     var map = L.map('map-picker', { zoomControl: true }).setView([52.2297, 21.0122], 12);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    L.tileLayer('/admin/tile_proxy.php?z={z}&x={x}&y={y}', {
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-        subdomains: 'abc', maxZoom: 19
+        maxZoom: 19
     }).addTo(map);
 
     var latInput   = document.getElementById('lat');
@@ -158,10 +158,7 @@ $csrf = generate_csrf();
         this.textContent = '…';
         this.disabled = true;
         try {
-            var r = await fetch(
-                'https://nominatim.openstreetmap.org/search?q=' + encodeURIComponent(q) +
-                '&format=json&limit=1', { headers: { 'Accept-Language': 'pl' } }
-            );
+            var r = await fetch('/admin/geocode_proxy.php?q=' + encodeURIComponent(q));
             var d = await r.json();
             if (d.length) {
                 var lat = parseFloat(d[0].lat), lng = parseFloat(d[0].lon);

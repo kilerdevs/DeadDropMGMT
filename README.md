@@ -118,16 +118,18 @@ The PHP backend has zero dependencies — no Composer, no framework. The browser
 
 All three are unmodified upstream source, committed as static files — nothing is fetched over the network to load them. Google Fonts previously served IBM Plex Mono; it's now self-hosted, subset to just the Latin ranges this UI (Polish/English) actually uses to keep it light — the cyrillic/vietnamese subsets Google's CSS also served were dropped entirely.
 
+### Proxied server-side (admin panel only)
+
+The admin map picker (`admin/new_order.php`, `admin/edit.php`) never talks to OpenStreetMap directly. Tile requests go through `admin/tile_proxy.php` (validated `z`/`x`/`y`, disk-cached under `cache/osm_tiles/` for 7 days, so repeat views don't even leave the server) and address search goes through `admin/geocode_proxy.php` to Nominatim. Both require an authenticated admin session. The upshot: an owner/courier's real IP and search queries are never exposed to OpenStreetMap — only this server's IP is, and the CSP (`includes/auth.php`) reflects that (`img-src`/`connect-src` no longer allowlist any OSM host for the admin panel).
+
 ### Live external services (real network calls the browser still makes)
 
 | Service | Called from | Purpose | Why it isn't bundled |
 |---|---|---|---|
-| OpenStreetMap tiles (`*.tile.openstreetmap.org`) | Admin map picker; public location-reveal page | Map tile images | Global raster tile coverage at every zoom level is terabytes — no way to vendor this lightly |
 | OpenStreetMap embed (`www.openstreetmap.org`) | Public location-reveal page | Embedded `<iframe>` map showing the pickup pin | Rendered server-side per arbitrary coordinate on request — there's nothing static to bundle |
-| Nominatim (`nominatim.openstreetmap.org`) | Admin map picker only | Address search / geocoding | Needs a full planet-scale geocoding database behind it; self-hosting means running your own Nominatim instance, not something a repo can carry |
 | Google Maps / Apple Maps | Public location-reveal page | Plain outbound `<a href>` links | Not a resource load at all — nothing is fetched or embedded, so there's nothing to bundle. Clicking just opens the respective site in a new tab |
 
-These are exactly the hosts allowlisted in the CSP (`includes/auth.php`) — nothing else can load. **Worth knowing:** loading OpenStreetMap tiles sends the visitor's IP to OSM on every page view, which is in some tension with the "no tracking" claim shown on the public pages — that claim is about *this app* not tracking recipients, not about the third parties it loads map tiles from. If your threat model requires zero third-party contact, the only remaining option is standing up your own tile server and Nominatim instance and pointing the map picker at them.
+These are exactly the hosts allowlisted in the public CSP (`includes/auth.php`) — nothing else can load. **Worth knowing:** the embedded map iframe sends the *customer's* IP to OSM when they view a delivered order's location — that's a request their own browser makes, and is in some tension with the "no tracking" claim shown on the public pages (that claim is about *this app* not tracking recipients, not about the third party it embeds a map from). If your threat model requires zero third-party contact even for that, the only remaining option is standing up your own tile server and pointing the public page at a self-hosted map instead of the OSM embed.
 
 ---
 

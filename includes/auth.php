@@ -200,8 +200,8 @@ function set_security_headers(bool $admin = false): string {
             "style-src 'self'; " .
             "font-src 'self'; " .
             "script-src 'self' 'nonce-{$nonce}'; " .
-            "img-src 'self' data: blob: https://*.tile.openstreetmap.org; " .
-            "connect-src 'self' https://nominatim.openstreetmap.org;"
+            "img-src 'self' data: blob:; " .
+            "connect-src 'self';"
         );
         return $nonce;
     }

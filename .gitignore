@@ -1,6 +1,7 @@
 config.php
 logs/
 uploads/
+cache/osm_tiles/
 fromftp/
 _obs_payload.json
 prompt.txt
