@@ -352,7 +352,9 @@ function s_label(array $s, string $key): string {
     document.querySelectorAll('.sw input[type="checkbox"]').forEach(function (cb) {
         cb.addEventListener('change', function () {
             if (cb.name === 'analytics_enabled' && cb.checked) {
-                var msg = 'Analityka przechowuje dodatkowe dane aktywności użytkowników: adresy IP, znaczniki czasu, tokeny zamówień oraz typ zdarzenia. Na podstawie tych danych można oszacować całkowitą liczbę zamówień od początku działania systemu.\n\nWłączyć analitykę?';
+                var msg = 'UWAGA: na podstawie zebranych danych można oszacować CAŁKOWITĄ LICZBĘ ZAMÓWIEŃ od początku działania systemu.\n\n' +
+                    'Analityka przechowuje dodatkowe dane aktywności użytkowników: adresy IP, znaczniki czasu, tokeny zamówień oraz typ zdarzenia.\n\n' +
+                    'Włączyć analitykę?';
                 if (!window.confirm(msg)) { cb.checked = false; return; }
             }
             var state = cb.closest('.sw').querySelector('.sw-state');
