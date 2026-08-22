@@ -4,6 +4,7 @@ require_once dirname(__DIR__) . '/config.php';
 require_once dirname(__DIR__) . '/includes/db.php';
 require_once dirname(__DIR__) . '/includes/auth.php';
 require_once dirname(__DIR__) . '/includes/settings.php';
+require_once dirname(__DIR__) . '/includes/audit.php';
 
 start_secure_session();
 require_owner();
@@ -17,6 +18,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } elseif (($_POST['action'] ?? '') === 'clear_analytics') {
         try {
             get_db()->exec('TRUNCATE TABLE order_events');
+            audit('analytics_clear');
             $_SESSION['flash']    = 'Dane analityczne zostały usunięte.';
             $_SESSION['flash_ok'] = true;
         } catch (Exception $e) {
@@ -26,6 +28,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     } elseif (($_POST['action'] ?? '') === 'clear_log') {
         file_put_contents(ERROR_LOG_PATH, '');
+        audit('errorlog_clear');
         $_SESSION['flash']    = 'Log błędów wyczyszczony.';
         $_SESSION['flash_ok'] = true;
     }
@@ -74,6 +77,7 @@ $groups = [
         'extend_hours_options' => ['type' => 'text',   'placeholder' => '24,48,72', 'unit' => 'oddzielone przecinkiem'],
     ],
     'Bezpieczeństwo' => [
+        'rate_limit_enabled'    => ['type' => 'toggle'],
         'rate_limit_max'        => ['type' => 'slider', 'min' => 3,   'max' => 10,  'step' => 1,   'default' => '5',   'format' => 'count'],
         'rate_limit_window_min' => ['type' => 'slider', 'min' => 5,   'max' => 60,  'step' => 5,   'default' => '15',  'format' => 'min'],
         'admin_session_hours'   => ['type' => 'slider', 'min' => 0.5, 'max' => 5,   'step' => 0.5, 'default' => '4',   'format' => 'session'],

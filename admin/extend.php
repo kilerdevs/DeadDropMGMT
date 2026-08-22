@@ -4,6 +4,7 @@ require_once dirname(__DIR__) . '/config.php';
 require_once dirname(__DIR__) . '/includes/db.php';
 require_once dirname(__DIR__) . '/includes/auth.php';
 require_once dirname(__DIR__) . '/includes/settings.php';
+require_once dirname(__DIR__) . '/includes/audit.php';
 
 set_security_headers(true);
 start_secure_session();
@@ -47,6 +48,7 @@ try {
          WHERE id = ?'
     )->execute([$hours, $id]);
 
+    audit('order_extend', $id, null, "+{$hours}h");
     $_SESSION['flash']    = "Termin przedłużony o {$hours}h.";
     $_SESSION['flash_ok'] = true;
 } catch (Exception $e) {

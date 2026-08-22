@@ -3,6 +3,7 @@ declare(strict_types=1);
 require_once dirname(__DIR__) . '/config.php';
 require_once dirname(__DIR__) . '/includes/db.php';
 require_once dirname(__DIR__) . '/includes/auth.php';
+require_once dirname(__DIR__) . '/includes/audit.php';
 
 set_security_headers(true);
 start_secure_session();
@@ -43,6 +44,7 @@ try {
     if ($photo && preg_match('#^\d+/[0-9a-f]+\.(jpg|jpeg|png|webp|gif)$#i', $photo['filename'])) {
         secure_unlink(dirname(__DIR__) . '/uploads/' . $photo['filename']);
         $db->prepare('DELETE FROM order_photos WHERE id = ?')->execute([$photo_id]);
+        audit('photo_delete', $order_id);
     }
 } catch (Exception $e) {
     log_err('Photo delete error: ' . $e->getMessage());

@@ -57,14 +57,17 @@ Built with zero external PHP dependencies. Every security concern addressed at t
 | Location data at rest | AES-256-CBC, random IV per record, key lives only in `config.php` (never in DB) |
 | Session fixation | `session_regenerate_id(true)` on login |
 | CSRF | 64-byte random token in session, `hash_equals()` comparison on every POST |
-| Brute-force | Session-based rate limiter — 10 failed attempts per 15-min window |
+| Brute-force | IP-based rate limiter (configurable, togglable) — pickup guessing, admin login, 2FA codes |
 | XSS | `htmlspecialchars(..., ENT_QUOTES, 'UTF-8')` on all user-derived output |
 | Clickjacking / sniffing | `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, strict CSP, HSTS |
 | Error leakage | `display_errors=0`, all exceptions caught and logged, generic user-facing messages |
 | Direct file access | `includes/`, `config.php`, `logs/`, `cron/` blocked via `.htaccess` |
 | Cookie theft | `httponly`, `samesite=Strict`, `secure` (auto-enabled when HTTPS detected) |
 
-**Not included (configure externally):** TLS, IP-based rate limiting, 2FA, audit log for writes.
+| 2FA | TOTP (RFC 6238), compatible with Aegis and other authenticator apps — self-service per account |
+| Write actions | Audit log — every admin create/edit/delete/setting-change recorded with actor, IP, timestamp |
+
+**Not included (configure externally):** TLS.
 
 ---
 

@@ -72,7 +72,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && $loc_data === null && !$correct_prep
 
 // ── Handle POST ───────────────────────────────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $rl = rl_status();
+    $rl = rl_status('public');
 
     if ($rl['blocked']) {
         $blocked       = true;
@@ -133,7 +133,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             }
                         }
                     } else {
-                        rl_increment();
+                        rl_increment('public');
                         log_event('unlock_fail', (int)$order['id'], $raw_token);
                         $error = 'Nieprawidłowe dane uwierzytelniające.';
                     }

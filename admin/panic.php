@@ -4,6 +4,7 @@ require_once dirname(__DIR__) . '/config.php';
 require_once dirname(__DIR__) . '/includes/db.php';
 require_once dirname(__DIR__) . '/includes/auth.php';
 require_once dirname(__DIR__) . '/includes/settings.php';
+require_once dirname(__DIR__) . '/includes/audit.php';
 
 start_secure_session();
 require_owner();
@@ -38,6 +39,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $step === 3) {
                 foreach (glob($dir . '/*') ?: [] as $f) { secure_unlink($f); }
                 @rmdir($dir);
             }
+
+            audit('panic_wipe', null, null, "orders={$counts['orders']} photos={$counts['photos']}");
 
             $db->exec('SET FOREIGN_KEY_CHECKS = 0');
             $db->exec('TRUNCATE TABLE order_photos');

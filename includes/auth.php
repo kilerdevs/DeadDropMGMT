@@ -81,7 +81,19 @@ function courier_owns_order(int $order_id): bool {
 
 // ── Login / logout ────────────────────────────────────────────────────────────
 
-function admin_login(string $username, string $password): bool {
+// Completes login: sets the full session and clears any pending-2FA state.
+function admin_finish_login(int $user_id, string $role, string $username): void {
+    session_regenerate_id(true);
+    $_SESSION['user_id']    = $user_id;
+    $_SESSION['user_role']  = $role;
+    $_SESSION['user_name']  = $username;
+    $_SESSION['login_time'] = time();
+    unset($_SESSION['csrf_token'], $_SESSION['pending_2fa_user_id'], $_SESSION['pending_2fa_time']);
+}
+
+// Returns 'ok' (fully logged in), 'need_2fa' (password ok, TOTP code required
+// next), or 'fail' (bad credentials).
+function admin_login(string $username, string $password): string {
     require_once dirname(__DIR__) . '/includes/db.php';
     try {
         $db = get_db();
@@ -101,28 +113,26 @@ function admin_login(string $username, string $password): bool {
         if (defined('ADMIN_USERNAME') && defined('ADMIN_PASSWORD_HASH') &&
             hash_equals(ADMIN_USERNAME, $username) &&
             password_verify($password, ADMIN_PASSWORD_HASH)) {
-            session_regenerate_id(true);
-            $_SESSION['user_id']    = 0;
-            $_SESSION['user_role']  = 'owner';
-            $_SESSION['user_name']  = $username;
-            $_SESSION['login_time'] = time();
-            unset($_SESSION['csrf_token']);
-            return true;
+            admin_finish_login(0, 'owner', $username);
+            return 'ok';
         }
-        return false;
+        return 'fail';
     }
 
     if (!$user || !password_verify($password, $user['password_hash'])) {
-        return false;
+        return 'fail';
     }
 
-    session_regenerate_id(true);
-    $_SESSION['user_id']    = (int)$user['id'];
-    $_SESSION['user_role']  = $user['role'];
-    $_SESSION['user_name']  = $user['username'];
-    $_SESSION['login_time'] = time();
-    unset($_SESSION['csrf_token']);
-    return true;
+    if (!empty($user['totp_enabled'])) {
+        session_regenerate_id(true);
+        $_SESSION['pending_2fa_user_id'] = (int)$user['id'];
+        $_SESSION['pending_2fa_time']    = time();
+        unset($_SESSION['csrf_token']);
+        return 'need_2fa';
+    }
+
+    admin_finish_login((int)$user['id'], $user['role'], $user['username']);
+    return 'ok';
 }
 
 function admin_logout(): void {
@@ -190,30 +200,69 @@ function set_security_headers(bool $admin = false): string {
     return '';
 }
 
-// ── Rate limiting (session-based) ─────────────────────────────────────────────
+// ── Rate limiting (IP-based, DB-backed, togglable via settings) ───────────────
+// scope separates independent budgets (e.g. 'public' pickup guessing vs
+// 'admin_login' vs 'admin_2fa') so abuse on one surface doesn't lock out another.
 
-function rl_status(): array {
-    $now = time();
-    if (empty($_SESSION['rl_count'])) {
-        $_SESSION['rl_count'] = 0;
-        $_SESSION['rl_start'] = $now;
+function rl_enabled(): bool {
+    require_once dirname(__DIR__) . '/includes/settings.php';
+    return get_setting('rate_limit_enabled', '1') === '1';
+}
+
+function rl_status(string $scope = 'public'): array {
+    if (!rl_enabled()) {
+        return ['blocked' => false, 'remaining' => 0, 'count' => 0];
     }
-    if (($now - $_SESSION['rl_start']) >= RATE_LIMIT_WINDOW) {
-        $_SESSION['rl_count'] = 0;
-        $_SESSION['rl_start'] = $now;
+    require_once dirname(__DIR__) . '/includes/settings.php';
+    $max    = rl_max();
+    $window = rl_window_seconds();
+    try {
+        $stmt = get_db()->prepare('SELECT count, window_start FROM rate_limits WHERE ip_address = ? AND scope = ? LIMIT 1');
+        $stmt->execute([get_client_ip(), $scope]);
+        $row = $stmt->fetch();
+    } catch (Exception $e) {
+        return ['blocked' => false, 'remaining' => 0, 'count' => 0];
     }
-    $remaining = RATE_LIMIT_WINDOW - ($now - $_SESSION['rl_start']);
+    if (!$row || (time() - strtotime($row['window_start'])) >= $window) {
+        return ['blocked' => false, 'remaining' => $window, 'count' => 0];
+    }
     return [
-        'blocked'   => $_SESSION['rl_count'] >= RATE_LIMIT_MAX,
-        'remaining' => max(0, $remaining),
-        'count'     => $_SESSION['rl_count'],
+        'blocked'   => (int)$row['count'] >= $max,
+        'remaining' => max(0, $window - (time() - strtotime($row['window_start']))),
+        'count'     => (int)$row['count'],
     ];
 }
 
-function rl_increment(): void {
-    if (empty($_SESSION['rl_count'])) {
-        $_SESSION['rl_count'] = 0;
-        $_SESSION['rl_start'] = time();
+function rl_increment(string $scope = 'public'): void {
+    if (!rl_enabled()) return;
+    require_once dirname(__DIR__) . '/includes/settings.php';
+    $ip     = get_client_ip();
+    $window = rl_window_seconds();
+    try {
+        $db   = get_db();
+        $stmt = $db->prepare('SELECT window_start FROM rate_limits WHERE ip_address = ? AND scope = ? LIMIT 1');
+        $stmt->execute([$ip, $scope]);
+        $row = $stmt->fetch();
+        if (!$row || (time() - strtotime($row['window_start'])) >= $window) {
+            $db->prepare(
+                'INSERT INTO rate_limits (ip_address, scope, count, window_start) VALUES (?, ?, 1, UTC_TIMESTAMP())
+                 ON DUPLICATE KEY UPDATE count = 1, window_start = UTC_TIMESTAMP()'
+            )->execute([$ip, $scope]);
+        } else {
+            $db->prepare('UPDATE rate_limits SET count = count + 1 WHERE ip_address = ? AND scope = ?')
+               ->execute([$ip, $scope]);
+        }
+    } catch (Exception $e) {
+        log_err('Rate limit increment failed: ' . $e->getMessage());
     }
-    $_SESSION['rl_count']++;
+}
+
+// Reset a scope's counter for the current IP (called on a successful attempt).
+function rl_reset(string $scope = 'public'): void {
+    try {
+        get_db()->prepare('DELETE FROM rate_limits WHERE ip_address = ? AND scope = ?')
+            ->execute([get_client_ip(), $scope]);
+    } catch (Exception $e) {
+        // best-effort
+    }
 }

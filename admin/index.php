@@ -13,6 +13,12 @@ if (is_admin_logged_in()) {
     exit;
 }
 
+// Password verified, 2FA code still pending → resume there
+if (!empty($_SESSION['pending_2fa_user_id']) && (time() - (int)($_SESSION['pending_2fa_time'] ?? 0)) <= 300) {
+    header('Location: /admin/verify_2fa.php');
+    exit;
+}
+
 $csrf = generate_csrf();
 $lerr = htmlspecialchars($_SESSION['login_error'] ?? '', ENT_QUOTES, 'UTF-8');
 if (isset($_GET['timeout'])) {

@@ -16,16 +16,11 @@ if (!verify_csrf($_POST['csrf_token'] ?? '')) {
     exit;
 }
 
-// ── Rate limit failed attempts (session-based, 5 attempts / 15 min) ──────────
-$_lf_cnt  = (int)($_SESSION['lf_count'] ?? 0);
-$_lf_time = (int)($_SESSION['lf_time']  ?? 0);
-if ($_lf_cnt > 0 && (time() - $_lf_time) >= 900) {
-    $_lf_cnt = 0;
-    unset($_SESSION['lf_count'], $_SESSION['lf_time']);
-}
-if ($_lf_cnt >= 5) {
-    $remaining = max(1, (int)ceil((900 - (time() - $_lf_time)) / 60));
-    $_SESSION['login_error'] = 'Zbyt wiele nieudanych prób. Odczekaj ' . $remaining . ' min.';
+// ── Rate limit failed attempts (IP-based, configurable in Ustawienia) ────────
+require_once dirname(__DIR__) . '/includes/settings.php';
+$rl = rl_status('admin_login');
+if ($rl['blocked']) {
+    $_SESSION['login_error'] = 'Zbyt wiele nieudanych prób. Odczekaj ' . (int)ceil($rl['remaining'] / 60) . ' min.';
     header('Location: /admin/index.php');
     exit;
 }
@@ -33,19 +28,20 @@ if ($_lf_cnt >= 5) {
 $username = trim($_POST['username'] ?? '');
 $password = (string)($_POST['password'] ?? '');
 
-if (admin_login($username, $password)) {
-    unset($_SESSION['lf_count'], $_SESSION['lf_time']);
-    header('Location: /admin/orders.php');
-    exit;
+switch (admin_login($username, $password)) {
+    case 'ok':
+        rl_reset('admin_login');
+        header('Location: /admin/orders.php');
+        exit;
+    case 'need_2fa':
+        rl_reset('admin_login');
+        header('Location: /admin/verify_2fa.php');
+        exit;
 }
 
 usleep(random_int(50000, 150000));
 
-$_lf_cnt++;
-$_SESSION['lf_count'] = $_lf_cnt;
-if (!isset($_SESSION['lf_time'])) {
-    $_SESSION['lf_time'] = time();
-}
+rl_increment('admin_login');
 $_SESSION['login_error'] = 'Nieprawidłowe dane logowania.';
 header('Location: /admin/index.php');
 exit;

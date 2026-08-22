@@ -19,8 +19,10 @@ $_user_name = current_user_name();
         <a class="nav-item <?= $_active === 'analytics' ? 'active' : '' ?>" href="/admin/analytics.php">Analityka</a>
         <?php endif; ?>
         <a class="nav-item <?= $_active === 'users'     ? 'active' : '' ?>" href="/admin/users.php">Użytkownicy</a>
+        <a class="nav-item <?= $_active === 'audit'     ? 'active' : '' ?>" href="/admin/audit_log.php">Log audytu</a>
         <a class="nav-item <?= $_active === 'settings'  ? 'active' : '' ?>" href="/admin/settings.php">Ustawienia</a>
         <?php endif; ?>
+        <a class="nav-item <?= $_active === '2fa'       ? 'active' : '' ?>" href="/admin/2fa.php">2FA</a>
     </nav>
     <div class="sidebar-footer">
         <?php if ($_is_owner): ?>

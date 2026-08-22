@@ -5,6 +5,7 @@ require_once dirname(__DIR__) . '/includes/db.php';
 require_once dirname(__DIR__) . '/includes/auth.php';
 require_once dirname(__DIR__) . '/includes/crypto.php';
 require_once dirname(__DIR__) . '/includes/settings.php';
+require_once dirname(__DIR__) . '/includes/audit.php';
 
 set_security_headers(true);
 start_secure_session();
@@ -90,6 +91,7 @@ try {
     ]);
 
     $order_id = (int)$db->lastInsertId();
+    audit('order_create', $order_id, $token);
 
     // Handle photo uploads
     $photo_errors = [];

@@ -5,6 +5,7 @@ require_once dirname(__DIR__) . '/includes/db.php';
 require_once dirname(__DIR__) . '/includes/auth.php';
 require_once dirname(__DIR__) . '/includes/crypto.php';
 require_once dirname(__DIR__) . '/includes/settings.php';
+require_once dirname(__DIR__) . '/includes/audit.php';
 
 start_secure_session();
 require_admin();
@@ -17,6 +18,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delet
         if ($del_id > 0 && courier_owns_order($del_id)) {
             try {
                 $del_db = get_db();
+                $tq = $del_db->prepare('SELECT order_token FROM orders WHERE id = ? LIMIT 1');
+                $tq->execute([$del_id]);
+                $del_token = $tq->fetchColumn() ?: null;
+
                 $pq = $del_db->prepare('SELECT filename FROM order_photos WHERE order_id = ?');
                 $pq->execute([$del_id]);
                 foreach ($pq->fetchAll() as $ph) {
@@ -25,6 +30,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delet
                 $dq = $del_db->prepare('DELETE FROM orders WHERE id = ?');
                 $dq->execute([$del_id]);
                 $affected = $dq->rowCount();
+                if ($affected > 0) {
+                    audit('order_delete', $del_id, $del_token);
+                }
                 $_SESSION['flash']    = $affected > 0 ? 'Zamówienie usunięte.' : 'Zamówienie nie istnieje.';
                 $_SESSION['flash_ok'] = $affected > 0;
             } catch (Throwable $e) {

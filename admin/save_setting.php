@@ -4,6 +4,7 @@ require_once dirname(__DIR__) . '/config.php';
 require_once dirname(__DIR__) . '/includes/db.php';
 require_once dirname(__DIR__) . '/includes/auth.php';
 require_once dirname(__DIR__) . '/includes/settings.php';
+require_once dirname(__DIR__) . '/includes/audit.php';
 
 header('Content-Type: application/json');
 start_secure_session();
@@ -26,7 +27,7 @@ $value = $_POST['value'] ?? '';
 
 $numeric  = ['order_ttl_hours','rate_limit_max','rate_limit_window_min','admin_session_hours','max_photo_mb'];
 $floats   = ['admin_session_hours','max_photo_mb']; // stored as float strings
-$booleans = ['allow_status_lookup','require_delivered_reveal','analytics_enabled','show_error_log'];
+$booleans = ['allow_status_lookup','require_delivered_reveal','analytics_enabled','show_error_log','rate_limit_enabled'];
 $limits   = [
     'order_ttl_hours'       => [12,  72],
     'rate_limit_max'        => [3,   10],
@@ -74,6 +75,7 @@ if (in_array($key, $booleans, true)) {
 
 try {
     set_setting($key, $value);
+    audit('setting_change', null, null, "{$key}={$value}");
     echo json_encode(['ok' => true]);
 } catch (Exception $e) {
     log_err('Setting auto-save: ' . $e->getMessage());

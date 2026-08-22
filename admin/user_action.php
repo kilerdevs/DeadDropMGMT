@@ -4,6 +4,7 @@ require_once dirname(__DIR__) . '/config.php';
 require_once dirname(__DIR__) . '/includes/db.php';
 require_once dirname(__DIR__) . '/includes/auth.php';
 require_once dirname(__DIR__) . '/includes/settings.php';
+require_once dirname(__DIR__) . '/includes/audit.php';
 
 set_security_headers(true);
 start_secure_session();
@@ -51,6 +52,7 @@ if ($action === 'create_courier') {
         get_db()->prepare(
             'INSERT INTO users (username, password_hash, role) VALUES (?, ?, "courier")'
         )->execute([$username, password_hash($password, PASSWORD_BCRYPT, ['cost' => 12])]);
+        audit('courier_create', null, null, $username);
         $_SESSION['flash']    = "Konto kuriera {$username} zostało utworzone.";
         $_SESSION['flash_ok'] = true;
     } catch (Exception $e) {
@@ -88,6 +90,7 @@ if ($action === 'delete_courier') {
         }
 
         $db->prepare('DELETE FROM users WHERE id = ?')->execute([$uid]);
+        audit('courier_delete', null, null, $row['username']);
         $_SESSION['flash']    = "Konto kuriera {$row['username']} zostało usunięte.";
         $_SESSION['flash_ok'] = true;
     } catch (Exception $e) {
@@ -124,11 +127,37 @@ if ($action === 'change_password') {
             password_hash($password, PASSWORD_BCRYPT, ['cost' => 12]),
             $uid,
         ]);
+        audit('password_change', null, null, "user_id={$uid}");
         $_SESSION['flash']    = 'Hasło zostało zmienione.';
         $_SESSION['flash_ok'] = true;
     } catch (Exception $e) {
         log_err('Change password: ' . $e->getMessage());
         $_SESSION['flash']    = 'Błąd zmiany hasła.';
+        $_SESSION['flash_ok'] = false;
+    }
+    header('Location: /admin/users.php');
+    exit;
+}
+
+// ── Reset 2FA — owner recovery path for a locked-out account ─────────────────
+if ($action === 'reset_2fa') {
+    $uid = (int)($_POST['user_id'] ?? 0);
+    if ($uid <= 0) {
+        $_SESSION['flash']    = 'Nieprawidłowe żądanie.';
+        $_SESSION['flash_ok'] = false;
+        header('Location: /admin/users.php');
+        exit;
+    }
+    try {
+        get_db()->prepare(
+            'UPDATE users SET totp_enabled = 0, totp_secret_enc = NULL, totp_secret_iv = NULL WHERE id = ?'
+        )->execute([$uid]);
+        audit('2fa_reset', null, null, "user_id={$uid}");
+        $_SESSION['flash']    = 'Weryfikacja dwuetapowa została wyłączona dla tego konta.';
+        $_SESSION['flash_ok'] = true;
+    } catch (Exception $e) {
+        log_err('Reset 2FA: ' . $e->getMessage());
+        $_SESSION['flash']    = 'Błąd resetowania 2FA.';
         $_SESSION['flash_ok'] = false;
     }
     header('Location: /admin/users.php');

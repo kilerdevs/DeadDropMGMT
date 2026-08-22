@@ -10,11 +10,14 @@ USE deaddrops;
 -- ── Users ─────────────────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS users (
-    id            INT           AUTO_INCREMENT PRIMARY KEY,
-    username      VARCHAR(64)   NOT NULL UNIQUE,
-    password_hash VARCHAR(255)  NOT NULL,
-    role          ENUM('owner','courier') NOT NULL DEFAULT 'courier',
-    created_at    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    id               INT           AUTO_INCREMENT PRIMARY KEY,
+    username         VARCHAR(64)   NOT NULL UNIQUE,
+    password_hash    VARCHAR(255)  NOT NULL,
+    role             ENUM('owner','courier') NOT NULL DEFAULT 'courier',
+    totp_secret_enc  TEXT                   DEFAULT NULL,
+    totp_secret_iv   CHAR(32)               DEFAULT NULL,
+    totp_enabled     TINYINT(1)    NOT NULL DEFAULT 0,
+    created_at       DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_username (username)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -75,6 +78,34 @@ CREATE TABLE IF NOT EXISTS order_events (
     INDEX idx_created    (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- ── Rate limiting (IP-based, DB-backed) ──────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS rate_limits (
+    ip_address   VARCHAR(45) NOT NULL,
+    scope        VARCHAR(32) NOT NULL,
+    count        INT         NOT NULL DEFAULT 0,
+    window_start DATETIME    NOT NULL,
+    PRIMARY KEY (ip_address, scope)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ── Audit log (admin write actions) ──────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS audit_log (
+    id          INT           AUTO_INCREMENT PRIMARY KEY,
+    user_id     INT                    DEFAULT NULL,
+    username    VARCHAR(64)   NOT NULL,
+    action      VARCHAR(64)   NOT NULL,
+    order_id    INT                    DEFAULT NULL,
+    order_token CHAR(16)               DEFAULT NULL,
+    detail      VARCHAR(255)           DEFAULT NULL,
+    ip_address  VARCHAR(45)   NOT NULL,
+    created_at  DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    INDEX idx_created (created_at),
+    INDEX idx_user     (user_id),
+    INDEX idx_action   (action)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- ── Settings ──────────────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -88,6 +119,7 @@ INSERT INTO settings (key_name, value, label) VALUES
     ('site_name',               'MGT',     'Nazwa serwisu'),
     ('order_ttl_hours',         '24',      'Czas życia zamówienia od dostarczenia (godziny)'),
     ('extend_hours_options',    '24,48,72','Opcje przedłużenia (godziny, rozdzielone przecinkiem)'),
+    ('rate_limit_enabled',      '1',       'Włącz limitowanie prób wg adresu IP'),
     ('rate_limit_max',          '10',      'Maks. nieudanych prób przed blokadą'),
     ('rate_limit_window_min',   '15',      'Okno blokady (minuty)'),
     ('admin_session_hours',     '4',       'Czas sesji admina (godziny)'),

@@ -4,6 +4,7 @@ require_once dirname(__DIR__) . '/config.php';
 require_once dirname(__DIR__) . '/includes/db.php';
 require_once dirname(__DIR__) . '/includes/auth.php';
 require_once dirname(__DIR__) . '/includes/settings.php';
+require_once dirname(__DIR__) . '/includes/audit.php';
 
 set_security_headers(true);
 start_secure_session();
@@ -45,6 +46,9 @@ try {
     );
     $stmt->execute([$ttl_hours, $id]);
 
+    if ($stmt->rowCount() > 0) {
+        audit('order_deliver', $id);
+    }
     $_SESSION['flash']    = $stmt->rowCount() > 0 ? 'Status zmieniony na: dostarczone.' : 'Zamówienie już oznaczone jako dostarczone.';
     $_SESSION['flash_ok'] = true;
 } catch (Exception $e) {

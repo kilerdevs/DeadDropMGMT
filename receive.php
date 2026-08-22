@@ -52,7 +52,7 @@ if ($step === 1) {
 
 // ── Step 2 — execute deletion ─────────────────────────────────────────────────
 if ($step === 2) {
-    $rl = rl_status();
+    $rl = rl_status('public');
     if ($rl['blocked']) {
         $error = 'Zbyt wiele prób — odczekaj ' . (int)ceil($rl['remaining'] / 60) . ' min.';
     } else {

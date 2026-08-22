@@ -1,0 +1,173 @@
+<?php
+declare(strict_types=1);
+require_once dirname(__DIR__) . '/config.php';
+require_once dirname(__DIR__) . '/includes/db.php';
+require_once dirname(__DIR__) . '/includes/auth.php';
+require_once dirname(__DIR__) . '/includes/crypto.php';
+require_once dirname(__DIR__) . '/includes/settings.php';
+require_once dirname(__DIR__) . '/includes/totp.php';
+require_once dirname(__DIR__) . '/includes/audit.php';
+
+start_secure_session();
+require_admin();
+$csp_nonce = set_security_headers(true);
+
+$uid = current_user_id();
+
+try {
+    $stmt = get_db()->prepare('SELECT totp_enabled, totp_secret_enc, totp_secret_iv FROM users WHERE id = ? LIMIT 1');
+    $stmt->execute([$uid]);
+    $row = $stmt->fetch() ?: ['totp_enabled' => 0, 'totp_secret_enc' => null, 'totp_secret_iv' => null];
+} catch (Exception $e) {
+    log_err('2FA load: ' . $e->getMessage());
+    $row = ['totp_enabled' => 0, 'totp_secret_enc' => null, 'totp_secret_iv' => null];
+}
+$enabled = !empty($row['totp_enabled']);
+
+$error   = '';
+$success = '';
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!verify_csrf($_POST['csrf_token'] ?? '')) {
+        $error = 'Nieprawidłowy token CSRF.';
+    } else {
+        $action = $_POST['action'] ?? '';
+        $code   = trim($_POST['code'] ?? '');
+        $rl     = rl_status('admin_2fa_setup');
+
+        if ($rl['blocked']) {
+            $error = 'Zbyt wiele prób — odczekaj ' . (int)ceil($rl['remaining'] / 60) . ' min.';
+        } elseif ($action === 'enable' && !$enabled) {
+            $pending = $_SESSION['pending_totp_secret'] ?? '';
+            if ($pending === '' || !totp_verify($pending, $code)) {
+                rl_increment('admin_2fa_setup');
+                $error = 'Nieprawidłowy kod. Spróbuj ponownie.';
+            } else {
+                $enc = encrypt_location($pending);
+                get_db()->prepare(
+                    'UPDATE users SET totp_enabled = 1, totp_secret_enc = ?, totp_secret_iv = ? WHERE id = ?'
+                )->execute([$enc['ciphertext'], $enc['iv'], $uid]);
+                unset($_SESSION['pending_totp_secret']);
+                audit('2fa_enable');
+                $enabled = true;
+                $success = 'Weryfikacja dwuetapowa włączona.';
+            }
+        } elseif ($action === 'disable' && $enabled) {
+            $secret = ($row['totp_secret_enc'] && $row['totp_secret_iv'])
+                ? decrypt_location($row['totp_secret_enc'], $row['totp_secret_iv'])
+                : false;
+            if ($secret === false || !totp_verify($secret, $code)) {
+                rl_increment('admin_2fa_setup');
+                $error = 'Nieprawidłowy kod. Spróbuj ponownie.';
+            } else {
+                get_db()->prepare(
+                    'UPDATE users SET totp_enabled = 0, totp_secret_enc = NULL, totp_secret_iv = NULL WHERE id = ?'
+                )->execute([$uid]);
+                audit('2fa_disable');
+                $enabled = false;
+                $success = 'Weryfikacja dwuetapowa wyłączona.';
+            }
+        }
+    }
+}
+
+// Generate (or reuse) a pending secret for enrollment
+$pending_secret = '';
+$qr_uri         = '';
+if (!$enabled) {
+    $pending_secret = $_SESSION['pending_totp_secret'] ?? '';
+    if ($pending_secret === '') {
+        $pending_secret = totp_generate_secret();
+        $_SESSION['pending_totp_secret'] = $pending_secret;
+    }
+    $qr_uri = totp_uri($pending_secret, current_user_name(), site_name());
+}
+$secret_display = $pending_secret !== '' ? trim(chunk_split($pending_secret, 4, ' ')) : '';
+
+$csrf = generate_csrf();
+?>
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin — Weryfikacja dwuetapowa</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="/admin/style.css">
+</head>
+<body>
+<div class="shell">
+
+    <?php $_active = '2fa'; require __DIR__ . '/sidebar.php'; ?>
+
+    <main class="main">
+        <div class="page-heading">Weryfikacja dwuetapowa (2FA)</div>
+
+        <?php if ($error):   ?><div class="flash"><?= htmlspecialchars($error,   ENT_QUOTES, 'UTF-8') ?></div><?php endif; ?>
+        <?php if ($success): ?><div class="flash ok"><?= htmlspecialchars($success, ENT_QUOTES, 'UTF-8') ?></div><?php endif; ?>
+
+        <div class="form-panel">
+        <?php if ($enabled): ?>
+            <div class="settings-warning">
+                2FA jest włączone dla konta <strong><?= htmlspecialchars(current_user_name(), ENT_QUOTES, 'UTF-8') ?></strong>.
+                Aby je wyłączyć, podaj bieżący kod z aplikacji uwierzytelniającej (np. Aegis).
+            </div>
+            <form method="POST" action="/admin/2fa.php" autocomplete="off">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
+                <input type="hidden" name="action" value="disable">
+                <div class="form-group">
+                    <label for="code">Kod z aplikacji</label>
+                    <input type="text" id="code" name="code" inputmode="numeric" pattern="[0-9]{6}"
+                           maxlength="6" autocomplete="one-time-code" autofocus>
+                </div>
+                <div class="form-actions">
+                    <button type="submit" class="btn action-btn--danger">Wyłącz 2FA</button>
+                </div>
+            </form>
+        <?php else: ?>
+            <div class="settings-warning">
+                Zeskanuj poniższy kod w aplikacji Aegis (lub innej zgodnej z TOTP) — albo dodaj konto ręcznie,
+                wpisując poniższy sekret. Następnie potwierdź bieżącym kodem, aby włączyć 2FA.
+            </div>
+            <div class="form-group">
+                <div class="field-label">Sekret (wpisz ręcznie w Aegis: + → Wprowadź ręcznie)</div>
+                <div class="location-display location-display-pw" id="totp-secret"><?= htmlspecialchars($secret_display, ENT_QUOTES, 'UTF-8') ?></div>
+                <div class="hint">Wydawca: <?= htmlspecialchars(site_name(), ENT_QUOTES, 'UTF-8') ?> · Konto: <?= htmlspecialchars(current_user_name(), ENT_QUOTES, 'UTF-8') ?> · Algorytm: SHA1 · Cyfry: 6 · Okres: 30s</div>
+            </div>
+            <div class="form-group">
+                <button type="button" class="action-btn" id="copy-secret">Kopiuj sekret</button>
+            </div>
+            <form method="POST" action="/admin/2fa.php" autocomplete="off">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
+                <input type="hidden" name="action" value="enable">
+                <div class="form-group">
+                    <label for="code">Kod z aplikacji</label>
+                    <input type="text" id="code" name="code" inputmode="numeric" pattern="[0-9]{6}"
+                           maxlength="6" autocomplete="one-time-code">
+                </div>
+                <div class="form-actions">
+                    <button type="submit" class="btn">Włącz 2FA</button>
+                </div>
+            </form>
+        <?php endif; ?>
+        </div>
+    </main>
+</div>
+
+<script src="/admin/admin.js"></script>
+<?php if (!$enabled): ?>
+<script nonce="<?= htmlspecialchars($csp_nonce, ENT_QUOTES, 'UTF-8') ?>">
+document.getElementById('copy-secret').addEventListener('click', function () {
+    var raw = document.getElementById('totp-secret').textContent.replace(/\s+/g, '');
+    navigator.clipboard.writeText(raw).then(function () {
+        var btn = document.getElementById('copy-secret');
+        var old = btn.textContent;
+        btn.textContent = 'Skopiowano ✓';
+        setTimeout(function () { btn.textContent = old; }, 1500);
+    });
+});
+</script>
+<?php endif; ?>
+</body>
+</html>

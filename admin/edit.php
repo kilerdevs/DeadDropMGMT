@@ -5,6 +5,7 @@ require_once dirname(__DIR__) . '/includes/db.php';
 require_once dirname(__DIR__) . '/includes/auth.php';
 require_once dirname(__DIR__) . '/includes/crypto.php';
 require_once dirname(__DIR__) . '/includes/settings.php';
+require_once dirname(__DIR__) . '/includes/audit.php';
 
 start_secure_session();
 require_admin();
@@ -166,6 +167,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                 }
 
+                audit('order_edit', $id, $order['order_token'], "status={$new_status}");
                 $order   = fetch_order($id);
                 $success = 'Zmiany zapisane.';
             } catch (Exception $e) {
