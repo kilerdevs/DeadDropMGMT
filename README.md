@@ -54,7 +54,7 @@ The author provides this software **"as is," without warranty of any kind**, and
 - Extend / close / delete orders with CSRF-protected actions
 - Photo upload with automatic GD compression
 - Configurable TTL — orders auto-expire and are securely wiped
-- Two-factor authentication (TOTP) — self-service enroll/disable per account, QR + manual entry, works with any RFC 6238 authenticator app — see [recommended open-source apps](TOTP-APPS.md)
+- Two-factor authentication (TOTP) — self-service enroll/disable per account, QR + manual entry, works with any RFC 6238 authenticator app — see [recommended open-source apps](TOTP-APPS.md); mandatory for couriers, optional but strongly encouraged for the owner (with a "why" explainer on the enrollment page and a persistent warning banner on every admin page while it's off)
 - Audit log — every write action recorded with actor, IP, and timestamp
 - Analytics log: every lookup, unlock attempt, and confirmation recorded with IP + user-agent
 - CSV export of the event log
@@ -258,9 +258,9 @@ chown www-data:www-data logs/ uploads/
 0 * * * * curl -s https://yourdomain.com/cron/cleanup.php > /dev/null
 ```
 
-### 8. Two-factor authentication (optional, self-service)
+### 8. Two-factor authentication (mandatory for couriers, self-service)
 
-No server setup needed — log in, open **2FA** in the sidebar, scan the QR code with any RFC 6238 TOTP authenticator app (need one? see [TOTP-APPS.md](TOTP-APPS.md) for open-source picks per platform), and confirm with a code. Each account (owner or courier) enables/disables its own 2FA; the owner can force-reset a locked-out account's 2FA from **Users**.
+No server setup needed — log in, open **2FA** in the sidebar, scan the QR code with any RFC 6238 TOTP authenticator app (need one? see [TOTP-APPS.md](TOTP-APPS.md) for open-source picks per platform), and confirm with a code. Each account (owner or courier) enables/disables its own 2FA — 2FA is mandatory for couriers and strongly recommended (though optional) for the owner; the enrollment page explains why for each role, and a red banner nags every other admin page until it's on. The owner can force-reset a locked-out account's 2FA from **Users**.
 
 ---
 
