@@ -351,6 +351,10 @@ function s_label(array $s, string $key): string {
     // ── Toggles: save immediately ─────────────────────────────────────────────
     document.querySelectorAll('.sw input[type="checkbox"]').forEach(function (cb) {
         cb.addEventListener('change', function () {
+            if (cb.name === 'analytics_enabled' && cb.checked) {
+                var msg = 'Analityka przechowuje dodatkowe dane aktywności użytkowników: adresy IP, znaczniki czasu, tokeny zamówień oraz typ zdarzenia. Na podstawie tych danych można oszacować całkowitą liczbę zamówień od początku działania systemu.\n\nWłączyć analitykę?';
+                if (!window.confirm(msg)) { cb.checked = false; return; }
+            }
             var state = cb.closest('.sw').querySelector('.sw-state');
             if (state) state.textContent = cb.checked ? 'Włączone' : 'Wyłączone';
             saveSetting(cb.name, cb.checked ? '1' : '0');
