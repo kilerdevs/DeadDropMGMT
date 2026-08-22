@@ -16,6 +16,7 @@ Recipients look up an order by token, unlock an encrypted location with a passwo
 - [Features](#features)
 - [Tech Stack](#tech-stack)
 - [Security Model](#security-model)
+- [Third-Party Code & External Services](#third-party-code--external-services)
 - [Project Structure](#project-structure)
 - [Setup](#setup)
 - [Requirements](#requirements)
@@ -86,6 +87,33 @@ Recipients look up an order by token, unlock an encrypted location with a passwo
 | Unaccountable writes | Every admin create/edit/delete/setting-change logged with actor, IP, timestamp |
 
 **Not included (configure externally):** TLS.
+
+---
+
+## Third-Party Code & External Services
+
+The PHP backend has zero dependencies — no Composer, no framework. The browser, however, does load a few third-party pieces. Full disclosure:
+
+### Vendored (bundled in this repo, served from your own domain — no CDN, works under the strict CSP)
+
+| Library | Version | License | Used for |
+|---|---|---|---|
+| [Leaflet](https://leafletjs.com/) | 1.9.4 | BSD-2-Clause | Interactive map picker (`admin/vendor/leaflet/`) |
+| [QRCode.js](https://github.com/davidshimjs/qrcodejs) (davidshimjs, based on Kazuhiko Arase's original) | — | MIT | Renders the 2FA enrollment QR code client-side (`admin/vendor/qrcode/`) |
+
+Both are the unmodified upstream source, committed as static files. Nothing is fetched over the network to load them.
+
+### Live external services (real network calls the browser makes)
+
+| Service | Called from | Purpose |
+|---|---|---|
+| Google Fonts (`fonts.googleapis.com`, `fonts.gstatic.com`) | Every page | Loads the IBM Plex Mono webfont |
+| OpenStreetMap tiles (`*.tile.openstreetmap.org`) | Admin map picker; public location-reveal page | Map tile images |
+| OpenStreetMap embed (`www.openstreetmap.org`) | Public location-reveal page | Embedded `<iframe>` map showing the pickup pin |
+| Nominatim (`nominatim.openstreetmap.org`) | Admin map picker only | Address search / geocoding |
+| Google Maps / Apple Maps | Public location-reveal page | Plain outbound links only — nothing is embedded or fetched, they just open in a new tab if clicked |
+
+These are exactly the hosts allowlisted in the CSP (`includes/auth.php`) — nothing else can load. **Worth knowing:** loading Google Fonts and OpenStreetMap tiles sends the visitor's IP to Google/OSM on every page view, which is in some tension with the "no tracking" claim shown on the public pages — that claim is about *this app* not tracking recipients, not about the third parties it loads assets from. If your threat model requires zero third-party contact, self-host the font file and swap the map embed/tiles for a self-hosted tile server.
 
 ---
 
