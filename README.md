@@ -11,8 +11,19 @@ Recipients look up an order by token, unlock an encrypted location with a passwo
 
 ---
 
+## Disclaimer
+
+This project was created **for educational purposes** — to demonstrate secure application design: encryption at rest, CSRF protection, rate limiting, two-factor authentication, and audit logging in a real, working PHP application.
+
+The author provides this software **"as is," without warranty of any kind**, and assumes **no responsibility or liability for how it is used**, including but not limited to any illegal, unauthorized, or unintended use by any party. You are solely responsible for ensuring your use of this software complies with all applicable laws and regulations in your jurisdiction.
+
+**By downloading, installing, deploying, or otherwise using this software, you acknowledge that you have read this disclaimer and agree to be bound by it.** If you do not agree, do not use this software.
+
+---
+
 ## Contents
 
+- [Disclaimer](#disclaimer)
 - [Features](#features)
 - [Tech Stack](#tech-stack)
 - [Security Model](#security-model)
