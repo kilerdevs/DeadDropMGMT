@@ -4,10 +4,7 @@
 <meta charset="UTF-8">
 <meta name="darkreader-lock">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>500 — Błąd serwera</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="/style.css">
+<title>500 — Błąd serwera</title><link rel="stylesheet" href="/style.css">
 <style>.error-code{font-family:'IBM Plex Mono',monospace;font-size:80px;font-weight:500;color:#222;letter-spacing:.04em;line-height:1;margin:32px 0 4px}</style>
 </head>
 <body>

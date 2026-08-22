@@ -110,10 +110,7 @@ function s_label(array $s, string $key): string {
 <meta charset="UTF-8">
 <meta name="darkreader-lock">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Admin — Ustawienia</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="/admin/style.css">
+<title>Admin — Ustawienia</title><link rel="stylesheet" href="/admin/style.css">
 <meta name="csrf-token" content="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
 </head>
 <body>

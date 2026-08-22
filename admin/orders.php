@@ -123,10 +123,7 @@ $_active = 'orders';
 <meta name="darkreader-lock">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Admin — Zamówienia</title>
-<meta name="dd-ttl" content="<?= (int)order_ttl_hours() ?>">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="/admin/style.css">
+<meta name="dd-ttl" content="<?= (int)order_ttl_hours() ?>"><link rel="stylesheet" href="/admin/style.css">
 </head>
 <body>
 <div class="shell">

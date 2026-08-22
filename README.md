@@ -107,24 +107,24 @@ The PHP backend has zero dependencies — no Composer, no framework. The browser
 
 ### Vendored (bundled in this repo, served from your own domain — no CDN, works under the strict CSP)
 
-| Library | Version | License | Used for |
+| Asset | Version | License | Used for |
 |---|---|---|---|
 | [Leaflet](https://leafletjs.com/) | 1.9.4 | BSD-2-Clause | Interactive map picker (`admin/vendor/leaflet/`) |
 | [QRCode.js](https://github.com/davidshimjs/qrcodejs) (davidshimjs, based on Kazuhiko Arase's original) | — | MIT | Renders the 2FA enrollment QR code client-side (`admin/vendor/qrcode/`) |
+| [IBM Plex Mono](https://github.com/IBM/plex) | v20, latin + latin-ext subsets only | SIL OFL 1.1 | The site's monospace font (`fonts/ibm-plex-mono/`, ~56 KB for all 4 files) |
 
-Both are the unmodified upstream source, committed as static files. Nothing is fetched over the network to load them.
+All three are unmodified upstream source, committed as static files — nothing is fetched over the network to load them. Google Fonts previously served IBM Plex Mono; it's now self-hosted, subset to just the Latin ranges this UI (Polish/English) actually uses to keep it light — the cyrillic/vietnamese subsets Google's CSS also served were dropped entirely.
 
-### Live external services (real network calls the browser makes)
+### Live external services (real network calls the browser still makes)
 
-| Service | Called from | Purpose |
-|---|---|---|
-| Google Fonts (`fonts.googleapis.com`, `fonts.gstatic.com`) | Every page | Loads the IBM Plex Mono webfont |
-| OpenStreetMap tiles (`*.tile.openstreetmap.org`) | Admin map picker; public location-reveal page | Map tile images |
-| OpenStreetMap embed (`www.openstreetmap.org`) | Public location-reveal page | Embedded `<iframe>` map showing the pickup pin |
-| Nominatim (`nominatim.openstreetmap.org`) | Admin map picker only | Address search / geocoding |
-| Google Maps / Apple Maps | Public location-reveal page | Plain outbound links only — nothing is embedded or fetched, they just open in a new tab if clicked |
+| Service | Called from | Purpose | Why it isn't bundled |
+|---|---|---|---|
+| OpenStreetMap tiles (`*.tile.openstreetmap.org`) | Admin map picker; public location-reveal page | Map tile images | Global raster tile coverage at every zoom level is terabytes — no way to vendor this lightly |
+| OpenStreetMap embed (`www.openstreetmap.org`) | Public location-reveal page | Embedded `<iframe>` map showing the pickup pin | Rendered server-side per arbitrary coordinate on request — there's nothing static to bundle |
+| Nominatim (`nominatim.openstreetmap.org`) | Admin map picker only | Address search / geocoding | Needs a full planet-scale geocoding database behind it; self-hosting means running your own Nominatim instance, not something a repo can carry |
+| Google Maps / Apple Maps | Public location-reveal page | Plain outbound `<a href>` links | Not a resource load at all — nothing is fetched or embedded, so there's nothing to bundle. Clicking just opens the respective site in a new tab |
 
-These are exactly the hosts allowlisted in the CSP (`includes/auth.php`) — nothing else can load. **Worth knowing:** loading Google Fonts and OpenStreetMap tiles sends the visitor's IP to Google/OSM on every page view, which is in some tension with the "no tracking" claim shown on the public pages — that claim is about *this app* not tracking recipients, not about the third parties it loads assets from. If your threat model requires zero third-party contact, self-host the font file and swap the map embed/tiles for a self-hosted tile server.
+These are exactly the hosts allowlisted in the CSP (`includes/auth.php`) — nothing else can load. **Worth knowing:** loading OpenStreetMap tiles sends the visitor's IP to OSM on every page view, which is in some tension with the "no tracking" claim shown on the public pages — that claim is about *this app* not tracking recipients, not about the third parties it loads map tiles from. If your threat model requires zero third-party contact, the only remaining option is standing up your own tile server and Nominatim instance and pointing the map picker at them.
 
 ---
 
@@ -138,6 +138,7 @@ These are exactly the hosts allowlisted in the CSP (`includes/auth.php`) — not
 ├── setup.sql                 Full database schema (fresh installs)
 ├── setup_v10.sql              Migration: 2FA, rate limiting, audit log (existing installs)
 ├── .htaccess                  Blocks config, includes/, logs/ from web
+├── fonts/                      Self-hosted IBM Plex Mono (replaces Google Fonts)
 │
 ├── admin/
 │   ├── index.php             Login wall

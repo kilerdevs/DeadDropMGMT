@@ -217,10 +217,7 @@ $init_zoom = $has_pin ? 17 : 12;
 <meta charset="UTF-8">
 <meta name="darkreader-lock">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Admin — Edytuj <?= htmlspecialchars($order['order_token'], ENT_QUOTES, 'UTF-8') ?></title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="/admin/vendor/leaflet/leaflet.css">
+<title>Admin — Edytuj <?= htmlspecialchars($order['order_token'], ENT_QUOTES, 'UTF-8') ?></title><link rel="stylesheet" href="/admin/vendor/leaflet/leaflet.css">
 <link rel="stylesheet" href="/admin/style.css">
 <meta name="csrf-token" content="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
 <meta name="dd-ttl" content="<?= (int)order_ttl_hours() ?>">
