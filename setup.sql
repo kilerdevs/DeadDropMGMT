@@ -1,5 +1,11 @@
--- Dead Drop Management — complete database setup
--- Run once on a fresh installation. Safe to re-run (IF NOT EXISTS / ON DUPLICATE KEY).
+-- Dead Drop Management — complete database setup.
+-- One file, safe to run on ANY starting state: a brand-new empty database,
+-- an existing install from any earlier version, or even a fully up-to-date
+-- database (running it again is a harmless no-op). Every statement is
+-- idempotent (IF NOT EXISTS / ON DUPLICATE KEY / a guarded check for the
+-- one foreign key MariaDB doesn't support IF NOT EXISTS on).
+--
+--   mysql -u root -p < setup.sql
 
 CREATE DATABASE IF NOT EXISTS deaddrops
     CHARACTER SET utf8mb4
@@ -20,6 +26,12 @@ CREATE TABLE IF NOT EXISTS users (
     created_at       DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_username (username)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Installs from before 2FA existed won't have these columns yet.
+ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS totp_secret_enc TEXT       DEFAULT NULL,
+    ADD COLUMN IF NOT EXISTS totp_secret_iv  CHAR(32)   DEFAULT NULL,
+    ADD COLUMN IF NOT EXISTS totp_enabled    TINYINT(1) NOT NULL DEFAULT 0;
 
 -- ── Orders ────────────────────────────────────────────────────────────────────
 
@@ -43,8 +55,29 @@ CREATE TABLE IF NOT EXISTS orders (
     INDEX idx_created    (created_at),
     INDEX idx_expires    (expires_at),
     INDEX idx_created_by (created_by),
-    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+    CONSTRAINT fk_orders_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Installs from before the multi-user system won't have created_by yet.
+ALTER TABLE orders
+    ADD COLUMN IF NOT EXISTS created_by INT DEFAULT NULL AFTER id,
+    ADD INDEX  IF NOT EXISTS idx_created_by (created_by);
+
+-- MariaDB has no "ADD CONSTRAINT IF NOT EXISTS" for foreign keys, so guard
+-- it by hand — only add fk_orders_created_by if it isn't already there.
+SET @fk_exists = (
+    SELECT COUNT(*) FROM information_schema.TABLE_CONSTRAINTS
+    WHERE CONSTRAINT_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'orders'
+      AND CONSTRAINT_NAME = 'fk_orders_created_by'
+);
+SET @fk_sql = IF(@fk_exists = 0,
+    'ALTER TABLE orders ADD CONSTRAINT fk_orders_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL',
+    'SELECT 1'
+);
+PREPARE fk_stmt FROM @fk_sql;
+EXECUTE fk_stmt;
+DEALLOCATE PREPARE fk_stmt;
 
 -- ── Order photos ──────────────────────────────────────────────────────────────
 

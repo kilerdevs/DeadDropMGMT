@@ -135,8 +135,7 @@ These are exactly the hosts allowlisted in the CSP (`includes/auth.php`) — not
 ├── index.php               Public order lookup & location reveal
 ├── receive.php              Delivery confirmation endpoint
 ├── config.php               DB credentials, AES key, admin hash  ← never commit
-├── setup.sql                 Full database schema (fresh installs)
-├── setup_v10.sql              Migration: 2FA, rate limiting, audit log (existing installs)
+├── setup.sql                 Full database schema — one file, fresh install or upgrade from any version
 ├── .htaccess                  Blocks config, includes/, logs/ from web
 ├── fonts/                      Self-hosted IBM Plex Mono (replaces Google Fonts)
 │
@@ -175,16 +174,10 @@ These are exactly the hosts allowlisted in the CSP (`includes/auth.php`) — not
 
 ### 1. Database
 
-Fresh install:
+One file, one command — works for a fresh install *and* for upgrading an existing database from any earlier version. Every statement is idempotent, so it's also safe to just re-run whenever you pull updates:
 
 ```bash
 mysql -u root -p < setup.sql
-```
-
-Upgrading an existing install (adds 2FA columns, rate limiting, audit log — safe to re-run):
-
-```bash
-mysql -u root -p deaddrops < setup_v10.sql
 ```
 
 ### 2. AES-256 Key
