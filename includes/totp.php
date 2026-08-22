@@ -32,8 +32,8 @@ function base32_decode(string $b32): string {
     return $out;
 }
 
-// ── RFC 6238 TOTP (SHA1, 6 digits, 30s step) — the defaults every TOTP app,
-// including Aegis, assumes when you enter a secret manually ───────────────────
+// ── RFC 6238 TOTP (SHA1, 6 digits, 30s step) — the defaults every TOTP app
+// assumes when you enter a secret manually ─────────────────────────────────
 
 function totp_generate_secret(): string {
     return base32_encode(random_bytes(20)); // 160-bit secret

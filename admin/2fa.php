@@ -114,7 +114,7 @@ $csrf = generate_csrf();
         <?php if ($enabled && is_owner()): ?>
             <div class="settings-warning">
                 2FA jest włączone dla konta <strong><?= htmlspecialchars(current_user_name(), ENT_QUOTES, 'UTF-8') ?></strong>.
-                Aby je wyłączyć, podaj bieżący kod z aplikacji uwierzytelniającej (np. Aegis).
+                Aby je wyłączyć, podaj bieżący kod z aplikacji uwierzytelniającej TOTP.
             </div>
             <form method="POST" action="/admin/2fa.php" autocomplete="off">
                 <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
@@ -142,8 +142,10 @@ $csrf = generate_csrf();
             </div>
             <?php endif; ?>
             <div class="settings-warning">
-                Zeskanuj poniższy kod w aplikacji Aegis (lub innej zgodnej z TOTP) — albo dodaj konto ręcznie,
-                wpisując poniższy sekret. Następnie potwierdź bieżącym kodem, aby włączyć 2FA.
+                Zeskanuj poniższy kod w dowolnej aplikacji uwierzytelniającej zgodnej z TOTP — albo dodaj konto
+                ręcznie, wpisując poniższy sekret. Następnie potwierdź bieżącym kodem, aby włączyć 2FA.
+                Nie masz takiej aplikacji? Zobacz
+                <a href="https://github.com/kilerdevs/DeadDropMGMT/blob/master/TOTP-APPS.md" target="_blank" rel="noopener">polecane aplikacje open source</a>.
             </div>
             <div class="form-group">
                 <div class="qr-box"><div id="qr-code"></div></div>
@@ -152,7 +154,7 @@ $csrf = generate_csrf();
                 <div class="field-label">Sekret</div>
                 <div class="location-display location-display-pw" id="totp-secret"><?= htmlspecialchars($secret_display, ENT_QUOTES, 'UTF-8') ?></div>
                 <div class="location-note">
-                    Ręcznie w Aegis: + → Wprowadź ręcznie · Wydawca: <?= htmlspecialchars(site_name(), ENT_QUOTES, 'UTF-8') ?>
+                    Dodawanie ręczne — Wydawca: <?= htmlspecialchars(site_name(), ENT_QUOTES, 'UTF-8') ?>
                     · Konto: <?= htmlspecialchars(current_user_name(), ENT_QUOTES, 'UTF-8') ?> · SHA1 · 6 cyfr · 30s
                 </div>
             </div>
