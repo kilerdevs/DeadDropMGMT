@@ -99,7 +99,7 @@ The author provides this software **"as is," without warranty of any kind**, and
 | Direct file access | `includes/`, `config.php`, `logs/`, `cron/` blocked via `.htaccess` |
 | Cookie theft | `httponly`, `samesite=Strict`, `secure` (auto-enabled when HTTPS detected) |
 | Unaccountable writes | Every admin create/edit/delete/setting-change logged with actor, IP, timestamp |
-| Admin IP exposure to third parties | Map tile and address-search requests from the admin panel are proxied server-side (`admin/tile_proxy.php`, `admin/geocode_proxy.php`) — an owner/courier's real IP and search queries never reach OpenStreetMap, only this server's does |
+| Owner/courier IP exposure to third parties | Map tile and address-search requests from the admin panel are proxied server-side (`admin/tile_proxy.php`, `admin/geocode_proxy.php`) — neither an owner's nor a courier's real IP or search queries ever reach OpenStreetMap, only this server's does |
 
 **Not included (configure externally):** TLS.
 
