@@ -81,11 +81,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <div class="form-group">
             <label for="code">Kod (6 cyfr)</label>
             <input type="text" id="code" name="code" inputmode="numeric" pattern="[0-9]{6}"
-                   maxlength="6" autocomplete="one-time-code" autofocus>
+                   maxlength="6" placeholder="000000" autocomplete="one-time-code" autofocus>
         </div>
-        <button type="submit" class="btn">Zweryfikuj</button>
+        <div class="form-actions">
+            <button type="submit" class="btn">Zweryfikuj</button>
+            <a href="/admin/logout.php" class="btn-cancel">Anuluj i wyloguj</a>
+        </div>
     </form>
-    <a href="/admin/logout.php" class="btn-cancel-link">Anuluj i wyloguj</a>
 </div>
 </body>
 </html>
