@@ -48,10 +48,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'UPDATE users SET totp_enabled = 1, totp_secret_enc = ?, totp_secret_iv = ? WHERE id = ?'
                 )->execute([$enc['ciphertext'], $enc['iv'], $uid]);
                 unset($_SESSION['pending_totp_secret']);
+                $_SESSION['totp_enabled'] = true;
                 audit('2fa_enable');
                 $enabled = true;
                 $success = 'Weryfikacja dwuetapowa włączona.';
             }
+        } elseif ($action === 'disable' && $enabled && !is_owner()) {
+            // 2FA is mandatory for couriers — only the owner may self-disable.
+            $error = 'Weryfikacja dwuetapowa jest wymagana dla kont kurierskich.';
         } elseif ($action === 'disable' && $enabled) {
             $secret = ($row['totp_secret_enc'] && $row['totp_secret_iv'])
                 ? decrypt_location($row['totp_secret_enc'], $row['totp_secret_iv'])
@@ -63,6 +67,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 get_db()->prepare(
                     'UPDATE users SET totp_enabled = 0, totp_secret_enc = NULL, totp_secret_iv = NULL WHERE id = ?'
                 )->execute([$uid]);
+                $_SESSION['totp_enabled'] = false;
                 audit('2fa_disable');
                 $enabled = false;
                 $success = 'Weryfikacja dwuetapowa wyłączona.';
@@ -90,6 +95,7 @@ $csrf = generate_csrf();
 <html lang="pl">
 <head>
 <meta charset="UTF-8">
+<meta name="darkreader-lock">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Admin — Weryfikacja dwuetapowa</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -108,7 +114,7 @@ $csrf = generate_csrf();
         <?php if ($success): ?><div class="flash ok"><?= htmlspecialchars($success, ENT_QUOTES, 'UTF-8') ?></div><?php endif; ?>
 
         <div class="form-panel">
-        <?php if ($enabled): ?>
+        <?php if ($enabled && is_owner()): ?>
             <div class="settings-warning">
                 2FA jest włączone dla konta <strong><?= htmlspecialchars(current_user_name(), ENT_QUOTES, 'UTF-8') ?></strong>.
                 Aby je wyłączyć, podaj bieżący kod z aplikacji uwierzytelniającej (np. Aegis).
@@ -125,7 +131,19 @@ $csrf = generate_csrf();
                     <button type="submit" class="btn btn-danger">Wyłącz 2FA</button>
                 </div>
             </form>
+        <?php elseif ($enabled): ?>
+            <div class="settings-warning">
+                2FA jest włączone dla konta <strong><?= htmlspecialchars(current_user_name(), ENT_QUOTES, 'UTF-8') ?></strong>
+                i <strong>wymagane dla kont kurierskich</strong> — nie można go samodzielnie wyłączyć.
+                W razie utraty dostępu poproś właściciela o reset w sekcji Użytkownicy.
+            </div>
         <?php else: ?>
+            <?php if (!is_owner() && ($_GET['required'] ?? '') === '1'): ?>
+            <div class="settings-warning">
+                <strong>Weryfikacja dwuetapowa jest wymagana dla kont kurierskich.</strong>
+                Skonfiguruj ją poniżej, aby uzyskać dostęp do panelu.
+            </div>
+            <?php endif; ?>
             <div class="settings-warning">
                 Zeskanuj poniższy kod w aplikacji Aegis (lub innej zgodnej z TOTP) — albo dodaj konto ręcznie,
                 wpisując poniższy sekret. Następnie potwierdź bieżącym kodem, aby włączyć 2FA.

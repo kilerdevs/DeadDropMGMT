@@ -215,6 +215,7 @@ $init_zoom = $has_pin ? 17 : 12;
 <html lang="pl">
 <head>
 <meta charset="UTF-8">
+<meta name="darkreader-lock">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Admin — Edytuj <?= htmlspecialchars($order['order_token'], ENT_QUOTES, 'UTF-8') ?></title>
 <link rel="preconnect" href="https://fonts.googleapis.com">

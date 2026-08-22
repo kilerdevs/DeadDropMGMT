@@ -54,6 +54,16 @@ function require_admin(): void {
         header('Location: /admin/index.php?timeout=1');
         exit;
     }
+
+    // 2FA is mandatory for couriers (optional for the owner). Gate every
+    // page but the enrollment page itself and logout.
+    if (is_courier() && empty($_SESSION['totp_enabled'])) {
+        $script = basename($_SERVER['SCRIPT_NAME'] ?? '');
+        if (!in_array($script, ['2fa.php', 'logout.php'], true)) {
+            header('Location: /admin/2fa.php?required=1');
+            exit;
+        }
+    }
 }
 
 function require_owner(): void {
@@ -82,12 +92,13 @@ function courier_owns_order(int $order_id): bool {
 // ── Login / logout ────────────────────────────────────────────────────────────
 
 // Completes login: sets the full session and clears any pending-2FA state.
-function admin_finish_login(int $user_id, string $role, string $username): void {
+function admin_finish_login(int $user_id, string $role, string $username, bool $totp_enabled = false): void {
     session_regenerate_id(true);
-    $_SESSION['user_id']    = $user_id;
-    $_SESSION['user_role']  = $role;
-    $_SESSION['user_name']  = $username;
-    $_SESSION['login_time'] = time();
+    $_SESSION['user_id']      = $user_id;
+    $_SESSION['user_role']    = $role;
+    $_SESSION['user_name']    = $username;
+    $_SESSION['totp_enabled'] = $totp_enabled;
+    $_SESSION['login_time']   = time();
     unset($_SESSION['csrf_token'], $_SESSION['pending_2fa_user_id'], $_SESSION['pending_2fa_time']);
 }
 
@@ -168,6 +179,13 @@ function set_security_headers(bool $admin = false): string {
     header('X-Frame-Options: DENY');
     header('X-Content-Type-Options: nosniff');
     header('X-XSS-Protection: 0');
+
+    // Never let the browser cache or bfcache-restore a rendered page — these
+    // carry decrypted locations, passwords, or TOTP secrets. Applies to every
+    // page (public reveal included), so nothing lingers after logout or
+    // navigating away.
+    header('Cache-Control: no-store, no-cache, must-revalidate, private');
+    header('Pragma: no-cache');
 
     if (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') {
         header('Strict-Transport-Security: max-age=31536000; includeSubDomains');

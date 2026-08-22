@@ -48,7 +48,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $code = trim($_POST['code'] ?? '');
             if ($user && $secret !== false && totp_verify($secret, $code)) {
-                admin_finish_login((int)$user['id'], $user['role'], $user['username']);
+                admin_finish_login((int)$user['id'], $user['role'], $user['username'], true);
                 header('Location: /admin/orders.php');
                 exit;
             }
@@ -63,6 +63,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <html lang="pl">
 <head>
 <meta charset="UTF-8">
+<meta name="darkreader-lock">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Admin — Kod 2FA</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
