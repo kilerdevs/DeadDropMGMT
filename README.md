@@ -1,8 +1,24 @@
 # DeadDropMGMT
 
-A secure, bare-metal order management system for coordinating deliveries to dead-drop locations. Recipients look up orders by token, unlock an encrypted location with a password, and confirm receipt — all without ever exposing the underlying data.
+**A secure, bare-metal order management system for coordinating deliveries to dead-drop locations.**
 
-Built with zero external PHP dependencies. Every security concern addressed at the application layer.
+Recipients look up an order by token, unlock an encrypted location with a password, and confirm receipt — all without ever exposing the underlying data. Built with zero external PHP dependencies; every security concern is addressed at the application layer, not bolted on with a framework.
+
+![PHP](https://img.shields.io/badge/PHP-8.0%2B-777bb4?logo=php&logoColor=white)
+![Database](https://img.shields.io/badge/DB-MySQL%20%2F%20MariaDB-4479A1?logo=mysql&logoColor=white)
+![Dependencies](https://img.shields.io/badge/dependencies-zero%20(no%20Composer)-brightgreen)
+![2FA](https://img.shields.io/badge/2FA-TOTP%20(RFC%206238)-blue)
+
+---
+
+## Contents
+
+- [Features](#features)
+- [Tech Stack](#tech-stack)
+- [Security Model](#security-model)
+- [Project Structure](#project-structure)
+- [Setup](#setup)
+- [Requirements](#requirements)
 
 ---
 
@@ -23,11 +39,14 @@ Built with zero external PHP dependencies. Every security concern addressed at t
 - Extend / close / delete orders with CSRF-protected actions
 - Photo upload with automatic GD compression
 - Configurable TTL — orders auto-expire and are securely wiped
+- Two-factor authentication (TOTP) — self-service enroll/disable per account, QR + manual entry, works with Aegis and any RFC 6238 authenticator
+- Audit log — every write action recorded with actor, IP, and timestamp
 - Analytics log: every lookup, unlock attempt, and confirmation recorded with IP + user-agent
 - CSV export of the event log
 - Panic mode (owner only)
 
 ### Operations
+- IP-based rate limiting, configurable and togglable per surface (pickup guessing, admin login, 2FA codes)
 - Pseudo-cron cleanup on each page visit (throttled to 1×/hour)
 - Real cron endpoint (`cron/cleanup.php`) for server-side scheduling
 - Secure file wipe: overwrites with null bytes before `unlink()`
@@ -41,7 +60,7 @@ Built with zero external PHP dependencies. Every security concern addressed at t
 | Backend | PHP 8.0+ (strict types, procedural, no Composer) |
 | Database | MySQL / MariaDB |
 | Encryption | OpenSSL — AES-256-CBC, random IV per record |
-| Auth | bcrypt cost=12, CSRF tokens, session hardening |
+| Auth | bcrypt cost=12, TOTP 2FA, CSRF tokens, session hardening |
 | Frontend | Vanilla JS (ES5+), CSS Grid/Flexbox |
 | Maps | Leaflet + OpenStreetMap |
 | Webserver | Apache — mod_rewrite, mod_headers, .htaccess path protection |
@@ -54,18 +73,17 @@ Built with zero external PHP dependencies. Every security concern addressed at t
 |---|---|
 | SQL injection | PDO prepared statements throughout — zero string interpolation in SQL |
 | Password storage | bcrypt cost=12 via `password_hash()` / `password_verify()` |
+| Account takeover | TOTP 2FA (RFC 6238) — self-service per account, encrypted secret at rest |
 | Location data at rest | AES-256-CBC, random IV per record, key lives only in `config.php` (never in DB) |
 | Session fixation | `session_regenerate_id(true)` on login |
 | CSRF | 64-byte random token in session, `hash_equals()` comparison on every POST |
-| Brute-force | IP-based rate limiter (configurable, togglable) — pickup guessing, admin login, 2FA codes |
+| Brute-force | IP-based rate limiter, configurable and togglable — pickup guessing, admin login, 2FA codes |
 | XSS | `htmlspecialchars(..., ENT_QUOTES, 'UTF-8')` on all user-derived output |
 | Clickjacking / sniffing | `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, strict CSP, HSTS |
 | Error leakage | `display_errors=0`, all exceptions caught and logged, generic user-facing messages |
 | Direct file access | `includes/`, `config.php`, `logs/`, `cron/` blocked via `.htaccess` |
 | Cookie theft | `httponly`, `samesite=Strict`, `secure` (auto-enabled when HTTPS detected) |
-
-| 2FA | TOTP (RFC 6238), compatible with Aegis and other authenticator apps — self-service per account |
-| Write actions | Audit log — every admin create/edit/delete/setting-change recorded with actor, IP, timestamp |
+| Unaccountable writes | Every admin create/edit/delete/setting-change logged with actor, IP, timestamp |
 
 **Not included (configure externally):** TLS.
 
@@ -75,32 +93,40 @@ Built with zero external PHP dependencies. Every security concern addressed at t
 
 ```
 /
-├── index.php            Public order lookup & location reveal
-├── receive.php          Delivery confirmation endpoint
-├── config.php           DB credentials, AES key, admin hash  ← never commit
-├── setup.sql            Full database schema
-├── .htaccess            Blocks config, includes/, logs/ from web
+├── index.php               Public order lookup & location reveal
+├── receive.php              Delivery confirmation endpoint
+├── config.php               DB credentials, AES key, admin hash  ← never commit
+├── setup.sql                 Full database schema (fresh installs)
+├── setup_v10.sql              Migration: 2FA, rate limiting, audit log (existing installs)
+├── .htaccess                  Blocks config, includes/, logs/ from web
 │
 ├── admin/
-│   ├── index.php        Login wall + dashboard redirect
-│   ├── orders.php       Order list with courier filtering
-│   ├── new_order.php    Order creation form (Leaflet map picker)
-│   ├── edit.php         Edit order — status, location, password, photos
-│   ├── users.php        Courier management (owner only)
-│   ├── analytics.php    Event log viewer + CSV download
-│   ├── settings.php     Configurable site parameters
-│   └── panic.php        Emergency mode (owner only)
+│   ├── index.php             Login wall
+│   ├── login.php              Credential check → 2FA if enabled
+│   ├── verify_2fa.php          TOTP code prompt (login step 2)
+│   ├── 2fa.php                 Self-service 2FA enroll / disable (QR + manual)
+│   ├── orders.php             Order list with courier filtering
+│   ├── new_order.php          Order creation form (Leaflet map picker)
+│   ├── edit.php                Edit order — status, location, password, photos
+│   ├── users.php               Courier management (owner only)
+│   ├── audit_log.php            Write-action audit trail (owner only)
+│   ├── analytics.php           Event log viewer + CSV download
+│   ├── settings.php             Configurable site parameters
+│   ├── panic.php                Emergency mode (owner only)
+│   └── vendor/                  Leaflet + QRCode.js — vendored locally, no CDN
 │
-├── includes/            Blocked from web via .htaccess
-│   ├── db.php           PDO singleton
-│   ├── auth.php         Session, CSRF, rate limiting, security headers
-│   ├── crypto.php       AES-256-CBC encrypt/decrypt, bcrypt, passphrase generator
-│   ├── settings.php     Settings cache (one DB query per page load)
-│   ├── analytics.php    Event logger
-│   └── cleanup.php      Expired order deletion (pseudo-cron + real cron)
+├── includes/                Blocked from web via .htaccess
+│   ├── db.php                PDO singleton
+│   ├── auth.php                Session, CSRF, rate limiting, security headers
+│   ├── crypto.php               AES-256-CBC encrypt/decrypt, bcrypt, passphrase generator
+│   ├── totp.php                  TOTP (RFC 6238) generate/verify, base32, otpauth:// URI
+│   ├── audit.php                 Write-action audit logger
+│   ├── settings.php              Settings cache (one DB query per page load)
+│   ├── analytics.php              Event logger
+│   └── cleanup.php                Expired order deletion (pseudo-cron + real cron)
 │
 └── cron/
-    └── cleanup.php      Server-side cron endpoint (call hourly)
+    └── cleanup.php             Server-side cron endpoint (call hourly)
 ```
 
 ---
@@ -109,8 +135,16 @@ Built with zero external PHP dependencies. Every security concern addressed at t
 
 ### 1. Database
 
+Fresh install:
+
 ```bash
 mysql -u root -p < setup.sql
+```
+
+Upgrading an existing install (adds 2FA columns, rate limiting, audit log — safe to re-run):
+
+```bash
+mysql -u root -p deaddrops < setup_v10.sql
 ```
 
 ### 2. AES-256 Key
@@ -119,7 +153,7 @@ mysql -u root -p < setup.sql
 php -r "echo bin2hex(random_bytes(32)) . PHP_EOL;"
 ```
 
-Paste the 64-char hex output into `config.php` as `AES_KEY_HEX`.  
+Paste the 64-char hex output into `config.php` as `AES_KEY_HEX`.
 **Back this up.** Losing it means losing all encrypted location data.
 
 ### 3. Admin password hash
@@ -184,6 +218,10 @@ chown www-data:www-data logs/ uploads/
 ```cron
 0 * * * * curl -s https://yourdomain.com/cron/cleanup.php > /dev/null
 ```
+
+### 8. Two-factor authentication (optional, self-service)
+
+No server setup needed — log in, open **2FA** in the sidebar, scan the QR code with [Aegis](https://getaegis.app/) (or any RFC 6238 authenticator app), and confirm with a code. Each account (owner or courier) enables/disables its own 2FA; the owner can force-reset a locked-out account's 2FA from **Users**.
 
 ---
 

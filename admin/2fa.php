@@ -119,10 +119,10 @@ $csrf = generate_csrf();
                 <div class="form-group">
                     <label for="code">Kod z aplikacji</label>
                     <input type="text" id="code" name="code" inputmode="numeric" pattern="[0-9]{6}"
-                           maxlength="6" autocomplete="one-time-code" autofocus>
+                           maxlength="6" placeholder="000000" autocomplete="one-time-code" autofocus>
                 </div>
                 <div class="form-actions">
-                    <button type="submit" class="btn action-btn--danger">Wyłącz 2FA</button>
+                    <button type="submit" class="btn btn-danger">Wyłącz 2FA</button>
                 </div>
             </form>
         <?php else: ?>
@@ -131,9 +131,15 @@ $csrf = generate_csrf();
                 wpisując poniższy sekret. Następnie potwierdź bieżącym kodem, aby włączyć 2FA.
             </div>
             <div class="form-group">
-                <div class="field-label">Sekret (wpisz ręcznie w Aegis: + → Wprowadź ręcznie)</div>
+                <div class="qr-box"><div id="qr-code"></div></div>
+            </div>
+            <div class="form-group">
+                <div class="field-label">Sekret</div>
                 <div class="location-display location-display-pw" id="totp-secret"><?= htmlspecialchars($secret_display, ENT_QUOTES, 'UTF-8') ?></div>
-                <div class="hint">Wydawca: <?= htmlspecialchars(site_name(), ENT_QUOTES, 'UTF-8') ?> · Konto: <?= htmlspecialchars(current_user_name(), ENT_QUOTES, 'UTF-8') ?> · Algorytm: SHA1 · Cyfry: 6 · Okres: 30s</div>
+                <div class="location-note">
+                    Ręcznie w Aegis: + → Wprowadź ręcznie · Wydawca: <?= htmlspecialchars(site_name(), ENT_QUOTES, 'UTF-8') ?>
+                    · Konto: <?= htmlspecialchars(current_user_name(), ENT_QUOTES, 'UTF-8') ?> · SHA1 · 6 cyfr · 30s
+                </div>
             </div>
             <div class="form-group">
                 <button type="button" class="action-btn" id="copy-secret">Kopiuj sekret</button>
@@ -144,7 +150,7 @@ $csrf = generate_csrf();
                 <div class="form-group">
                     <label for="code">Kod z aplikacji</label>
                     <input type="text" id="code" name="code" inputmode="numeric" pattern="[0-9]{6}"
-                           maxlength="6" autocomplete="one-time-code">
+                           maxlength="6" placeholder="000000" autocomplete="one-time-code">
                 </div>
                 <div class="form-actions">
                     <button type="submit" class="btn">Włącz 2FA</button>
@@ -157,7 +163,17 @@ $csrf = generate_csrf();
 
 <script src="/admin/admin.js"></script>
 <?php if (!$enabled): ?>
+<script src="/admin/vendor/qrcode/qrcode.js"></script>
 <script nonce="<?= htmlspecialchars($csp_nonce, ENT_QUOTES, 'UTF-8') ?>">
+new QRCode(document.getElementById('qr-code'), {
+    text:         <?= json_encode($qr_uri) ?>,
+    width:        200,
+    height:       200,
+    colorDark:    '#000000',
+    colorLight:   '#ffffff',
+    correctLevel: QRCode.CorrectLevel.M
+});
+
 document.getElementById('copy-secret').addEventListener('click', function () {
     var raw = document.getElementById('totp-secret').textContent.replace(/\s+/g, '');
     navigator.clipboard.writeText(raw).then(function () {

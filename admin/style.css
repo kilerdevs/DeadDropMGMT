@@ -942,6 +942,19 @@ h1 {
 .btn-neutral { border-color: var(--text-muted); color: var(--text-muted); }
 .btn-neutral:hover { background: var(--text-muted); color: var(--bg); border-color: var(--text-muted); }
 
+.btn-danger { border-color: var(--error); color: var(--error); }
+.btn-danger:hover { background: var(--error); color: var(--bg); border-color: var(--error); }
+
+/* ── QR code (2FA enrollment) ────────────────────────────────────────────── */
+
+.qr-box {
+    display:        inline-block;
+    background:     #fff;
+    padding:        16px;
+    line-height:    0;
+    margin-bottom:  8px;
+}
+
 .panic-report {
     border:        1px solid var(--border);
     padding:       4px 24px;
