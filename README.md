@@ -31,6 +31,7 @@ The author provides this software **"as is," without warranty of any kind**, and
 - [Project Structure](#project-structure)
 - [Setup](#setup)
 - [Requirements](#requirements)
+- [Contributing](#contributing)
 
 ---
 
@@ -263,3 +264,9 @@ No server setup needed — log in, open **2FA** in the sidebar, scan the QR code
 - PHP 8.0+ with `pdo_mysql`, `openssl`, `gd` extensions
 - MySQL 5.7+ or MariaDB 10.3+
 - Apache 2.4+ with `mod_rewrite`, `mod_headers`
+
+---
+
+## Contributing
+
+Bug fixes, security hardening, and documentation improvements are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for coding conventions, how to submit changes, and — importantly — how to report a security vulnerability privately rather than through a public issue.
