@@ -105,6 +105,7 @@ $csrf = generate_csrf();
     <?php $_active = '2fa'; require __DIR__ . '/sidebar.php'; ?>
 
     <main class="main">
+        <?php $totp_banner_show_link = false; require __DIR__ . '/totp_banner.php'; ?>
         <div class="page-heading">Weryfikacja dwuetapowa (2FA)</div>
 
         <?php if ($error):   ?><div class="flash"><?= htmlspecialchars($error,   ENT_QUOTES, 'UTF-8') ?></div><?php endif; ?>
@@ -164,18 +165,16 @@ $csrf = generate_csrf();
                 </p>
                 <?php endif; ?>
             </details>
-            <div class="form-group">
+            <div class="totp-enroll">
                 <div class="qr-box"><div id="qr-code"></div></div>
-            </div>
-            <div class="form-group">
-                <div class="field-label">Sekret</div>
-                <div class="location-display location-display-pw" id="totp-secret"><?= htmlspecialchars($secret_display, ENT_QUOTES, 'UTF-8') ?></div>
-                <div class="location-note">
-                    Dodawanie ręczne — Wydawca: <?= htmlspecialchars(site_name(), ENT_QUOTES, 'UTF-8') ?>
-                    · Konto: <?= htmlspecialchars(current_user_name(), ENT_QUOTES, 'UTF-8') ?> · SHA1 · 6 cyfr · 30s
+                <div class="totp-enroll-secret">
+                    <div class="field-label">Sekret</div>
+                    <div class="location-display location-display-pw" id="totp-secret"><?= htmlspecialchars($secret_display, ENT_QUOTES, 'UTF-8') ?></div>
+                    <div class="location-note">
+                        Dodawanie ręczne — Wydawca: <?= htmlspecialchars(site_name(), ENT_QUOTES, 'UTF-8') ?>
+                        · Konto: <?= htmlspecialchars(current_user_name(), ENT_QUOTES, 'UTF-8') ?> · SHA1 · 6 cyfr · 30s
+                    </div>
                 </div>
-            </div>
-            <div class="form-group">
                 <button type="button" class="action-btn" id="copy-secret">Kopiuj sekret</button>
             </div>
             <form method="POST" action="/admin/2fa.php" autocomplete="off">
