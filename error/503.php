@@ -1,20 +1,25 @@
+<?php
+declare(strict_types=1);
+require_once dirname(__DIR__) . '/includes/settings.php';
+require_once dirname(__DIR__) . '/includes/i18n.php';
+?>
 <!DOCTYPE html>
-<html lang="pl">
+<html lang="<?= htmlspecialchars(current_lang(), ENT_QUOTES, 'UTF-8') ?>">
 <head>
 <meta charset="UTF-8">
 <meta name="darkreader-lock">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>503 — Serwis niedostępny</title><link rel="stylesheet" href="/style.css">
+<title>503 — <?= t('error.503.title') ?></title><link rel="stylesheet" href="/style.css">
 <style>.error-code{font-family:'IBM Plex Mono',monospace;font-size:80px;font-weight:500;color:#222;letter-spacing:.04em;line-height:1;margin:32px 0 4px}</style>
 </head>
 <body>
 <main>
     <div class="wordmark">DEAD DROP // SYSTEM</div>
     <div class="error-code">503</div>
-    <h1>Serwis niedostępny</h1>
-    <p class="form-footnote">Serwis jest tymczasowo niedostępny z powodu prac konserwacyjnych.<br>Spróbuj ponownie za chwilę.</p>
-    <a href="/" class="btn">Strona główna</a>
-    <div class="compliance-note" style="margin-top:48px">Zgodność z ISO/IEC 27001:2022 — zarządzanie bezpieczeństwem informacji</div>
+    <h1><?= t('error.503.title') ?></h1>
+    <p class="form-footnote"><?= t('error.503.body') ?></p>
+    <a href="/" class="btn"><?= t('common.home') ?></a>
+    <div class="compliance-note" style="margin-top:48px"><?= t('common.compliance_note') ?></div>
 </main>
 </body>
 </html>

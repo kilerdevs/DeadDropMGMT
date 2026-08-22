@@ -5,6 +5,7 @@ require_once dirname(__DIR__) . '/includes/db.php';
 require_once dirname(__DIR__) . '/includes/auth.php';
 require_once dirname(__DIR__) . '/includes/settings.php';
 require_once dirname(__DIR__) . '/includes/audit.php';
+require_once dirname(__DIR__) . '/includes/i18n.php';
 
 start_secure_session();
 require_owner();
@@ -13,23 +14,23 @@ $csp_nonce = set_security_headers(true);
 // ── POST handlers — all use PRG to prevent resubmission on back/refresh ──────
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!verify_csrf($_POST['csrf_token'] ?? '')) {
-        $_SESSION['flash']    = 'Nieprawidłowy token CSRF.';
+        $_SESSION['flash']    = t('admin.common.invalid_csrf');
         $_SESSION['flash_ok'] = false;
     } elseif (($_POST['action'] ?? '') === 'clear_analytics') {
         try {
             get_db()->exec('TRUNCATE TABLE order_events');
             audit('analytics_clear');
-            $_SESSION['flash']    = 'Dane analityczne zostały usunięte.';
+            $_SESSION['flash']    = t('admin.settings.flash.analytics_cleared');
             $_SESSION['flash_ok'] = true;
         } catch (Exception $e) {
             log_err('Clear analytics: ' . $e->getMessage());
-            $_SESSION['flash']    = 'Błąd podczas usuwania danych analitycznych.';
+            $_SESSION['flash']    = t('admin.settings.flash.analytics_clear_failed');
             $_SESSION['flash_ok'] = false;
         }
     } elseif (($_POST['action'] ?? '') === 'clear_log') {
         file_put_contents(ERROR_LOG_PATH, '');
         audit('errorlog_clear');
-        $_SESSION['flash']    = 'Log błędów wyczyszczony.';
+        $_SESSION['flash']    = t('admin.settings.flash.log_cleared');
         $_SESSION['flash_ok'] = true;
     }
     header('Location: /admin/settings.php');
@@ -69,30 +70,31 @@ try {
 }
 
 $groups = [
-    'Serwis' => [
-        'site_name' => ['type' => 'text', 'placeholder' => 'MGT'],
+    'service' => [
+        'site_name'    => ['type' => 'text', 'placeholder' => 'MGT'],
+        'default_lang' => ['type' => 'select', 'options' => i18n_lang_names()],
     ],
-    'Zamówienia' => [
+    'orders' => [
         'order_ttl_hours'      => ['type' => 'slider', 'min' => 12,  'max' => 72,  'step' => 1,   'default' => '24',  'format' => 'h'],
-        'extend_hours_options' => ['type' => 'text',   'placeholder' => '24,48,72', 'unit' => 'oddzielone przecinkiem'],
+        'extend_hours_options' => ['type' => 'text',   'placeholder' => '24,48,72', 'unit' => t('admin.settings.unit.comma_separated')],
     ],
-    'Bezpieczeństwo' => [
+    'security' => [
         'rate_limit_enabled'    => ['type' => 'toggle'],
         'rate_limit_max'        => ['type' => 'slider', 'min' => 3,   'max' => 10,  'step' => 1,   'default' => '5',   'format' => 'count'],
         'rate_limit_window_min' => ['type' => 'slider', 'min' => 5,   'max' => 60,  'step' => 5,   'default' => '15',  'format' => 'min'],
         'admin_session_hours'   => ['type' => 'slider', 'min' => 0.5, 'max' => 5,   'step' => 0.5, 'default' => '4',   'format' => 'session'],
     ],
-    'Przesyłanie plików' => [
+    'uploads' => [
         'max_photo_mb' => ['type' => 'slider', 'min' => 0.1, 'max' => 5, 'step' => 0.1, 'default' => '2', 'format' => 'mb'],
     ],
-    'Zachowanie serwisu' => [
+    'behavior' => [
         'allow_status_lookup'      => ['type' => 'toggle'],
         'require_delivered_reveal' => ['type' => 'toggle'],
     ],
-    'Analityka' => [
+    'analytics' => [
         'analytics_enabled' => ['type' => 'toggle'],
     ],
-    'Diagnostyka' => [
+    'diagnostics' => [
         'show_error_log' => ['type' => 'toggle'],
     ],
 ];
@@ -101,16 +103,18 @@ function s_val(array $s, string $key): string {
     return $s[$key]['value'] ?? '';
 }
 function s_label(array $s, string $key): string {
-    return $s[$key]['label'] ?? $key;
+    $tkey = "admin.settings.label.{$key}";
+    $translated = t($tkey);
+    return $translated !== $tkey ? $translated : ($s[$key]['label'] ?? $key);
 }
 ?>
 <!DOCTYPE html>
-<html lang="pl">
+<html lang="<?= htmlspecialchars(current_lang(), ENT_QUOTES, 'UTF-8') ?>">
 <head>
 <meta charset="UTF-8">
 <meta name="darkreader-lock">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Admin — Ustawienia</title><link rel="stylesheet" href="/admin/style.css">
+<title>Admin — <?= t('admin.settings.title') ?></title><link rel="stylesheet" href="/admin/style.css">
 <meta name="csrf-token" content="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
 </head>
 <body>
@@ -120,7 +124,7 @@ function s_label(array $s, string $key): string {
 
     <main class="main">
     <?php require __DIR__ . '/totp_banner.php'; ?>
-        <div class="page-heading">Ustawienia</div>
+        <div class="page-heading"><?= t('admin.settings.title') ?></div>
 
         <?php if ($error):   ?><div class="flash"><?= htmlspecialchars($error,   ENT_QUOTES, 'UTF-8') ?></div><?php endif; ?>
         <?php if ($success): ?><div class="flash ok"><?= htmlspecialchars($success, ENT_QUOTES, 'UTF-8') ?></div><?php endif; ?>
@@ -128,9 +132,9 @@ function s_label(array $s, string $key): string {
         <div class="form-panel settings-panel">
             <div autocomplete="off">
 
-                <?php foreach ($groups as $group_name => $fields): ?>
+                <?php foreach ($groups as $group_slug => $fields): ?>
                 <div class="settings-group">
-                    <div class="settings-group-label"><?= htmlspecialchars($group_name, ENT_QUOTES, 'UTF-8') ?></div>
+                    <div class="settings-group-label"><?= htmlspecialchars(t("admin.settings.group.{$group_slug}"), ENT_QUOTES, 'UTF-8') ?></div>
 
                     <?php
                     // Collect toggles vs regular fields
@@ -158,6 +162,14 @@ function s_label(array $s, string $key): string {
                                    value="<?= htmlspecialchars(s_val($s, $key) ?: ($meta['default'] ?? (string)$meta['min']), ENT_QUOTES, 'UTF-8') ?>">
                             <span class="slider-val"></span>
                         </div>
+                        <?php elseif ($meta['type'] === 'select'): ?>
+                        <select id="s_<?= htmlspecialchars($key, ENT_QUOTES, 'UTF-8') ?>"
+                                name="<?= htmlspecialchars($key, ENT_QUOTES, 'UTF-8') ?>"
+                                class="settings-select-save">
+                            <?php foreach ($meta['options'] as $optval => $optlabel): ?>
+                            <option value="<?= htmlspecialchars($optval, ENT_QUOTES, 'UTF-8') ?>" <?= s_val($s, $key) === $optval ? 'selected' : '' ?>><?= htmlspecialchars($optlabel, ENT_QUOTES, 'UTF-8') ?></option>
+                            <?php endforeach; ?>
+                        </select>
                         <?php else: ?>
                         <input
                             type="<?= $meta['type'] === 'number' ? 'number' : 'text' ?>"
@@ -179,23 +191,26 @@ function s_label(array $s, string $key): string {
                                    value="1"
                                    <?= $on ? 'checked' : '' ?>>
                             <span class="sw-track"><span class="sw-thumb"></span></span>
-                            <span class="sw-state"><?= $on ? 'Włączone' : 'Wyłączone' ?></span>
+                            <span class="sw-state"><?= $on ? t('admin.settings.on') : t('admin.settings.off') ?></span>
                         </label>
                     </div>
                     <?php if ($key === 'analytics_enabled'): ?>
                     <div class="settings-warning">
-                        Analityka przechowuje dodatkowe dane aktywności użytkowników: adresy IP, znaczniki czasu, tokeny zamówień oraz typ zdarzenia.
-                        Na podstawie tych danych można oszacować <strong>całkowitą liczbę zamówień</strong> od początku działania systemu.
+                        <?= t('admin.settings.analytics_warning') ?>
                         <?php if ($analytics_events > 0): ?>
-                        Aktualnie w bazie: <strong><?= number_format($analytics_events) ?></strong> <?= $analytics_events === 1 ? 'zdarzenie' : 'zdarzeń' ?> dotyczących <strong><?= number_format($analytics_orders) ?></strong> zamówień.
+                        <?= t('admin.settings.analytics_current', [
+                            'n'      => number_format($analytics_events),
+                            'word'   => tn('admin.settings.event_word', $analytics_events),
+                            'orders' => number_format($analytics_orders),
+                        ]) ?>
                         <?php endif; ?>
                     </div>
                     <?php if ($analytics_events > 0): ?>
                     <form method="POST" action="/admin/settings.php"
-                          data-confirm="Usunąć wszystkie dane analityczne? Tej operacji nie można cofnąć.">
+                          data-confirm="<?= htmlspecialchars(t('admin.settings.clear_analytics_confirm'), ENT_QUOTES, 'UTF-8') ?>">
                         <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
                         <input type="hidden" name="action" value="clear_analytics">
-                        <button type="submit" class="action-btn action-btn--danger">Usuń dane analityczne</button>
+                        <button type="submit" class="action-btn action-btn--danger"><?= t('admin.settings.clear_analytics_button') ?></button>
                     </form>
                     <?php endif; ?>
                     <?php endif; ?>
@@ -219,22 +234,22 @@ function s_label(array $s, string $key): string {
         $log_lines = array_reverse($log_all); // newest first, file line numbers preserved
         ?>
         <div class="divider"></div>
-        <div class="section-label">Log błędów</div>
+        <div class="section-label"><?= t('admin.settings.error_log_section') ?></div>
         <div class="log-toolbar">
-            <span class="td-muted"><?= number_format($log_total) ?> <?= $log_total === 1 ? 'wiersz' : 'wierszy' ?></span>
+            <span class="td-muted"><?= tn('admin.settings.log_line', $log_total, ['n' => number_format($log_total)]) ?></span>
             <div class="log-toolbar-actions">
                 <?php if ($log_total > 0): ?>
-                <a class="action-btn" href="/admin/download_log.php">Pobierz log</a>
+                <a class="action-btn" href="/admin/download_log.php"><?= t('admin.settings.download_log_button') ?></a>
                 <?php endif; ?>
                 <form method="POST" action="/admin/settings.php">
                     <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
                     <input type="hidden" name="action" value="clear_log">
-                    <button class="action-btn action-btn--danger">Wyczyść log</button>
+                    <button class="action-btn action-btn--danger"><?= t('admin.settings.clear_log_button') ?></button>
                 </form>
             </div>
         </div>
         <?php if (empty($log_lines)): ?>
-        <div class="log-empty">Log jest pusty.</div>
+        <div class="log-empty"><?= t('admin.settings.log_empty') ?></div>
         <?php else: ?>
         <div class="log-view">
             <?php foreach ($log_lines as $i => $line): ?>
@@ -251,6 +266,20 @@ function s_label(array $s, string $key): string {
 
 <script nonce="<?= htmlspecialchars($csp_nonce, ENT_QUOTES, 'UTF-8') ?>">
 (function () {
+    var I = <?= json_encode([
+        'empty_field'       => t('admin.settings.js.empty_field'),
+        'range_error'       => t('admin.settings.js.range_error'),
+        'extend_hours_error' => t('admin.settings.js.extend_hours_error'),
+        'saved'             => t('admin.edit.js.saved'),
+        'save_error'        => t('admin.edit.js.save_error'),
+        'connection_error'  => t('admin.edit.js.connection_error'),
+        'on'                => t('admin.settings.on'),
+        'off'               => t('admin.settings.off'),
+        'enable_analytics_line1'    => t('admin.settings.enable_analytics_confirm_line1'),
+        'enable_analytics_line2'    => t('admin.settings.enable_analytics_confirm_line2'),
+        'enable_analytics_question' => t('admin.settings.enable_analytics_confirm_question'),
+    ]) ?>;
+
     // Confirm destructive form submissions
     document.addEventListener('submit', function (e) {
         var msg = e.target.dataset.confirm;
@@ -309,18 +338,18 @@ function s_label(array $s, string $key): string {
     // ── Validation ────────────────────────────────────────────────────────────
     function validate(key, value) {
         value = value.trim();
-        if (value === '' && key !== 'extend_hours_options' && key !== 'site_name') return 'Pole nie może być puste.';
+        if (value === '' && key !== 'extend_hours_options' && key !== 'site_name') return I.empty_field;
         if (limits[key]) {
             var n = parseInt(value, 10);
             if (isNaN(n) || n < limits[key][0] || n > limits[key][1]) {
-                return 'Wartość musi być między ' + limits[key][0] + ' a ' + limits[key][1] + '.';
+                return I.range_error.replace('{min}', limits[key][0]).replace('{max}', limits[key][1]);
             }
         }
         if (key === 'extend_hours_options') {
             var parts = value.split(',');
             for (var i = 0; i < parts.length; i++) {
                 var n = parseInt(parts[i].trim(), 10);
-                if (isNaN(n) || n <= 0) return 'Wpisz liczby całkowite dodatnie oddzielone przecinkami.';
+                if (isNaN(n) || n <= 0) return I.extend_hours_error;
             }
         }
         return null;
@@ -339,28 +368,31 @@ function s_label(array $s, string $key): string {
             .then(function (r) { return r.json(); })
             .then(function (d) {
                 if (d.ok) {
-                    showPopup('✓ Zapisano', false);
+                    showPopup('✓ ' + I.saved, false);
                     setTimeout(function () { location.reload(); }, 600);
                 } else {
-                    showPopup(d.error || 'Błąd zapisu.', true);
+                    showPopup(d.error || I.save_error, true);
                 }
             })
-            .catch(function () { showPopup('Błąd połączenia.', true); });
+            .catch(function () { showPopup(I.connection_error, true); });
     }
 
     // ── Toggles: save immediately ─────────────────────────────────────────────
     document.querySelectorAll('.sw input[type="checkbox"]').forEach(function (cb) {
         cb.addEventListener('change', function () {
             if (cb.name === 'analytics_enabled' && cb.checked) {
-                var msg = 'UWAGA: na podstawie zebranych danych można oszacować CAŁKOWITĄ LICZBĘ ZAMÓWIEŃ od początku działania systemu.\n\n' +
-                    'Analityka przechowuje dodatkowe dane aktywności użytkowników: adresy IP, znaczniki czasu, tokeny zamówień oraz typ zdarzenia.\n\n' +
-                    'Włączyć analitykę?';
+                var msg = I.enable_analytics_line1 + '\n\n' + I.enable_analytics_line2 + '\n\n' + I.enable_analytics_question;
                 if (!window.confirm(msg)) { cb.checked = false; return; }
             }
             var state = cb.closest('.sw').querySelector('.sw-state');
-            if (state) state.textContent = cb.checked ? 'Włączone' : 'Wyłączone';
+            if (state) state.textContent = cb.checked ? I.on : I.off;
             saveSetting(cb.name, cb.checked ? '1' : '0');
         });
+    });
+
+    // ── Select: save immediately ────────────────────────────────────────────
+    document.querySelectorAll('.settings-select-save').forEach(function (sel) {
+        sel.addEventListener('change', function () { saveSetting(sel.name, sel.value); });
     });
 
     // ── Text / number: save on blur OR after 3s of inactivity ────────────────

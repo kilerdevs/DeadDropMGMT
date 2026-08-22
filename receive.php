@@ -6,8 +6,9 @@ require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/crypto.php';
 require_once __DIR__ . '/includes/analytics.php';
 require_once __DIR__ . '/includes/settings.php';
+require_once __DIR__ . '/includes/i18n.php';
 
-set_security_headers(false);
+$csp_nonce = set_security_headers(false);
 start_secure_session();
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -54,7 +55,7 @@ if ($step === 1) {
 if ($step === 2) {
     $rl = rl_status('public');
     if ($rl['blocked']) {
-        $error = 'Zbyt wiele prób — odczekaj ' . (int)ceil($rl['remaining'] / 60) . ' min.';
+        $error = t('public.receive.rate_limited', ['min' => (int)ceil($rl['remaining'] / 60)]);
     } else {
         try {
             $db   = get_db();
@@ -63,7 +64,7 @@ if ($step === 2) {
             $order = $stmt->fetch();
 
             if (!$order) {
-                $error = 'Zamówienie nie zostało znalezione.';
+                $error = t('public.index.error.not_found');
             } else {
                 log_event('received', (int)$order['id'], $raw_token);
 
@@ -81,18 +82,18 @@ if ($step === 2) {
             }
         } catch (Exception $e) {
             log_err('Receive step2: ' . $e->getMessage());
-            $error = 'Błąd serwera. Spróbuj ponownie.';
+            $error = t('public.receive.error.server');
         }
     }
 }
 ?>
 <!DOCTYPE html>
-<html lang="pl">
+<html lang="<?= htmlspecialchars(current_lang(), ENT_QUOTES, 'UTF-8') ?>">
 <head>
 <meta charset="UTF-8">
 <meta name="darkreader-lock">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title><?= $deleted ? 'Odebrano' : 'Potwierdzenie odbioru' ?></title><link rel="stylesheet" href="/style.css">
+<title><?= $deleted ? t('public.receive.title.done') : t('public.receive.title.confirm') ?></title><link rel="stylesheet" href="/style.css">
 <?php if ($deleted): ?>
 <meta http-equiv="refresh" content="10; url=/">
 <?php endif; ?>
@@ -103,40 +104,32 @@ if ($step === 2) {
 
     <?php if ($deleted): ?>
     <!-- ── Success ─────────────────────────────────────────────────────── -->
-    <h1>Odebrano</h1>
+    <h1><?= t('public.receive.title.done') ?></h1>
     <div class="status-card">
-        <div class="status-label">Operacja zakończona</div>
-        <div class="status-badge delivered">ZAKOŃCZONE</div>
+        <div class="status-label"><?= t('public.receive.status_label.done') ?></div>
+        <div class="status-badge delivered"><?= t('public.receive.status.done') ?></div>
         <div class="location-reveal">
             <div class="reveal-section">
-                <div class="reveal-key">Potwierdzenie</div>
-                <div class="reveal-value">
-                    Przesyłka potwierdzona jako odebrana.<br>
-                    Wszystkie dane zostały trwale usunięte.
-                </div>
+                <div class="reveal-key"><?= t('public.receive.confirmation_label') ?></div>
+                <div class="reveal-value"><?= t('public.receive.confirmation_text') ?></div>
             </div>
         </div>
-        <div class="once-note">
-            Powrót do strony głównej za <span id="redirect-countdown" data-secs="10">10</span>s
-        </div>
+        <div class="once-note"><?= t('public.receive.redirect_note') ?></div>
     </div>
 
     <?php elseif ($error): ?>
     <!-- ── Error ───────────────────────────────────────────────────────── -->
-    <h1>Błąd</h1>
+    <h1><?= t('public.receive.title.error') ?></h1>
     <div class="alert"><?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?></div>
-    <a href="/" class="btn">Powrót</a>
+    <a href="/" class="btn"><?= t('common.back') ?></a>
 
     <?php else: ?>
     <!-- ── Confirmation page (step 1) ──────────────────────────────────── -->
-    <h1>Potwierdzenie odbioru</h1>
+    <h1><?= t('public.receive.title.confirm') ?></h1>
     <div class="confirm-card">
-        <div class="status-label">Numer przesyłki</div>
+        <div class="status-label"><?= t('public.index.token_label') ?></div>
         <div class="confirm-token"><?= htmlspecialchars($raw_token, ENT_QUOTES, 'UTF-8') ?></div>
-        <div class="confirm-warning">
-            Tej operacji nie można cofnąć.<br>
-            Lokalizacja, zdjęcia i wszystkie dane zostaną trwale usunięte.
-        </div>
+        <div class="confirm-warning"><?= t('public.receive.warning') ?></div>
         <div class="confirm-actions">
             <form method="POST" action="/receive.php">
                 <input type="hidden" name="csrf_token"
@@ -144,22 +137,22 @@ if ($step === 2) {
                 <input type="hidden" name="order_token"
                        value="<?= htmlspecialchars($raw_token, ENT_QUOTES, 'UTF-8') ?>">
                 <input type="hidden" name="step" value="2">
-                <button type="submit" class="btn btn-confirm-delete">Tak — usuń wszystko</button>
+                <button type="submit" class="btn btn-confirm-delete"><?= t('public.receive.confirm_delete_button') ?></button>
             </form>
-            <a href="/" class="btn-cancel-link">Anuluj</a>
+            <a href="/" class="btn-cancel-link"><?= t('common.cancel') ?></a>
         </div>
     </div>
     <?php endif; ?>
 
-    <div class="trust-bar" aria-label="Informacje o bezpieczeństwie">
+    <div class="trust-bar" aria-label="<?= htmlspecialchars(t('public.trust.aria_label'), ENT_QUOTES, 'UTF-8') ?>">
         <span class="trust-lock" aria-hidden="true"></span>
-        <span class="trust-text">Bezpieczne i prywatne</span>
+        <span class="trust-text"><?= t('public.trust.secure') ?></span>
         <span class="trust-sep">·</span>
-        <span class="trust-text">Dane usuwane automatycznie</span>
+        <span class="trust-text"><?= t('public.trust.auto_delete') ?></span>
         <span class="trust-sep">·</span>
-        <span class="trust-text">Bez śledzenia</span>
+        <span class="trust-text"><?= t('public.trust.no_tracking') ?></span>
     </div>
-    <div class="compliance-note">Zgodność z ISO/IEC 27001:2022 — zarządzanie bezpieczeństwem informacji</div>
+    <div class="compliance-note"><?= t('common.compliance_note') ?></div>
 </main>
 <?php if ($deleted): ?>
 <script src="/public.js"></script>

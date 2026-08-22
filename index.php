@@ -7,8 +7,9 @@ require_once __DIR__ . '/includes/crypto.php';
 require_once __DIR__ . '/includes/analytics.php';
 require_once __DIR__ . '/includes/settings.php';
 require_once __DIR__ . '/includes/cleanup.php';
+require_once __DIR__ . '/includes/i18n.php';
 
-set_security_headers(false);
+$csp_nonce = set_security_headers(false);
 start_secure_session();
 run_cleanup_if_due();
 
@@ -82,7 +83,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $password  = (string)($_POST['pickup_password'] ?? '');
 
         if (strlen($raw_token) !== 16 || !ctype_alnum($raw_token)) {
-            $error = 'Zamówienie nie zostało znalezione.';
+            $error = t('public.index.error.not_found');
         } else {
             try {
                 $db   = get_db();
@@ -92,9 +93,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 if (!$order) {
                     log_event('lookup', null, $raw_token);
-                    $error = 'Zamówienie nie zostało znalezione.';
+                    $error = t('public.index.error.not_found');
                 } elseif ($password === '' && !$allow_status_lookup) {
-                    $error = 'Hasło odbioru jest wymagane.';
+                    $error = t('public.index.error.password_required');
                 } elseif ($password === '') {
                     log_event('lookup', (int)$order['id'], $raw_token);
                     $order_status  = $order['status'];
@@ -111,7 +112,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $dec = decrypt_location_data($order['location_encrypted'], $order['location_iv']);
                             if ($dec === false) {
                                 log_err('Decryption failed for ' . $raw_token);
-                                $error = 'Błąd serwera. Skontaktuj się z obsługą.';
+                                $error = t('public.index.error.server_decrypt');
                             } else {
                                 log_event('unlock_success', (int)$order['id'], $raw_token);
                                 $ps = $db->prepare(
@@ -135,12 +136,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     } else {
                         rl_increment('public');
                         log_event('unlock_fail', (int)$order['id'], $raw_token);
-                        $error = 'Nieprawidłowe dane uwierzytelniające.';
+                        $error = t('public.index.error.invalid_credentials');
                     }
                 }
             } catch (Exception $e) {
                 log_err('Lookup error: ' . $e->getMessage());
-                $error = 'Usługa niedostępna. Spróbuj ponownie później.';
+                $error = t('public.index.error.service_unavailable');
             }
         }
     }
@@ -162,17 +163,17 @@ if ($loc_data && is_numeric($loc_data['lat']) && is_numeric($loc_data['lng'])) {
         $lng - $mg, $lat - $mg, $lng + $mg, $lat + $mg, $lat, $lng
     );
     $gm_link    = sprintf('https://www.google.com/maps/search/?api=1&query=%.7f%%2C%.7f', $lat, $lng);
-    $apple_link = sprintf('https://maps.apple.com/?ll=%.7f,%.7f&q=Lokalizacja+odbioru&t=m', $lat, $lng);
+    $apple_link = sprintf('https://maps.apple.com/?ll=%.7f,%.7f&q=%s&t=m', $lat, $lng, rawurlencode(t('public.index.reveal.location')));
 }
 $csrf_public = generate_csrf();
 ?>
 <!DOCTYPE html>
-<html lang="pl">
+<html lang="<?= htmlspecialchars(current_lang(), ENT_QUOTES, 'UTF-8') ?>">
 <head>
 <meta charset="UTF-8">
 <meta name="darkreader-lock">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Wyszukiwanie przesyłki</title><link rel="stylesheet" href="/style.css">
+<title><?= t('public.index.title') ?></title><link rel="stylesheet" href="/style.css">
 <?php if ($blocked && $cooldown_secs <= 60): ?>
 <meta http-equiv="refresh" content="<?= $cooldown_secs + 2 ?>">
 <?php endif; ?>
@@ -180,13 +181,13 @@ $csrf_public = generate_csrf();
 <body>
 <main>
     <div class="wordmark">DEAD DROP // <?= htmlspecialchars(site_name(), ENT_QUOTES, 'UTF-8') ?></div>
-    <h1>Wyszukiwanie przesyłki</h1>
+    <h1><?= t('public.index.title') ?></h1>
 
 <?php if ($blocked): ?>
     <div class="cooldown">
-        <div class="cooldown-heading">Limit prób wyczerpany</div>
+        <div class="cooldown-heading"><?= t('public.index.cooldown_heading') ?></div>
         <div class="cooldown-timer"><?= $cd_mins ?>m <?= str_pad((string)$cd_secs, 2, '0', STR_PAD_LEFT) ?>s</div>
-        <div class="cooldown-sub">Zbyt wiele nieudanych prób — spróbuj ponownie później</div>
+        <div class="cooldown-sub"><?= t('public.index.cooldown_sub') ?></div>
     </div>
 
 <?php else: ?>
@@ -198,24 +199,21 @@ $csrf_public = generate_csrf();
     <?php if ($correct_preparing): ?>
     <!-- ── Correct password but not yet delivered ─────────────────────── -->
     <div class="status-card">
-        <div class="status-label">Status przesyłki</div>
-        <div class="status-badge">W PRZYGOTOWANIU</div>
-        <div class="not-ready-note">
-            Przesyłka jest w trakcie przygotowania.<br>
-            Informacje o lokalizacji będą dostępne po dostarczeniu.
-        </div>
+        <div class="status-label"><?= t('public.index.status_label') ?></div>
+        <div class="status-badge"><?= t('public.status.preparing') ?></div>
+        <div class="not-ready-note"><?= t('public.index.not_ready_note') ?></div>
     </div>
 
     <?php elseif ($loc_data !== null): ?>
     <!-- ── Delivered + correct password — full reveal ─────────────────── -->
     <div class="status-card">
-        <div class="status-label">Status przesyłki</div>
-        <div class="status-badge delivered">DOSTARCZONE</div>
+        <div class="status-label"><?= t('public.index.status_label') ?></div>
+        <div class="status-badge delivered"><?= t('public.status.delivered') ?></div>
 
         <?php if ($order_expires_ts > 0): ?>
         <div>
             <div class="expiry-banner">
-                <span class="expiry-label">Dostępne przez:</span>
+                <span class="expiry-label"><?= t('public.index.expiry_label') ?></span>
                 <span class="expiry-timer"
                       id="expiry-countdown"
                       data-expires="<?= $order_expires_ts ?>">
@@ -229,18 +227,18 @@ $csrf_public = generate_csrf();
 
             <?php if ($loc_data['text'] !== ''): ?>
             <div class="reveal-section">
-                <div class="reveal-key">Lokalizacja odbioru</div>
+                <div class="reveal-key"><?= t('public.index.reveal.location') ?></div>
                 <div class="reveal-value"><?= htmlspecialchars($loc_data['text'], ENT_QUOTES, 'UTF-8') ?></div>
             </div>
             <?php endif; ?>
 
             <?php if ($map_src !== ''): ?>
             <div class="reveal-section">
-                <div class="reveal-key">Mapa</div>
+                <div class="reveal-key"><?= t('public.index.reveal.map') ?></div>
                 <iframe class="map-frame"
                         src="<?= htmlspecialchars($map_src, ENT_QUOTES, 'UTF-8') ?>"
                         loading="lazy"
-                        title="Mapa lokalizacji odbioru"
+                        title="<?= htmlspecialchars(t('public.index.map_title'), ENT_QUOTES, 'UTF-8') ?>"
                         sandbox="allow-scripts allow-same-origin"></iframe>
                 <div class="map-actions">
                     <a class="map-link"
@@ -255,21 +253,21 @@ $csrf_public = generate_csrf();
 
             <?php if (!empty($loc_data['instructions'])): ?>
             <div class="reveal-section">
-                <div class="reveal-key">Instrukcje odbioru</div>
+                <div class="reveal-key"><?= t('public.index.reveal.instructions') ?></div>
                 <div class="instructions-text"><?= nl2br(htmlspecialchars($loc_data['instructions'], ENT_QUOTES, 'UTF-8')) ?></div>
             </div>
             <?php endif; ?>
 
             <?php if ($order_notes !== ''): ?>
             <div class="reveal-section">
-                <div class="reveal-key">Notatki</div>
+                <div class="reveal-key"><?= t('public.index.reveal.notes') ?></div>
                 <div class="instructions-text"><?= nl2br(htmlspecialchars($order_notes, ENT_QUOTES, 'UTF-8')) ?></div>
             </div>
             <?php endif; ?>
 
             <?php if (!empty($photos)): ?>
             <div class="reveal-section">
-                <div class="reveal-key">Zdjęcia referencyjne</div>
+                <div class="reveal-key"><?= t('public.index.reveal.photos') ?></div>
                 <div class="photos-grid">
                     <?php foreach ($photos as $ph): ?>
                     <div class="photo-item">
@@ -285,7 +283,7 @@ $csrf_public = generate_csrf();
             </div>
             <?php endif; ?>
 
-            <div class="once-note">Strona nie zapisuje tych danych w przeglądarce — aby zobaczyć lokalizację ponownie, wróć do wyszukiwania i wprowadź hasło jeszcze raz.</div>
+            <div class="once-note"><?= t('public.index.once_note') ?></div>
         </div>
     </div>
 
@@ -297,35 +295,35 @@ $csrf_public = generate_csrf();
         <input type="hidden" name="order_token"
                value="<?= htmlspecialchars($current_token, ENT_QUOTES, 'UTF-8') ?>">
         <input type="hidden" name="step" value="1">
-        <button type="submit" class="btn btn-receive">Odebrałem</button>
+        <button type="submit" class="btn btn-receive"><?= t('public.index.receive_button') ?></button>
     </form>
 
     <?php elseif ($show_pw_step): ?>
     <!-- ── Status shown, prompt for password ─────────────────────────── -->
     <div class="status-card">
-        <div class="status-label">Status przesyłki</div>
+        <div class="status-label"><?= t('public.index.status_label') ?></div>
         <div class="status-badge <?= $order_status === 'delivered' ? 'delivered' : '' ?>">
-            <?= $order_status === 'delivered' ? 'DOSTARCZONE' : 'W PRZYGOTOWANIU' ?>
+            <?= $order_status === 'delivered' ? t('public.status.delivered') : t('public.status.preparing') ?>
         </div>
     </div>
     <hr class="divider">
-    <div class="unlock-heading">Wprowadź hasło odbioru, aby zobaczyć lokalizację</div>
+    <div class="unlock-heading"><?= t('public.index.unlock_heading') ?></div>
     <form method="POST" action="" autocomplete="off">
         <input type="hidden" name="order_token"
                value="<?= htmlspecialchars($prefill_token, ENT_QUOTES, 'UTF-8') ?>">
         <div class="form-group">
-            <label for="pickup_password">Hasło odbioru</label>
+            <label for="pickup_password"><?= t('public.index.pw_label') ?></label>
             <input type="password" id="pickup_password" name="pickup_password"
                    autofocus autocomplete="off">
         </div>
-        <button type="submit" class="btn">Odblokuj</button>
+        <button type="submit" class="btn"><?= t('public.index.unlock_button') ?></button>
     </form>
 
     <?php else: ?>
     <!-- ── Initial form ──────────────────────────────────────────────── -->
     <form method="POST" action="" autocomplete="off">
         <div class="form-group">
-            <label for="order_token">Numer przesyłki</label>
+            <label for="order_token"><?= t('public.index.token_label') ?></label>
             <input type="text" id="order_token" name="order_token"
                    maxlength="16" placeholder="XXXXXXXXXXXXXXXX"
                    value="<?= htmlspecialchars($prefill_token ?: ($_POST['order_token'] ?? ''), ENT_QUOTES, 'UTF-8') ?>"
@@ -333,36 +331,43 @@ $csrf_public = generate_csrf();
         </div>
         <div class="form-group">
             <label for="pickup_password">
-                Hasło odbioru
+                <?= t('public.index.pw_label') ?>
                 <?php if ($allow_status_lookup): ?>
-                <span class="optional">opcjonalne — pomiń, aby sprawdzić tylko status</span>
+                <span class="optional"><?= t('public.index.pw_optional_hint') ?></span>
                 <?php endif; ?>
             </label>
             <input type="password" id="pickup_password" name="pickup_password"
                    autocomplete="off" <?= !$allow_status_lookup ? 'required' : '' ?>>
         </div>
-        <button type="submit" class="btn">Wyszukaj</button>
+        <button type="submit" class="btn"><?= t('public.index.search_button') ?></button>
     </form>
     <?php endif; ?>
 
     <p class="form-footnote">
-        Status przesyłki może zmienić się w dowolnym momencie.<br>
-        Ze względów bezpieczeństwa lokalizacja oraz wszelkie informacje dotyczące odbioru są przechowywane na serwerze przez <?= (int)order_ttl_hours() ?>h od dostarczenia, po czym zostają trwale usunięte.
+        <?= t('public.index.footnote', ['hours' => (int)order_ttl_hours()]) ?>
     </p>
 
 <?php endif; ?>
 
-    <div class="trust-bar" aria-label="Informacje o bezpieczeństwie">
+    <div class="trust-bar" aria-label="<?= htmlspecialchars(t('public.trust.aria_label'), ENT_QUOTES, 'UTF-8') ?>">
         <span class="trust-lock" aria-hidden="true"></span>
-        <span class="trust-text">Bezpieczne i prywatne</span>
+        <span class="trust-text"><?= t('public.trust.secure') ?></span>
         <span class="trust-sep">·</span>
-        <span class="trust-text">Dane usuwane automatycznie</span>
+        <span class="trust-text"><?= t('public.trust.auto_delete') ?></span>
         <span class="trust-sep">·</span>
-        <span class="trust-text">Bez śledzenia</span>
+        <span class="trust-text"><?= t('public.trust.no_tracking') ?></span>
     </div>
-    <div class="compliance-note">Zgodność z ISO/IEC 27001:2022 — zarządzanie bezpieczeństwem informacji</div>
+    <div class="compliance-note"><?= t('common.compliance_note') ?></div>
 </main>
 <?php if ($order_expires_ts > 0 || !empty($photos)): ?>
+<script nonce="<?= htmlspecialchars($csp_nonce, ENT_QUOTES, 'UTF-8') ?>">
+window.I18N = <?= json_encode([
+    'order_expired' => t('public.index.order_expired'),
+    'gallery_close' => t('public.gallery.close'),
+    'gallery_prev'  => t('public.gallery.prev'),
+    'gallery_next'  => t('public.gallery.next'),
+]) ?>;
+</script>
 <script src="/public.js"></script>
 <?php endif; ?>
 <?php if (!empty($photos)): ?>

@@ -1,13 +1,15 @@
 (function () {
     'use strict';
 
+    var i18n = window.I18N || {};
+
     // ── Live countdown for expiry-timer cells ─────────────────────────────────
     function tickAdmin() {
         document.querySelectorAll('.expiry-timer[data-expires]').forEach(function (el) {
             var exp = parseInt(el.dataset.expires, 10);
             var rem = exp - Math.floor(Date.now() / 1000);
             if (rem <= 0) {
-                el.textContent = 'Wygasło';
+                el.textContent = i18n.expired || 'Expired';
                 el.className = 'expiry-timer urgent';
                 return;
             }
@@ -36,19 +38,16 @@
     });
 
     // ── Copy order info to clipboard ──────────────────────────────────────────
-    var ttlMeta = document.querySelector('meta[name="dd-ttl"]');
-    var ttlHours = ttlMeta ? parseInt(ttlMeta.content, 10) : 24;
-
     document.querySelectorAll('[data-copy]').forEach(function (btn) {
         btn.addEventListener('click', function () {
             var token = btn.dataset.token || '';
-            var code  = btn.dataset.code  || '(brak)';
+            var code  = btn.dataset.code  || i18n.copy_no_password || '(none)';
             var url   = window.location.protocol + '//' + window.location.host + '/?token=' + token;
-            var text  = 'Link do przesyłki: ' + url + '\nHasło odbioru: ' + code + '\n\nUWAGA: Ze względów bezpieczeństwa lokalizacja odbioru jest dostępna przez ' + ttlHours + 'h od dostarczenia, po czym zostaje trwale usunięta. Status przesyłki może zmienić się w dowolnym momencie.';
+            var text  = (i18n.copy_link_label || 'Delivery link: ') + url + '\n' + (i18n.copy_password_label || 'Pickup password: ') + code + '\n\n' + (i18n.copy_warning || '');
 
             function showOk() {
                 var orig = btn.textContent;
-                btn.textContent = 'Skopiowano ✓';
+                btn.textContent = i18n.copied || 'Copied ✓';
                 setTimeout(function () { btn.textContent = orig; }, 2000);
             }
 
@@ -79,7 +78,7 @@
     if (_stSidebar) {
         var _stBtn = document.createElement('button');
         _stBtn.className = 'sidebar-toggle';
-        _stBtn.setAttribute('aria-label', 'Menu');
+        _stBtn.setAttribute('aria-label', i18n.menu_aria || 'Menu');
         _stBtn.innerHTML = '&#9776;';
 
         var _stBackdrop = document.createElement('div');

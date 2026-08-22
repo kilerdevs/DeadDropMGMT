@@ -5,6 +5,7 @@ require_once dirname(__DIR__) . '/includes/db.php';
 require_once dirname(__DIR__) . '/includes/auth.php';
 require_once dirname(__DIR__) . '/includes/analytics.php';
 require_once dirname(__DIR__) . '/includes/settings.php';
+require_once dirname(__DIR__) . '/includes/i18n.php';
 
 start_secure_session();
 require_owner();
@@ -40,8 +41,8 @@ function parse_browser(string $ua): string {
     elseif (strpos($ua, 'Safari/') !== false && strpos($ua, 'Chrome') === false) $b = 'Safari';
     elseif (strpos($ua, 'curl/') !== false)                                      $b = 'curl';
     elseif (preg_match('/bot|spider|crawl/i', $ua))                              $b = 'Bot';
-    else                                                                         $b = 'Inny';
-    return $b . ' · ' . ($mobile ? 'Mobilny' : 'Desktop');
+    else                                                                         $b = t('admin.analytics.browser.other');
+    return $b . ' · ' . ($mobile ? t('admin.analytics.browser.mobile') : t('admin.analytics.browser.desktop'));
 }
 
 // ── Queries ───────────────────────────────────────────────────────────────────
@@ -137,10 +138,10 @@ try {
 }
 
 $labels = [
-    'lookup'         => 'Wyszukanie tokenu',
-    'unlock_success' => 'Udane odblokowanie',
-    'unlock_fail'    => 'Błędne hasło',
-    'received'       => 'Potwierdzenie odbioru',
+    'lookup'         => t('admin.analytics.event.lookup'),
+    'unlock_success' => t('admin.analytics.event.unlock_success'),
+    'unlock_fail'    => t('admin.analytics.event.unlock_fail'),
+    'received'       => t('admin.analytics.event.received'),
 ];
 
 function period_url(string $p, int $page = 1): string {
@@ -151,12 +152,12 @@ function period_url(string $p, int $page = 1): string {
 $csrf = generate_csrf();
 ?>
 <!DOCTYPE html>
-<html lang="pl">
+<html lang="<?= htmlspecialchars(current_lang(), ENT_QUOTES, 'UTF-8') ?>">
 <head>
 <meta charset="UTF-8">
 <meta name="darkreader-lock">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Admin — Analityka</title><link rel="stylesheet" href="/admin/style.css">
+<title>Admin — <?= t('admin.analytics.title') ?></title><link rel="stylesheet" href="/admin/style.css">
 </head>
 <body>
 <div class="shell">
@@ -165,61 +166,60 @@ $csrf = generate_csrf();
 
     <main class="main">
     <?php require __DIR__ . '/totp_banner.php'; ?>
-        <div class="page-heading">Analityka</div>
+        <div class="page-heading"><?= t('admin.analytics.title') ?></div>
 
         <?php if (!analytics_enabled()): ?>
         <div class="flash">
-            Zbieranie danych analitycznych jest wyłączone. Nowe zdarzenia nie są rejestrowane.
-            Dane zebrane przed wyłączeniem są nadal widoczne poniżej.
-            <a href="/admin/settings.php" class="flash-link">Włącz w ustawieniach &#8594;</a>
+            <?= t('admin.analytics.disabled_notice') ?>
+            <a href="/admin/settings.php" class="flash-link"><?= t('admin.analytics.enable_link') ?></a>
         </div>
         <?php endif; ?>
 
         <!-- ── Period filter ─────────────────────────────────────────────── -->
         <div class="period-filter">
-            <a class="period-btn <?= $period === '24h'  ? 'active' : '' ?>" href="<?= period_url('24h')  ?>">Ostatnie 24h</a>
-            <a class="period-btn <?= $period === '7d'   ? 'active' : '' ?>" href="<?= period_url('7d')   ?>">Ostatnie 7 dni</a>
-            <a class="period-btn <?= $period === '30d'  ? 'active' : '' ?>" href="<?= period_url('30d')  ?>">Ostatnie 30 dni</a>
-            <a class="period-btn <?= $period === 'all'  ? 'active' : '' ?>" href="<?= period_url('all')  ?>">Wszystko</a>
+            <a class="period-btn <?= $period === '24h'  ? 'active' : '' ?>" href="<?= period_url('24h')  ?>"><?= t('admin.analytics.period.24h') ?></a>
+            <a class="period-btn <?= $period === '7d'   ? 'active' : '' ?>" href="<?= period_url('7d')   ?>"><?= t('admin.analytics.period.7d') ?></a>
+            <a class="period-btn <?= $period === '30d'  ? 'active' : '' ?>" href="<?= period_url('30d')  ?>"><?= t('admin.analytics.period.30d') ?></a>
+            <a class="period-btn <?= $period === 'all'  ? 'active' : '' ?>" href="<?= period_url('all')  ?>"><?= t('admin.analytics.period.all') ?></a>
         </div>
 
         <!-- ── Summary cards ─────────────────────────────────────────────── -->
         <div class="stats-grid">
             <div class="stat-card">
                 <div class="stat-value"><?= number_format($counts['lookup'] ?? 0) ?></div>
-                <div class="stat-label">Wyszukania tokenów</div>
+                <div class="stat-label"><?= t('admin.analytics.stat.lookups') ?></div>
             </div>
             <div class="stat-card">
                 <div class="stat-value"><?= number_format($counts['unlock_success'] ?? 0) ?></div>
-                <div class="stat-label">Udane odblokowania</div>
+                <div class="stat-label"><?= t('admin.analytics.stat.unlocks') ?></div>
             </div>
             <div class="stat-card">
                 <div class="stat-value"><?= number_format($counts['unlock_fail'] ?? 0) ?></div>
-                <div class="stat-label">Błędne hasła</div>
+                <div class="stat-label"><?= t('admin.analytics.stat.failed_pw') ?></div>
             </div>
             <div class="stat-card">
                 <div class="stat-value"><?= number_format($counts['received'] ?? 0) ?></div>
-                <div class="stat-label">Potwierdzenia odbioru</div>
+                <div class="stat-label"><?= t('admin.analytics.stat.confirmations') ?></div>
             </div>
             <div class="stat-card">
                 <div class="stat-value"><?= number_format($unique_ips) ?></div>
-                <div class="stat-label">Unikalne adresy IP</div>
+                <div class="stat-label"><?= t('admin.analytics.stat.unique_ips') ?></div>
             </div>
         </div>
 
         <!-- ── Daily breakdown ───────────────────────────────────────────── -->
         <?php if (!empty($daily)): ?>
         <div class="divider"></div>
-        <div class="section-label">Aktywność dzienna — ostatnie 14 dni</div>
+        <div class="section-label"><?= t('admin.analytics.daily_section') ?></div>
         <div class="table-wrap">
             <table>
                 <thead>
                     <tr>
-                        <th>Dzień</th>
-                        <th>Wyszukania</th>
-                        <th>Odblokowania</th>
-                        <th>Błędne hasła</th>
-                        <th>Odbiory</th>
+                        <th><?= t('admin.analytics.th.day') ?></th>
+                        <th><?= t('admin.analytics.th.lookups') ?></th>
+                        <th><?= t('admin.analytics.th.unlocks') ?></th>
+                        <th><?= t('admin.analytics.stat.failed_pw') ?></th>
+                        <th><?= t('admin.analytics.th.confirmations') ?></th>
                     </tr>
                 </thead>
                 <tbody>
@@ -240,17 +240,17 @@ $csrf = generate_csrf();
         <!-- ── Per-order activity ────────────────────────────────────────── -->
         <?php if (!empty($per_order)): ?>
         <div class="divider"></div>
-        <div class="section-label">Aktywność według zamówień</div>
+        <div class="section-label"><?= t('admin.analytics.per_order_section') ?></div>
         <div class="table-wrap">
             <table>
                 <thead>
                     <tr>
-                        <th>Token</th>
-                        <th>Status</th>
-                        <th>Wyszukania</th>
-                        <th>Odblokowania</th>
-                        <th>Błędy</th>
-                        <th>Ostatnia aktywność</th>
+                        <th><?= t('admin.orders.th.token') ?></th>
+                        <th><?= t('admin.orders.th.status') ?></th>
+                        <th><?= t('admin.analytics.th.lookups') ?></th>
+                        <th><?= t('admin.analytics.th.unlocks') ?></th>
+                        <th><?= t('admin.analytics.th.errors') ?></th>
+                        <th><?= t('admin.analytics.th.last_activity') ?></th>
                     </tr>
                 </thead>
                 <tbody>
@@ -259,10 +259,10 @@ $csrf = generate_csrf();
                     <td><span class="token"><?= htmlspecialchars($o['order_token'] ?? '—', ENT_QUOTES, 'UTF-8') ?></span></td>
                     <td>
                         <?php if ($o['status'] === null): ?>
-                        <span class="td-muted">usunięte</span>
+                        <span class="td-muted"><?= t('admin.analytics.deleted') ?></span>
                         <?php else: ?>
                         <span class="badge <?= $o['status'] === 'delivered' ? 'delivered' : '' ?>">
-                            <?= $o['status'] === 'delivered' ? 'dostarczone' : 'w przygotowaniu' ?>
+                            <?= $o['status'] === 'delivered' ? t('admin.analytics.status.delivered_lc') : t('admin.analytics.status.preparing_lc') ?>
                         </span>
                         <?php endif; ?>
                     </td>
@@ -280,10 +280,10 @@ $csrf = generate_csrf();
         <!-- ── Suspicious IPs ───────────────────────────────────────────── -->
         <?php if (!empty($hot_ips)): ?>
         <div class="divider"></div>
-        <div class="section-label">Podejrzane adresy IP — wielokrotne błędne hasła</div>
+        <div class="section-label"><?= t('admin.analytics.hot_ips_section') ?></div>
         <div class="table-wrap">
             <table>
-                <thead><tr><th>Adres IP</th><th>Liczba błędów</th><th>Ostatnia próba</th></tr></thead>
+                <thead><tr><th><?= t('admin.analytics.th.ip') ?></th><th><?= t('admin.analytics.th.error_count') ?></th><th><?= t('admin.analytics.th.last_attempt') ?></th></tr></thead>
                 <tbody>
                 <?php foreach ($hot_ips as $r): ?>
                 <tr>
@@ -299,10 +299,10 @@ $csrf = generate_csrf();
 
         <!-- ── Successful unlock IPs ─────────────────────────────────────── -->
         <?php if (!empty($unlock_ips)): ?>
-        <div class="section-label">Adresy IP — udane odblokowania</div>
+        <div class="section-label"><?= t('admin.analytics.unlock_ips_section') ?></div>
         <div class="table-wrap">
             <table>
-                <thead><tr><th>Adres IP</th><th>Odblokowania</th><th>Ostatnie</th></tr></thead>
+                <thead><tr><th><?= t('admin.analytics.th.ip') ?></th><th><?= t('admin.analytics.th.unlocks') ?></th><th><?= t('admin.analytics.th.last') ?></th></tr></thead>
                 <tbody>
                 <?php foreach ($unlock_ips as $r): ?>
                 <tr>
@@ -319,23 +319,23 @@ $csrf = generate_csrf();
         <!-- ── Recent events (paginated) ────────────────────────────────── -->
         <div class="divider"></div>
         <div class="section-label">
-            Ostatnie zdarzenia
-            <span class="td-muted"><?= number_format($total_events) ?> łącznie · strona <?= $page ?> z <?= $total_pages ?></span>
+            <?= t('admin.analytics.recent_section') ?>
+            <span class="td-muted"><?= t('admin.analytics.recent_meta', ['total' => number_format($total_events), 'page' => $page, 'pages' => $total_pages]) ?></span>
         </div>
         <div class="table-wrap">
             <table>
                 <thead>
                     <tr>
-                        <th>Czas</th>
-                        <th>Zdarzenie</th>
-                        <th>Token</th>
-                        <th>Adres IP</th>
-                        <th>Przeglądarka / urządzenie</th>
+                        <th><?= t('admin.analytics.th.time') ?></th>
+                        <th><?= t('admin.analytics.th.event') ?></th>
+                        <th><?= t('admin.orders.th.token') ?></th>
+                        <th><?= t('admin.analytics.th.ip') ?></th>
+                        <th><?= t('admin.analytics.th.browser') ?></th>
                     </tr>
                 </thead>
                 <tbody>
                 <?php if (empty($recent)): ?>
-                    <tr class="empty-row"><td colspan="5">BRAK ZDARZEŃ</td></tr>
+                    <tr class="empty-row"><td colspan="5"><?= t('admin.analytics.no_events') ?></td></tr>
                 <?php else: foreach ($recent as $ev): ?>
                 <tr>
                     <td class="meta td-muted"><?= htmlspecialchars($ev['created_at'], ENT_QUOTES, 'UTF-8') ?></td>
@@ -357,11 +357,11 @@ $csrf = generate_csrf();
         <?php if ($total_pages > 1): ?>
         <div class="pagination">
             <?php if ($page > 1): ?>
-            <a class="page-btn" href="<?= period_url($period, $page - 1) ?>">&#8592; Poprzednia</a>
+            <a class="page-btn" href="<?= period_url($period, $page - 1) ?>">&#8592; <?= t('admin.analytics.prev_page') ?></a>
             <?php endif; ?>
-            <span class="page-info">Strona <?= $page ?> / <?= $total_pages ?></span>
+            <span class="page-info"><?= t('admin.analytics.page_info', ['page' => $page, 'pages' => $total_pages]) ?></span>
             <?php if ($page < $total_pages): ?>
-            <a class="page-btn" href="<?= period_url($period, $page + 1) ?>">Następna &#8594;</a>
+            <a class="page-btn" href="<?= period_url($period, $page + 1) ?>"><?= t('admin.analytics.next_page') ?> &#8594;</a>
             <?php endif; ?>
         </div>
         <?php endif; ?>

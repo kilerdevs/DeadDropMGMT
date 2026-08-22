@@ -92,12 +92,13 @@ function courier_owns_order(int $order_id): bool {
 // ── Login / logout ────────────────────────────────────────────────────────────
 
 // Completes login: sets the full session and clears any pending-2FA state.
-function admin_finish_login(int $user_id, string $role, string $username, bool $totp_enabled = false): void {
+function admin_finish_login(int $user_id, string $role, string $username, bool $totp_enabled = false, string $lang = 'en'): void {
     session_regenerate_id(true);
     $_SESSION['user_id']      = $user_id;
     $_SESSION['user_role']    = $role;
     $_SESSION['user_name']    = $username;
     $_SESSION['totp_enabled'] = $totp_enabled;
+    $_SESSION['user_lang']    = $lang;
     $_SESSION['login_time']   = time();
     unset($_SESSION['csrf_token'], $_SESSION['pending_2fa_user_id'], $_SESSION['pending_2fa_time']);
 }
@@ -142,7 +143,7 @@ function admin_login(string $username, string $password): string {
         return 'need_2fa';
     }
 
-    admin_finish_login((int)$user['id'], $user['role'], $user['username']);
+    admin_finish_login((int)$user['id'], $user['role'], $user['username'], false, $user['lang'] ?? 'en');
     return 'ok';
 }
 
@@ -207,15 +208,17 @@ function set_security_headers(bool $admin = false): string {
     }
 
     header('Referrer-Policy: no-referrer');
+    $nonce = base64_encode(random_bytes(18));
     header('Permissions-Policy: geolocation=(), camera=(), microphone=()');
     header(
         "Content-Security-Policy: default-src 'self'; " .
         "style-src 'self'; " .
         "font-src 'self'; " .
+        "script-src 'self' 'nonce-{$nonce}'; " .
         "img-src 'self'; " .
         "frame-src https://www.openstreetmap.org;"
     );
-    return '';
+    return $nonce;
 }
 
 // ── Rate limiting (IP-based, DB-backed, togglable via settings) ───────────────

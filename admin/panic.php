@@ -5,6 +5,7 @@ require_once dirname(__DIR__) . '/includes/db.php';
 require_once dirname(__DIR__) . '/includes/auth.php';
 require_once dirname(__DIR__) . '/includes/settings.php';
 require_once dirname(__DIR__) . '/includes/audit.php';
+require_once dirname(__DIR__) . '/includes/i18n.php';
 
 start_secure_session();
 require_owner();
@@ -17,7 +18,7 @@ $error   = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && $step === 3) {
     if (!verify_csrf($_POST['csrf_token'] ?? '')) {
-        $error = 'Nieprawidłowy token CSRF.';
+        $error = t('admin.common.invalid_csrf');
         $step  = 0;
     } else {
         try {
@@ -58,7 +59,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $step === 3) {
             admin_logout();
         } catch (Exception $e) {
             log_err('PANIC: ' . $e->getMessage());
-            $error = 'Błąd: ' . $e->getMessage();
+            $error = t('admin.panic.error.server', ['msg' => $e->getMessage()]);
             $step  = 2;
         }
     }
@@ -81,12 +82,12 @@ if ($step === 1 && !verify_csrf($_POST['csrf_token'] ?? '')) { $step = 0; }
 $csrf = generate_csrf();
 ?>
 <!DOCTYPE html>
-<html lang="pl">
+<html lang="<?= htmlspecialchars(current_lang(), ENT_QUOTES, 'UTF-8') ?>">
 <head>
 <meta charset="UTF-8">
 <meta name="darkreader-lock">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Admin — Tryb awaryjny</title><link rel="stylesheet" href="/admin/style.css">
+<title>Admin — <?= t('admin.sidebar.panic') ?></title><link rel="stylesheet" href="/admin/style.css">
 </head>
 <body>
 <div class="shell">
@@ -101,41 +102,40 @@ $csrf = generate_csrf();
     <?php if ($done): ?>
     <!-- ── Done ─────────────────────────────────────────────────────────── -->
     <div class="panic-wrap">
-        <div class="panic-step">Operacja zakończona</div>
-        <div class="panic-heading">Wszystko usunięte</div>
+        <div class="panic-step"><?= t('admin.panic.done.step_label') ?></div>
+        <div class="panic-heading"><?= t('admin.panic.done.heading') ?></div>
         <div class="panic-report">
-            <div class="panic-report-row">Zamówienia<strong><?= $counts['orders'] ?></strong></div>
-            <div class="panic-report-row">Zdjęcia (DB)<strong><?= $counts['photos'] ?></strong></div>
-            <div class="panic-report-row">Pliki<strong><?= $counts['files'] ?></strong></div>
-            <div class="panic-report-row">Logi<strong><?= $counts['events'] ?></strong></div>
+            <div class="panic-report-row"><?= t('admin.orders.title') ?><strong><?= $counts['orders'] ?></strong></div>
+            <div class="panic-report-row"><?= t('admin.panic.report.photos_db') ?><strong><?= $counts['photos'] ?></strong></div>
+            <div class="panic-report-row"><?= t('admin.panic.report.files') ?><strong><?= $counts['files'] ?></strong></div>
+            <div class="panic-report-row"><?= t('admin.panic.report.logs') ?><strong><?= $counts['events'] ?></strong></div>
         </div>
-        <div class="panic-body">Baza danych wyczyszczona. Sesja admina została zakończona.</div>
-        <a href="/admin/index.php" class="btn btn-neutral">Zaloguj się ponownie</a>
+        <div class="panic-body"><?= t('admin.panic.done.body') ?></div>
+        <a href="/admin/index.php" class="btn btn-neutral"><?= t('admin.panic.relogin_button') ?></a>
     </div>
 
     <?php elseif ($step === 2): ?>
     <!-- ── Step 3/3 ──────────────────────────────────────────────────────── -->
     <div class="panic-wrap">
         <?php if ($error): ?><div class="flash"><?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?></div><?php endif; ?>
-        <div class="panic-step">Krok 3 z 3 — ostatnie ostrzeżenie</div>
-        <div class="panic-heading">Nieodwracalne usunięcie</div>
+        <div class="panic-step"><?= t('admin.panic.step3.label') ?></div>
+        <div class="panic-heading"><?= t('admin.panic.step3.heading') ?></div>
         <?php if (!empty($counts)): ?>
         <div class="panic-counts">
-            <div class="panic-counts-row">Zamówienia<span><?= $counts['orders'] ?></span></div>
-            <div class="panic-counts-row">Zdjęcia<span><?= $counts['photos'] ?></span></div>
-            <div class="panic-counts-row">Logi zdarzeń<span><?= $counts['events'] ?></span></div>
+            <div class="panic-counts-row"><?= t('admin.orders.title') ?><span><?= $counts['orders'] ?></span></div>
+            <div class="panic-counts-row"><?= t('admin.panic.counts.photos_label') ?><span><?= $counts['photos'] ?></span></div>
+            <div class="panic-counts-row"><?= t('admin.panic.counts.events') ?><span><?= $counts['events'] ?></span></div>
         </div>
         <?php endif; ?>
         <div class="panic-body">
-            <strong>Tej operacji nie można cofnąć.</strong><br>
-            Wszystkie powyższe rekordy oraz pliki zostaną trwale zniszczone.
+            <?= t('admin.panic.step3.warning') ?>
         </div>
         <form method="POST" action="/admin/panic.php">
             <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
             <input type="hidden" name="step" value="3">
             <div class="form-actions">
-                <button type="submit" class="btn btn-panic">&#9888; Usuń wszystko teraz</button>
-                <a href="/admin/index.php" class="btn-cancel">Anuluj</a>
+                <button type="submit" class="btn btn-panic">&#9888; <?= t('admin.panic.delete_now_button') ?></button>
+                <a href="/admin/index.php" class="btn-cancel"><?= t('common.cancel') ?></a>
             </div>
         </form>
     </div>
@@ -143,18 +143,17 @@ $csrf = generate_csrf();
     <?php elseif ($step === 1): ?>
     <!-- ── Step 2/3 ──────────────────────────────────────────────────────── -->
     <div class="panic-wrap">
-        <div class="panic-step">Krok 2 z 3</div>
-        <div class="panic-heading">Potwierdzenie awaryjne</div>
+        <div class="panic-step"><?= t('admin.panic.step2.label') ?></div>
+        <div class="panic-heading"><?= t('admin.panic.step2.heading') ?></div>
         <div class="panic-body">
-            Zamierzasz usunąć <strong>wszystkie zamówienia</strong>, zdjęcia, logi i dane operacyjne.<br><br>
-            Tej operacji <strong>nie można cofnąć</strong>.
+            <?= t('admin.panic.step2.body') ?>
         </div>
         <form method="POST" action="/admin/panic.php">
             <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
             <input type="hidden" name="step" value="2">
             <div class="form-actions">
-                <button type="submit" class="btn btn-panic">Rozumiem — kontynuuj (2/3)</button>
-                <a href="/admin/index.php" class="btn-cancel">Anuluj</a>
+                <button type="submit" class="btn btn-panic"><?= t('admin.panic.step2.continue_button') ?></button>
+                <a href="/admin/index.php" class="btn-cancel"><?= t('common.cancel') ?></a>
             </div>
         </form>
     </div>
@@ -162,18 +161,17 @@ $csrf = generate_csrf();
     <?php else: ?>
     <!-- ── Step 1/3 ──────────────────────────────────────────────────────── -->
     <div class="panic-wrap">
-        <div class="panic-step">Krok 1 z 3</div>
-        <div class="panic-heading">Tryb awaryjny</div>
+        <div class="panic-step"><?= t('admin.panic.step1.label') ?></div>
+        <div class="panic-heading"><?= t('admin.sidebar.panic') ?></div>
         <div class="panic-body">
-            Ten tryb trwale usuwa <strong>całą zawartość bazy danych</strong> — wszystkie zamówienia, lokalizacje, zdjęcia, instrukcje i logi.<br><br>
-            Użyj wyłącznie w sytuacji zagrożenia. Wymaga trzech potwierdzeń.
+            <?= t('admin.panic.step1.body') ?>
         </div>
         <form method="POST" action="/admin/panic.php">
             <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
             <input type="hidden" name="step" value="1">
             <div class="form-actions">
-                <button type="submit" class="btn btn-panic">&#9888; Aktywuj tryb awaryjny (1/3)</button>
-                <a href="/admin/index.php" class="btn-cancel">Anuluj</a>
+                <button type="submit" class="btn btn-panic">&#9888; <?= t('admin.panic.step1.activate_button') ?></button>
+                <a href="/admin/index.php" class="btn-cancel"><?= t('common.cancel') ?></a>
             </div>
         </form>
     </div>

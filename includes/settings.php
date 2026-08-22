@@ -64,6 +64,10 @@ function analytics_enabled(): bool {
     return get_setting('analytics_enabled', '1') === '1';
 }
 
+function default_lang(): string {
+    return get_setting('default_lang', 'en');
+}
+
 function extend_hours_options(): array {
     $raw = get_setting('extend_hours_options', '24,48,72');
     $opts = [];
@@ -76,7 +80,10 @@ function extend_hours_options(): array {
 
 // Format seconds as "Xh Ym Zs"
 function format_countdown(int $seconds): string {
-    if ($seconds <= 0) return 'Wygasło';
+    if ($seconds <= 0) {
+        require_once __DIR__ . '/i18n.php';
+        return t('common.expired');
+    }
     $h = intdiv($seconds, 3600);
     $m = intdiv($seconds % 3600, 60);
     $s = $seconds % 60;

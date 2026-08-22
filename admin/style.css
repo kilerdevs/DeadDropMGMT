@@ -213,6 +213,17 @@ body.login-page {
     text-transform: uppercase;
 }
 
+.sidebar-lang {
+    width:          calc(100% - 48px);
+    margin:         6px 24px 0;
+    padding:        6px 0;
+    font-size:      11px;
+    letter-spacing: 0.05em;
+    color:          var(--text-muted);
+    cursor:         pointer;
+}
+.sidebar-lang:focus { border-bottom-color: var(--accent); }
+
 /* ── Sidebar security strip ──────────────────────────────────────────────── */
 
 .sidebar-sec {

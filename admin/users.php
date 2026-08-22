@@ -4,6 +4,7 @@ require_once dirname(__DIR__) . '/config.php';
 require_once dirname(__DIR__) . '/includes/db.php';
 require_once dirname(__DIR__) . '/includes/auth.php';
 require_once dirname(__DIR__) . '/includes/settings.php';
+require_once dirname(__DIR__) . '/includes/i18n.php';
 
 start_secure_session();
 require_owner();
@@ -32,12 +33,12 @@ $csrf    = generate_csrf();
 $_active = 'users';
 ?>
 <!DOCTYPE html>
-<html lang="pl">
+<html lang="<?= htmlspecialchars(current_lang(), ENT_QUOTES, 'UTF-8') ?>">
 <head>
 <meta charset="UTF-8">
 <meta name="darkreader-lock">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Admin — Użytkownicy</title><link rel="stylesheet" href="/admin/style.css">
+<title>Admin — <?= t('admin.users.title') ?></title><link rel="stylesheet" href="/admin/style.css">
 </head>
 <body>
 <div class="shell">
@@ -46,40 +47,40 @@ $_active = 'users';
 
     <main class="main">
     <?php require __DIR__ . '/totp_banner.php'; ?>
-        <div class="page-heading">Użytkownicy</div>
+        <div class="page-heading"><?= t('admin.users.title') ?></div>
 
         <?php if ($flash): ?>
         <div class="flash <?= $flash_ok ? 'ok' : '' ?>"><?= htmlspecialchars($flash, ENT_QUOTES, 'UTF-8') ?></div>
         <?php endif; ?>
 
         <!-- ── Owner ──────────────────────────────────────────────────────── -->
-        <div class="section-label">Właściciel</div>
+        <div class="section-label"><?= t('admin.users.owner_section') ?></div>
         <div class="table-wrap">
             <table>
-                <thead><tr><th>Nazwa użytkownika</th><th>Konto od</th><th>Akcje</th></tr></thead>
+                <thead><tr><th><?= t('admin.users.th.username') ?></th><th><?= t('admin.users.th.account_since') ?></th><th><?= t('admin.users.th.actions') ?></th></tr></thead>
                 <tbody>
                 <?php if ($owner): ?>
                 <tr>
                     <td>
                         <span class="token"><?= htmlspecialchars($owner['username'], ENT_QUOTES, 'UTF-8') ?></span>
                         <?php if ((int)$owner['id'] === current_user_id()): ?>
-                        <span class="role-badge role-owner">Ty</span>
+                        <span class="role-badge role-owner"><?= t('admin.users.you_badge') ?></span>
                         <?php endif; ?>
                         <span class="role-badge <?= $owner['totp_enabled'] ? 'role-owner' : 'role-courier' ?>">
-                            <?= $owner['totp_enabled'] ? '2FA WŁĄCZONE' : '2FA WYŁĄCZONE' ?>
+                            <?= $owner['totp_enabled'] ? t('admin.users.2fa_on') : t('admin.users.2fa_off') ?>
                         </span>
                     </td>
                     <td class="meta td-muted"><?= htmlspecialchars($owner['created_at'], ENT_QUOTES, 'UTF-8') ?></td>
                     <td>
                         <div class="order-actions">
-                            <button class="action-btn" data-toggle="pw-owner-<?= (int)$owner['id'] ?>">Zmień hasło</button>
+                            <button class="action-btn" data-toggle="pw-owner-<?= (int)$owner['id'] ?>"><?= t('admin.users.change_password_button') ?></button>
                             <?php if ($owner['totp_enabled']): ?>
                             <form class="inline-form" method="POST" action="/admin/user_action.php"
-                                  data-confirm="Wyłączyć 2FA dla konta <?= htmlspecialchars($owner['username'], ENT_QUOTES, 'UTF-8') ?>?">
+                                  data-confirm="<?= htmlspecialchars(t('admin.users.disable_2fa_confirm', ['username' => $owner['username']]), ENT_QUOTES, 'UTF-8') ?>">
                                 <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
                                 <input type="hidden" name="action" value="reset_2fa">
                                 <input type="hidden" name="user_id" value="<?= (int)$owner['id'] ?>">
-                                <button class="action-btn action-btn--danger">Wyłącz 2FA</button>
+                                <button class="action-btn action-btn--danger"><?= t('admin.users.disable_2fa_button') ?></button>
                             </form>
                             <?php endif; ?>
                         </div>
@@ -89,15 +90,15 @@ $_active = 'users';
                                 <input type="hidden" name="action" value="change_password">
                                 <input type="hidden" name="user_id" value="<?= (int)$owner['id'] ?>">
                                 <div class="inline-pw-form">
-                                    <input type="password" name="new_password" placeholder="Nowe hasło (min. 8 znaków)" autocomplete="new-password">
-                                    <button type="submit" class="action-btn">Zapisz</button>
+                                    <input type="password" name="new_password" placeholder="<?= htmlspecialchars(t('admin.users.new_password_placeholder'), ENT_QUOTES, 'UTF-8') ?>" autocomplete="new-password">
+                                    <button type="submit" class="action-btn"><?= t('admin.users.save_button') ?></button>
                                 </div>
                             </form>
                         </div>
                     </td>
                 </tr>
                 <?php else: ?>
-                <tr class="empty-row"><td colspan="3">BRAK DANYCH</td></tr>
+                <tr class="empty-row"><td colspan="3"><?= t('admin.users.no_data') ?></td></tr>
                 <?php endif; ?>
                 </tbody>
             </table>
@@ -105,43 +106,43 @@ $_active = 'users';
 
         <!-- ── Couriers ───────────────────────────────────────────────────── -->
         <div class="divider"></div>
-        <div class="section-label">Kurierzy (<?= count($couriers) ?>)</div>
+        <div class="section-label"><?= t('admin.users.couriers_section', ['n' => count($couriers)]) ?></div>
         <div class="table-wrap">
             <table>
                 <thead>
-                    <tr><th>Nazwa użytkownika</th><th>Zamówienia</th><th>Konto od</th><th>Akcje</th></tr>
+                    <tr><th><?= t('admin.users.th.username') ?></th><th><?= t('admin.users.th.orders') ?></th><th><?= t('admin.users.th.account_since') ?></th><th><?= t('admin.users.th.actions') ?></th></tr>
                 </thead>
                 <tbody>
                 <?php if (empty($couriers)): ?>
-                    <tr class="empty-row"><td colspan="4">BRAK KURIERÓW</td></tr>
+                    <tr class="empty-row"><td colspan="4"><?= t('admin.users.no_couriers') ?></td></tr>
                 <?php else: foreach ($couriers as $c): ?>
                 <tr>
                     <td>
                         <span class="token"><?= htmlspecialchars($c['username'], ENT_QUOTES, 'UTF-8') ?></span>
                         <span class="role-badge <?= $c['totp_enabled'] ? 'role-owner' : 'role-courier' ?>">
-                            <?= $c['totp_enabled'] ? '2FA WŁĄCZONE' : '2FA WYŁĄCZONE' ?>
+                            <?= $c['totp_enabled'] ? t('admin.users.2fa_on') : t('admin.users.2fa_off') ?>
                         </span>
                     </td>
                     <td class="td-muted"><?= (int)$c['order_count'] ?></td>
                     <td class="meta td-muted"><?= htmlspecialchars($c['created_at'], ENT_QUOTES, 'UTF-8') ?></td>
                     <td>
                         <div class="order-actions">
-                            <button class="action-btn" data-toggle="pw-c-<?= (int)$c['id'] ?>">Zmień hasło</button>
+                            <button class="action-btn" data-toggle="pw-c-<?= (int)$c['id'] ?>"><?= t('admin.users.change_password_button') ?></button>
                             <?php if ($c['totp_enabled']): ?>
                             <form class="inline-form" method="POST" action="/admin/user_action.php"
-                                  data-confirm="Wyłączyć 2FA dla konta <?= htmlspecialchars($c['username'], ENT_QUOTES, 'UTF-8') ?>?">
+                                  data-confirm="<?= htmlspecialchars(t('admin.users.disable_2fa_confirm', ['username' => $c['username']]), ENT_QUOTES, 'UTF-8') ?>">
                                 <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
                                 <input type="hidden" name="action" value="reset_2fa">
                                 <input type="hidden" name="user_id" value="<?= (int)$c['id'] ?>">
-                                <button class="action-btn action-btn--danger">Wyłącz 2FA</button>
+                                <button class="action-btn action-btn--danger"><?= t('admin.users.disable_2fa_button') ?></button>
                             </form>
                             <?php endif; ?>
                             <form class="inline-form" method="POST" action="/admin/user_action.php"
-                                  data-confirm="Usunąć konto kuriera <?= htmlspecialchars($c['username'], ENT_QUOTES, 'UTF-8') ?>? Jego zamówienia pozostaną w systemie.">
+                                  data-confirm="<?= htmlspecialchars(t('admin.users.delete_courier_confirm', ['username' => $c['username']]), ENT_QUOTES, 'UTF-8') ?>">
                                 <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
                                 <input type="hidden" name="action" value="delete_courier">
                                 <input type="hidden" name="user_id" value="<?= (int)$c['id'] ?>">
-                                <button class="action-btn action-btn--danger">Usuń</button>
+                                <button class="action-btn action-btn--danger"><?= t('admin.users.delete_button') ?></button>
                             </form>
                         </div>
                         <div id="pw-c-<?= (int)$c['id'] ?>" class="pw-form-panel">
@@ -150,8 +151,8 @@ $_active = 'users';
                                 <input type="hidden" name="action" value="change_password">
                                 <input type="hidden" name="user_id" value="<?= (int)$c['id'] ?>">
                                 <div class="inline-pw-form">
-                                    <input type="password" name="new_password" placeholder="Nowe hasło (min. 8 znaków)" autocomplete="new-password">
-                                    <button type="submit" class="action-btn">Zapisz</button>
+                                    <input type="password" name="new_password" placeholder="<?= htmlspecialchars(t('admin.users.new_password_placeholder'), ENT_QUOTES, 'UTF-8') ?>" autocomplete="new-password">
+                                    <button type="submit" class="action-btn"><?= t('admin.users.save_button') ?></button>
                                 </div>
                             </form>
                         </div>
@@ -164,21 +165,21 @@ $_active = 'users';
 
         <!-- ── Add courier ────────────────────────────────────────────────── -->
         <div class="divider"></div>
-        <div class="section-label">Dodaj kuriera</div>
+        <div class="section-label"><?= t('admin.users.add_courier_section') ?></div>
         <div class="form-panel users-add-panel">
             <form method="POST" action="/admin/user_action.php" autocomplete="off">
                 <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
                 <input type="hidden" name="action" value="create_courier">
                 <div class="form-group">
-                    <label for="new_username">Nazwa użytkownika</label>
+                    <label for="new_username"><?= t('admin.login.username_label') ?></label>
                     <input type="text" id="new_username" name="username" autocomplete="off" spellcheck="false">
                 </div>
                 <div class="form-group">
-                    <label for="new_pw">Hasło <span class="hint">min. 8 znaków</span></label>
+                    <label for="new_pw"><?= t('admin.login.password_label') ?> <span class="hint"><?= t('admin.users.password_hint') ?></span></label>
                     <input type="password" id="new_pw" name="password" autocomplete="new-password">
                 </div>
                 <div class="form-actions">
-                    <button type="submit" class="btn">Utwórz konto kuriera</button>
+                    <button type="submit" class="btn"><?= t('admin.users.create_courier_button') ?></button>
                 </div>
             </form>
         </div>

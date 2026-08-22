@@ -6,6 +6,7 @@ require_once dirname(__DIR__) . '/includes/auth.php';
 require_once dirname(__DIR__) . '/includes/crypto.php';
 require_once dirname(__DIR__) . '/includes/settings.php';
 require_once dirname(__DIR__) . '/includes/audit.php';
+require_once dirname(__DIR__) . '/includes/i18n.php';
 
 start_secure_session();
 require_admin();
@@ -33,19 +34,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delet
                 if ($affected > 0) {
                     audit('order_delete', $del_id, $del_token);
                 }
-                $_SESSION['flash']    = $affected > 0 ? 'Zamówienie usunięte.' : 'Zamówienie nie istnieje.';
+                $_SESSION['flash']    = $affected > 0 ? t('admin.orders.flash.deleted') : t('admin.orders.flash.not_found');
                 $_SESSION['flash_ok'] = $affected > 0;
             } catch (Throwable $e) {
                 log_err('Order delete: ' . $e->getMessage());
-                $_SESSION['flash']    = 'Nie udało się usunąć zamówienia.';
+                $_SESSION['flash']    = t('admin.orders.flash.delete_failed');
                 $_SESSION['flash_ok'] = false;
             }
         } else {
-            $_SESSION['flash']    = 'Brak dostępu do tego zamówienia.';
+            $_SESSION['flash']    = t('admin.orders.flash.no_access');
             $_SESSION['flash_ok'] = false;
         }
     } else {
-        $_SESSION['flash']    = 'Nieprawidłowy token CSRF.';
+        $_SESSION['flash']    = t('admin.common.invalid_csrf');
         $_SESSION['flash_ok'] = false;
     }
     header('Location: /admin/orders.php');
@@ -109,7 +110,7 @@ try {
     log_err('Admin fetch: ' . $e->getMessage());
     $orders   = [];
     $couriers = [];
-    $flash    = 'Nie udało się załadować zamówień.';
+    $flash    = t('admin.orders.flash.load_failed');
     $flash_ok = false;
 }
 
@@ -117,13 +118,13 @@ $csrf   = generate_csrf();
 $_active = 'orders';
 ?>
 <!DOCTYPE html>
-<html lang="pl">
+<html lang="<?= htmlspecialchars(current_lang(), ENT_QUOTES, 'UTF-8') ?>">
 <head>
 <meta charset="UTF-8">
 <meta name="darkreader-lock">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Admin — Zamówienia</title>
-<meta name="dd-ttl" content="<?= (int)order_ttl_hours() ?>"><link rel="stylesheet" href="/admin/style.css">
+<title>Admin — <?= t('admin.orders.title') ?></title>
+<link rel="stylesheet" href="/admin/style.css">
 </head>
 <body>
 <div class="shell">
@@ -132,7 +133,7 @@ $_active = 'orders';
 
     <main class="main">
     <?php require __DIR__ . '/totp_banner.php'; ?>
-        <div class="page-heading">Zamówienia</div>
+        <div class="page-heading"><?= t('admin.orders.title') ?></div>
 
         <?php if ($flash): ?>
         <div class="flash <?= $flash_ok ? 'ok' : '' ?>"><?= htmlspecialchars($flash, ENT_QUOTES, 'UTF-8') ?></div>
@@ -141,7 +142,7 @@ $_active = 'orders';
         <?php if (is_owner() && !empty($couriers)): ?>
         <!-- ── Courier filter ─────────────────────────────────────────── -->
         <div class="courier-filter">
-            <a class="filter-btn <?= $filter_courier === 0 ? 'active' : '' ?>" href="/admin/orders.php">Wszystkie</a>
+            <a class="filter-btn <?= $filter_courier === 0 ? 'active' : '' ?>" href="/admin/orders.php"><?= t('admin.orders.filter_all') ?></a>
             <?php foreach ($couriers as $c): ?>
             <a class="filter-btn <?= $filter_courier === (int)$c['id'] ? 'active' : '' ?>"
                href="/admin/orders.php?courier=<?= (int)$c['id'] ?>">
@@ -153,35 +154,35 @@ $_active = 'orders';
 
         <div class="section-label">
             <?php if (is_courier()): ?>
-            Moje zamówienia (<?= count($orders) ?>)
+            <?= t('admin.orders.section.mine', ['n' => count($orders)]) ?>
             <?php elseif ($filter_courier > 0): ?>
-            Zamówienia kuriera (<?= count($orders) ?>)
+            <?= t('admin.orders.section.courier', ['n' => count($orders)]) ?>
             <?php else: ?>
-            Wszystkie zamówienia (<?= count($orders) ?>)
+            <?= t('admin.orders.section.all', ['n' => count($orders)]) ?>
             <?php endif; ?>
         </div>
         <div class="table-wrap">
             <table>
                 <thead>
                     <tr>
-                        <th>Token</th>
-                        <th>Status</th>
-                        <?php if (is_owner()): ?><th>Kurier</th><?php endif; ?>
-                        <th>Zdjęcia</th>
-                        <th>Wygasa za</th>
-                        <th>Dostarczone</th>
-                        <th>Akcje</th>
+                        <th><?= t('admin.orders.th.token') ?></th>
+                        <th><?= t('admin.orders.th.status') ?></th>
+                        <?php if (is_owner()): ?><th><?= t('admin.orders.th.courier') ?></th><?php endif; ?>
+                        <th><?= t('admin.orders.th.photos') ?></th>
+                        <th><?= t('admin.orders.th.expires') ?></th>
+                        <th><?= t('admin.orders.th.delivered') ?></th>
+                        <th><?= t('admin.orders.th.actions') ?></th>
                     </tr>
                 </thead>
                 <tbody>
                 <?php if (empty($orders)): ?>
-                    <tr class="empty-row"><td colspan="<?= is_owner() ? 7 : 6 ?>">BRAK ZAMÓWIEŃ</td></tr>
+                    <tr class="empty-row"><td colspan="<?= is_owner() ? 7 : 6 ?>"><?= t('admin.orders.empty') ?></td></tr>
                 <?php else: foreach ($orders as $o): ?>
                     <tr>
                         <td><span class="token"><?= htmlspecialchars($o['order_token'], ENT_QUOTES, 'UTF-8') ?></span></td>
                         <td>
                             <span class="badge <?= $o['status'] === 'delivered' ? 'delivered' : '' ?>">
-                                <?= $o['status'] === 'delivered' ? 'DOSTARCZONE' : 'W PRZYGOTOWANIU' ?>
+                                <?= $o['status'] === 'delivered' ? t('public.status.delivered') : t('public.status.preparing') ?>
                             </span>
                         </td>
                         <?php if (is_owner()): ?>
@@ -213,29 +214,29 @@ $_active = 'orders';
                         </td>
                         <td>
                             <div class="order-actions">
-                                <a class="action-btn" href="/admin/edit.php?id=<?= (int)$o['id'] ?>">Edytuj</a>
+                                <a class="action-btn" href="/admin/edit.php?id=<?= (int)$o['id'] ?>"><?= t('admin.orders.edit_button') ?></a>
 
                                 <button class="action-btn"
                                         data-copy
                                         data-token="<?= htmlspecialchars($o['order_token'], ENT_QUOTES, 'UTF-8') ?>"
                                         data-code="<?= htmlspecialchars($o['pw_plain'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
-                                    Kopiuj
+                                    <?= t('admin.orders.copy_button') ?>
                                 </button>
 
                                 <?php if ($o['status'] === 'preparing'): ?>
                                 <form class="inline-form" method="POST" action="/admin/mark_delivered.php">
                                     <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
                                     <input type="hidden" name="id" value="<?= (int)$o['id'] ?>">
-                                    <button class="action-btn action-btn--deliver">Dostarczone ✓</button>
+                                    <button class="action-btn action-btn--deliver"><?= t('admin.orders.deliver_button') ?></button>
                                 </form>
                                 <?php endif; ?>
 
                                 <form class="inline-form" method="POST" action="/admin/orders.php"
-                                      data-confirm="Usunąć zamówienie <?= htmlspecialchars($o['order_token'], ENT_QUOTES, 'UTF-8') ?>?">
+                                      data-confirm="<?= htmlspecialchars(t('admin.orders.delete_confirm', ['token' => $o['order_token']]), ENT_QUOTES, 'UTF-8') ?>">
                                     <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
                                     <input type="hidden" name="action" value="delete">
                                     <input type="hidden" name="id" value="<?= (int)$o['id'] ?>">
-                                    <button class="action-btn action-btn--danger">Usuń</button>
+                                    <button class="action-btn action-btn--danger"><?= t('admin.orders.delete_button') ?></button>
                                 </form>
                             </div>
                         </td>

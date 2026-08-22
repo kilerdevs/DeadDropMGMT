@@ -4,6 +4,7 @@ require_once dirname(__DIR__) . '/config.php';
 require_once dirname(__DIR__) . '/includes/db.php';
 require_once dirname(__DIR__) . '/includes/auth.php';
 require_once dirname(__DIR__) . '/includes/settings.php';
+require_once dirname(__DIR__) . '/includes/i18n.php';
 
 start_secure_session();
 require_owner();
@@ -32,12 +33,12 @@ try {
 $pages = max(1, (int)ceil($total / $per_page));
 ?>
 <!DOCTYPE html>
-<html lang="pl">
+<html lang="<?= htmlspecialchars(current_lang(), ENT_QUOTES, 'UTF-8') ?>">
 <head>
 <meta charset="UTF-8">
 <meta name="darkreader-lock">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Admin — Log audytu</title><link rel="stylesheet" href="/admin/style.css">
+<title>Admin — <?= t('admin.sidebar.audit_log') ?></title><link rel="stylesheet" href="/admin/style.css">
 </head>
 <body>
 <div class="shell">
@@ -46,16 +47,16 @@ $pages = max(1, (int)ceil($total / $per_page));
 
     <main class="main">
     <?php require __DIR__ . '/totp_banner.php'; ?>
-        <div class="page-heading">Log audytu — akcje zapisu</div>
+        <div class="page-heading"><?= t('admin.audit.heading') ?></div>
 
         <div class="table-wrap">
             <table>
                 <thead>
-                    <tr><th>Czas</th><th>Użytkownik</th><th>Akcja</th><th>Zamówienie</th><th>Szczegóły</th><th>IP</th></tr>
+                    <tr><th><?= t('admin.analytics.th.time') ?></th><th><?= t('admin.audit.th.user') ?></th><th><?= t('admin.audit.th.action') ?></th><th><?= t('admin.audit.th.order') ?></th><th><?= t('admin.audit.th.details') ?></th><th><?= t('admin.audit.th.ip') ?></th></tr>
                 </thead>
                 <tbody>
                 <?php if (empty($rows)): ?>
-                    <tr class="empty-row"><td colspan="6">BRAK WPISÓW</td></tr>
+                    <tr class="empty-row"><td colspan="6"><?= t('admin.audit.no_entries') ?></td></tr>
                 <?php else: foreach ($rows as $r): ?>
                     <tr>
                         <td class="meta td-muted"><?= htmlspecialchars($r['created_at'], ENT_QUOTES, 'UTF-8') ?></td>
@@ -72,10 +73,10 @@ $pages = max(1, (int)ceil($total / $per_page));
 
         <?php if ($pages > 1): ?>
         <div class="log-toolbar">
-            <span class="td-muted">Strona <?= $page ?> / <?= $pages ?> — <?= number_format($total) ?> wpisów</span>
+            <span class="td-muted"><?= t('admin.audit.page_summary', ['page' => $page, 'pages' => $pages, 'total' => number_format($total)]) ?></span>
             <div class="log-toolbar-actions">
-                <?php if ($page > 1): ?><a class="action-btn" href="?page=<?= $page - 1 ?>">&larr; Poprzednia</a><?php endif; ?>
-                <?php if ($page < $pages): ?><a class="action-btn" href="?page=<?= $page + 1 ?>">Następna &rarr;</a><?php endif; ?>
+                <?php if ($page > 1): ?><a class="action-btn" href="?page=<?= $page - 1 ?>">&larr; <?= t('admin.analytics.prev_page') ?></a><?php endif; ?>
+                <?php if ($page < $pages): ?><a class="action-btn" href="?page=<?= $page + 1 ?>"><?= t('admin.analytics.next_page') ?> &rarr;</a><?php endif; ?>
             </div>
         </div>
         <?php endif; ?>

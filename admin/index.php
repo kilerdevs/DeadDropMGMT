@@ -3,6 +3,7 @@ declare(strict_types=1);
 require_once dirname(__DIR__) . '/config.php';
 require_once dirname(__DIR__) . '/includes/auth.php';
 require_once dirname(__DIR__) . '/includes/settings.php';
+require_once dirname(__DIR__) . '/includes/i18n.php';
 
 set_security_headers(false);
 start_secure_session();
@@ -22,37 +23,37 @@ if (!empty($_SESSION['pending_2fa_user_id']) && (time() - (int)($_SESSION['pendi
 $csrf = generate_csrf();
 $lerr = htmlspecialchars($_SESSION['login_error'] ?? '', ENT_QUOTES, 'UTF-8');
 if (isset($_GET['timeout'])) {
-    $lerr = 'Sesja wygasła. Zaloguj się ponownie.';
+    $lerr = htmlspecialchars(t('admin.login.error.session_expired'), ENT_QUOTES, 'UTF-8');
 }
 unset($_SESSION['login_error']);
 ?>
 <!DOCTYPE html>
-<html lang="pl">
+<html lang="<?= htmlspecialchars(current_lang(), ENT_QUOTES, 'UTF-8') ?>">
 <head>
 <meta charset="UTF-8">
 <meta name="darkreader-lock">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Admin — Logowanie</title><link rel="stylesheet" href="/admin/style.css">
+<title>Admin — <?= t('admin.login.title') ?></title><link rel="stylesheet" href="/admin/style.css">
 </head>
 <body class="login-page">
 <div class="login-wrap">
     <div class="wordmark">DEAD DROP // <?= htmlspecialchars(site_name(), ENT_QUOTES, 'UTF-8') ?> — ADMIN</div>
-    <h1>Logowanie</h1>
+    <h1><?= t('admin.login.title') ?></h1>
     <?php if ($lerr): ?>
     <div class="alert"><?= $lerr ?></div>
     <?php endif; ?>
     <form method="POST" action="/admin/login.php" autocomplete="off">
         <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
         <div class="form-group">
-            <label for="username">Nazwa użytkownika</label>
+            <label for="username"><?= t('admin.login.username_label') ?></label>
             <input type="text" id="username" name="username"
                    autocomplete="username" autofocus spellcheck="false">
         </div>
         <div class="form-group">
-            <label for="password">Hasło</label>
+            <label for="password"><?= t('admin.login.password_label') ?></label>
             <input type="password" id="password" name="password" autocomplete="current-password">
         </div>
-        <button type="submit" class="btn">Zaloguj się</button>
+        <button type="submit" class="btn"><?= t('admin.login.submit_button') ?></button>
     </form>
 </div>
 </body>

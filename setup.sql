@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS users (
     totp_secret_enc  TEXT                   DEFAULT NULL,
     totp_secret_iv   CHAR(32)               DEFAULT NULL,
     totp_enabled     TINYINT(1)    NOT NULL DEFAULT 0,
+    lang             CHAR(2)       NOT NULL DEFAULT 'en',
     created_at       DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_username (username)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -32,6 +33,10 @@ ALTER TABLE users
     ADD COLUMN IF NOT EXISTS totp_secret_enc TEXT       DEFAULT NULL,
     ADD COLUMN IF NOT EXISTS totp_secret_iv  CHAR(32)   DEFAULT NULL,
     ADD COLUMN IF NOT EXISTS totp_enabled    TINYINT(1) NOT NULL DEFAULT 0;
+
+-- Installs from before per-account language existed won't have this column.
+ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS lang CHAR(2) NOT NULL DEFAULT 'en';
 
 -- ── Orders ────────────────────────────────────────────────────────────────────
 
@@ -150,6 +155,7 @@ CREATE TABLE IF NOT EXISTS settings (
 
 INSERT INTO settings (key_name, value, label) VALUES
     ('site_name',               'MGT',     'Nazwa serwisu'),
+    ('default_lang',            'en',      'Domyślny język strony publicznej'),
     ('order_ttl_hours',         '24',      'Czas życia zamówienia od dostarczenia (godziny)'),
     ('extend_hours_options',    '24,48,72','Opcje przedłużenia (godziny, rozdzielone przecinkiem)'),
     ('rate_limit_enabled',      '1',       'Włącz limitowanie prób wg adresu IP'),

@@ -7,16 +7,17 @@
     // ── Build lightbox DOM ────────────────────────────────────────────────────
     var lb = document.createElement('div');
     lb.id = 'lightbox';
+    var i18n = window.I18N || { gallery_close: 'Close', gallery_prev: 'Previous', gallery_next: 'Next' };
     lb.innerHTML =
         '<div class="lb-backdrop"></div>' +
-        '<button class="lb-close" aria-label="Zamknij">&times;</button>' +
-        '<button class="lb-prev" aria-label="Poprzednie">&#8249;</button>' +
+        '<button class="lb-close" aria-label="' + i18n.gallery_close + '">&times;</button>' +
+        '<button class="lb-prev" aria-label="' + i18n.gallery_prev + '">&#8249;</button>' +
         '<div class="lb-stage">' +
             '<img class="lb-img" src="" alt="">' +
             '<div class="lb-caption"></div>' +
             '<div class="lb-counter"></div>' +
         '</div>' +
-        '<button class="lb-next" aria-label="Następne">&#8250;</button>';
+        '<button class="lb-next" aria-label="' + i18n.gallery_next + '">&#8250;</button>';
     document.body.appendChild(lb);
 
     var lbImg     = lb.querySelector('.lb-img');

@@ -5,6 +5,7 @@ require_once dirname(__DIR__) . '/includes/db.php';
 require_once dirname(__DIR__) . '/includes/auth.php';
 require_once dirname(__DIR__) . '/includes/settings.php';
 require_once dirname(__DIR__) . '/includes/audit.php';
+require_once dirname(__DIR__) . '/includes/i18n.php';
 
 header('Content-Type: application/json');
 start_secure_session();
@@ -35,7 +36,7 @@ $limits   = [
     'admin_session_hours'   => [0.5,  5],
     'max_photo_mb'          => [0.1,  5],
 ];
-$allowed  = array_merge(['site_name','extend_hours_options'], $numeric, $booleans);
+$allowed  = array_merge(['site_name','extend_hours_options','default_lang'], $numeric, $booleans);
 
 if (!in_array($key, $allowed, true)) {
     http_response_code(400);
@@ -50,7 +51,7 @@ if (in_array($key, $booleans, true)) {
     [$min, $max] = $limits[$key];
     if ($n < $min || $n > $max) {
         http_response_code(422);
-        echo json_encode(['error' => "Wartość musi być między {$min} a {$max}."]);
+        echo json_encode(['error' => t('admin.settings.js.range_error', ['min' => (string)$min, 'max' => (string)$max])]);
         exit;
     }
     $value = (string)$n;
@@ -60,7 +61,7 @@ if (in_array($key, $booleans, true)) {
         $n = (int)trim($part);
         if ($n <= 0) {
             http_response_code(422);
-            echo json_encode(['error' => 'Wpisz liczby całkowite dodatnie oddzielone przecinkami.']);
+            echo json_encode(['error' => t('admin.settings.js.extend_hours_error')]);
             exit;
         }
     }
@@ -68,6 +69,12 @@ if (in_array($key, $booleans, true)) {
     $value = trim($value);
     if ($value === '') {
         $value = 'MGT'; // fall back to default when cleared
+    }
+} elseif ($key === 'default_lang') {
+    if (!in_array($value, i18n_supported_langs(), true)) {
+        http_response_code(422);
+        echo json_encode(['error' => 'Invalid language']);
+        exit;
     }
 } else {
     $value = trim($value);

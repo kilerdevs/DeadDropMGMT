@@ -8,7 +8,7 @@
         var tick = function () {
             var remaining = expires - Math.floor(Date.now() / 1000);
             if (remaining <= 0) {
-                el.textContent = 'Zamówienie wygasło.';
+                el.textContent = window.I18N ? window.I18N.order_expired : 'Order expired.';
                 el.className = 'expiry-timer expired';
                 return;
             }

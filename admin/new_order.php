@@ -4,6 +4,7 @@ require_once dirname(__DIR__) . '/config.php';
 require_once dirname(__DIR__) . '/includes/db.php';
 require_once dirname(__DIR__) . '/includes/auth.php';
 require_once dirname(__DIR__) . '/includes/settings.php';
+require_once dirname(__DIR__) . '/includes/i18n.php';
 
 start_secure_session();
 require_admin();
@@ -16,13 +17,13 @@ unset($_SESSION['flash'], $_SESSION['flash_ok']);
 $csrf = generate_csrf();
 ?>
 <!DOCTYPE html>
-<html lang="pl">
+<html lang="<?= htmlspecialchars(current_lang(), ENT_QUOTES, 'UTF-8') ?>">
 <head>
 <meta charset="UTF-8">
 <meta name="darkreader-lock">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Admin — Nowe zamówienie</title>
-<meta name="dd-ttl" content="<?= (int)order_ttl_hours() ?>"><link rel="stylesheet" href="/admin/vendor/leaflet/leaflet.css">
+<title>Admin — <?= t('admin.new_order.title') ?></title>
+<link rel="stylesheet" href="/admin/vendor/leaflet/leaflet.css">
 <link rel="stylesheet" href="/admin/style.css">
 </head>
 <body>
@@ -32,7 +33,7 @@ $csrf = generate_csrf();
 
     <main class="main">
     <?php require __DIR__ . '/totp_banner.php'; ?>
-        <div class="page-heading">Nowe zamówienie</div>
+        <div class="page-heading"><?= t('admin.new_order.title') ?></div>
 
         <?php if ($flash): ?>
         <div class="flash <?= $flash_ok ? 'ok' : '' ?>"><?= htmlspecialchars($flash, ENT_QUOTES, 'UTF-8') ?></div>
@@ -47,50 +48,50 @@ $csrf = generate_csrf();
 
                 <div class="form-group">
                     <label for="location">
-                        Opis lokalizacji
-                        <span class="hint">szyfrowane po stronie serwera</span>
+                        <?= t('admin.new_order.location_label') ?>
+                        <span class="hint"><?= t('admin.new_order.location_hint') ?></span>
                     </label>
                     <textarea id="location" name="location" rows="2"
-                              placeholder="np. Pod ławką przy wschodnim wejściu do Parku Rynek"></textarea>
+                              placeholder="<?= htmlspecialchars(t('admin.new_order.location_placeholder'), ENT_QUOTES, 'UTF-8') ?>"></textarea>
                 </div>
 
                 <div class="form-group map-section">
                     <div class="field-label">
-                        Pinezka na mapie
-                        <span class="hint">opcjonalne — kliknij mapę lub wyszukaj adres</span>
+                        <?= t('admin.new_order.pin_label') ?>
+                        <span class="hint"><?= t('admin.new_order.pin_hint') ?></span>
                     </div>
                     <div class="map-search-row">
                         <input type="text" id="addr-search"
-                               placeholder="Szukaj adresu lub miejsca..." autocomplete="off">
-                        <button type="button" class="btn btn-sm" id="addr-btn">Szukaj</button>
+                               placeholder="<?= htmlspecialchars(t('admin.new_order.addr_search_placeholder'), ENT_QUOTES, 'UTF-8') ?>" autocomplete="off">
+                        <button type="button" class="btn btn-sm" id="addr-btn"><?= t('admin.new_order.search_button') ?></button>
                     </div>
                     <div id="map-picker"></div>
-                    <div class="map-coords" id="coords-display">Brak pinezki — kliknij mapę, aby ją ustawić.</div>
-                    <div class="map-hint">Możesz przeciągnąć pinezkę po jej umieszczeniu.</div>
+                    <div class="map-coords" id="coords-display"><?= t('admin.new_order.no_pin') ?></div>
+                    <div class="map-hint"><?= t('admin.new_order.drag_hint') ?></div>
                 </div>
 
                 <div class="form-group">
                     <label for="instructions">
-                        Instrukcje odbioru
-                        <span class="hint">opcjonalne — szyfrowane</span>
+                        <?= t('admin.new_order.instructions_label') ?>
+                        <span class="hint"><?= t('admin.new_order.instructions_hint') ?></span>
                     </label>
                     <textarea id="instructions" name="instructions" rows="4"
-                              placeholder="Krok 1: Wejdź od strony północnej&#10;Krok 2: Idź 20m do fontanny&#10;Krok 3: Sprawdź pod ławką"></textarea>
+                              placeholder="<?= htmlspecialchars(t('admin.new_order.instructions_placeholder'), ENT_QUOTES, 'UTF-8') ?>"></textarea>
                 </div>
 
                 <div class="form-group">
                     <label for="pickup_password">
-                        Hasło odbioru
-                        <span class="hint">zostaw puste — zostanie wygenerowane automatycznie</span>
+                        <?= t('public.index.pw_label') ?>
+                        <span class="hint"><?= t('admin.new_order.pw_hint') ?></span>
                     </label>
                     <input type="password" id="pickup_password" name="pickup_password"
-                           autocomplete="new-password" placeholder="Pozostaw puste dla auto-generacji">
+                           autocomplete="new-password" placeholder="<?= htmlspecialchars(t('admin.new_order.pw_placeholder'), ENT_QUOTES, 'UTF-8') ?>">
                 </div>
 
                 <div class="form-group">
                     <label for="photos">
-                        Zdjęcia referencyjne
-                        <span class="hint">JPEG / PNG / WebP / GIF · maks. <?= (int)get_setting('max_photo_mb', '12') ?> MB</span>
+                        <?= t('public.index.reveal.photos') ?>
+                        <span class="hint">JPEG / PNG / WebP / GIF · <?= t('admin.new_order.photos_hint', ['mb' => (int)get_setting('max_photo_mb', '12')]) ?></span>
                     </label>
                     <input type="file" id="photos" name="photos[]" multiple
                            accept="image/jpeg,image/png,image/webp,image/gif">
@@ -98,14 +99,14 @@ $csrf = generate_csrf();
 
                 <div class="form-group">
                     <label for="notes">
-                        Notatki
-                        <span class="hint">widoczne dla klienta</span>
+                        <?= t('public.index.reveal.notes') ?>
+                        <span class="hint"><?= t('admin.new_order.notes_hint') ?></span>
                     </label>
-                    <textarea id="notes" name="notes" rows="2" placeholder="Opcjonalne"></textarea>
+                    <textarea id="notes" name="notes" rows="2" placeholder="<?= htmlspecialchars(t('admin.new_order.notes_placeholder'), ENT_QUOTES, 'UTF-8') ?>"></textarea>
                 </div>
 
                 <div class="form-actions">
-                    <button type="submit" class="btn">Utwórz zamówienie</button>
+                    <button type="submit" class="btn"><?= t('admin.new_order.submit_button') ?></button>
                 </div>
             </form>
         </div>
@@ -138,7 +139,7 @@ $csrf = generate_csrf();
     function setPin(lat, lng) {
         latInput.value = lat.toFixed(7);
         lngInput.value = lng.toFixed(7);
-        coordsDisp.textContent = 'Pinezka: ' + lat.toFixed(6) + ', ' + lng.toFixed(6);
+        coordsDisp.textContent = <?= json_encode(t('admin.new_order.pin_prefix')) ?> + lat.toFixed(6) + ', ' + lng.toFixed(6);
         coordsDisp.className = 'map-pin-ok';
         if (marker) {
             marker.setLatLng([lat, lng]);
@@ -166,12 +167,12 @@ $csrf = generate_csrf();
                 map.setView([lat, lng], 17);
                 setPin(lat, lng);
             } else {
-                coordsDisp.textContent = 'Nie znaleziono lokalizacji.';
+                coordsDisp.textContent = <?= json_encode(t('admin.new_order.geocode_not_found')) ?>;
             }
         } catch (err) {
-            coordsDisp.textContent = 'Błąd wyszukiwania.';
+            coordsDisp.textContent = <?= json_encode(t('admin.new_order.geocode_error')) ?>;
         } finally {
-            this.textContent = 'Szukaj';
+            this.textContent = <?= json_encode(t('admin.new_order.search_button')) ?>;
             this.disabled = false;
         }
     });

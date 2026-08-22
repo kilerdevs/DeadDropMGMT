@@ -6,6 +6,7 @@ require_once dirname(__DIR__) . '/includes/auth.php';
 require_once dirname(__DIR__) . '/includes/crypto.php';
 require_once dirname(__DIR__) . '/includes/settings.php';
 require_once dirname(__DIR__) . '/includes/audit.php';
+require_once dirname(__DIR__) . '/includes/i18n.php';
 
 start_secure_session();
 require_admin();
@@ -32,7 +33,7 @@ function fetch_order(int $id) {
 
 $order = fetch_order($id);
 if (!$order) {
-    $_SESSION['flash']    = 'Zamówienie nie istnieje.';
+    $_SESSION['flash']    = t('admin.orders.flash.not_found');
     $_SESSION['flash_ok'] = false;
     header('Location: /admin/orders.php');
     exit;
@@ -40,7 +41,7 @@ if (!$order) {
 
 // Couriers may only edit their own orders
 if (is_courier() && (int)($order['created_by'] ?? 0) !== current_user_id()) {
-    $_SESSION['flash']    = 'Brak dostępu do tego zamówienia.';
+    $_SESSION['flash']    = t('admin.orders.flash.no_access');
     $_SESSION['flash_ok'] = false;
     header('Location: /admin/orders.php');
     exit;
@@ -54,7 +55,7 @@ $is_ajax = ($_SERVER['HTTP_X_AJAX'] ?? '') === '1';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!verify_csrf($_POST['csrf_token'] ?? '')) {
-        $error = 'Nieprawidłowy token CSRF.';
+        $error = t('admin.common.invalid_csrf');
     } else {
         $new_status       = in_array($_POST['status'] ?? '', ['preparing', 'delivered'], true)
                             ? $_POST['status'] : $order['status'];
@@ -98,7 +99,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // Password — keep current if not changing
         if ($new_password !== '') {
             if (strlen($new_password) < 4) {
-                $error = 'Nowe hasło musi mieć co najmniej 4 znaki.';
+                $error = t('admin.edit.error.pw_too_short');
             } else {
                 $pw_hash    = hash_password($new_password);
                 $pw_enc_raw = encrypt_location($new_password);
@@ -169,10 +170,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 audit('order_edit', $id, $order['order_token'], "status={$new_status}");
                 $order   = fetch_order($id);
-                $success = 'Zmiany zapisane.';
+                $success = t('admin.edit.success.saved');
             } catch (Exception $e) {
                 log_err('Edit update: ' . $e->getMessage());
-                $error = 'Błąd zapisu — sprawdź log błędów.';
+                $error = t('admin.edit.error.save_failed');
             }
         }
     }
@@ -186,7 +187,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 // ── Decrypt current data ──────────────────────────────────────────────────────
 $loc = decrypt_location_data($order['location_encrypted'], $order['location_iv'])
-    ?: ['text' => '[błąd deszyfrowania]', 'lat' => null, 'lng' => null, 'instructions' => ''];
+    ?: ['text' => t('admin.edit.decrypt_error'), 'lat' => null, 'lng' => null, 'instructions' => ''];
 
 // Decrypt pickup password for display
 $pw_display = null;
@@ -212,15 +213,14 @@ $init_lng  = $has_pin ? (float)$loc['lng'] : 21.0122;
 $init_zoom = $has_pin ? 17 : 12;
 ?>
 <!DOCTYPE html>
-<html lang="pl">
+<html lang="<?= htmlspecialchars(current_lang(), ENT_QUOTES, 'UTF-8') ?>">
 <head>
 <meta charset="UTF-8">
 <meta name="darkreader-lock">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Admin — Edytuj <?= htmlspecialchars($order['order_token'], ENT_QUOTES, 'UTF-8') ?></title><link rel="stylesheet" href="/admin/vendor/leaflet/leaflet.css">
+<title>Admin — <?= t('admin.edit.title_prefix') ?> <?= htmlspecialchars($order['order_token'], ENT_QUOTES, 'UTF-8') ?></title><link rel="stylesheet" href="/admin/vendor/leaflet/leaflet.css">
 <link rel="stylesheet" href="/admin/style.css">
 <meta name="csrf-token" content="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
-<meta name="dd-ttl" content="<?= (int)order_ttl_hours() ?>">
 </head>
 <body>
 <div class="shell">
@@ -230,7 +230,7 @@ $init_zoom = $has_pin ? 17 : 12;
     <main class="main">
     <?php require __DIR__ . '/totp_banner.php'; ?>
         <div class="page-heading">
-            Edytuj — <span class="token"><?= htmlspecialchars($order['order_token'], ENT_QUOTES, 'UTF-8') ?></span>
+            <?= t('admin.edit.title_prefix') ?> — <span class="token"><?= htmlspecialchars($order['order_token'], ENT_QUOTES, 'UTF-8') ?></span>
         </div>
 
         <?php if ($error):   ?><div class="flash"><?= htmlspecialchars($error,   ENT_QUOTES, 'UTF-8') ?></div><?php endif; ?>
@@ -242,12 +242,12 @@ $init_zoom = $has_pin ? 17 : 12;
             <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
             <input type="hidden" name="id" value="<?= $id ?>">
             <button type="submit" class="btn btn-deliver">
-                ✓ Oznacz jako dostarczone
+                ✓ <?= t('admin.edit.mark_delivered_button') ?>
             </button>
         </form>
         <?php else: ?>
         <div class="flash ok flash-delivered">
-            DOSTARCZONE — <?= htmlspecialchars($order['delivered_at'] ?? '', ENT_QUOTES, 'UTF-8') ?>
+            <?= t('public.status.delivered') ?> — <?= htmlspecialchars($order['delivered_at'] ?? '', ENT_QUOTES, 'UTF-8') ?>
         </div>
         <?php endif; ?>
 
@@ -263,40 +263,40 @@ $init_zoom = $has_pin ? 17 : 12;
 
                 <!-- Status -->
                 <div class="form-group">
-                    <label for="status">Status</label>
+                    <label for="status"><?= t('admin.orders.th.status') ?></label>
                     <select id="status" name="status">
-                        <option value="preparing" <?= $order['status'] === 'preparing' ? 'selected' : '' ?>>W przygotowaniu</option>
-                        <option value="delivered" <?= $order['status'] === 'delivered' ? 'selected' : '' ?>>Dostarczone</option>
+                        <option value="preparing" <?= $order['status'] === 'preparing' ? 'selected' : '' ?>><?= t('admin.edit.status.preparing_option') ?></option>
+                        <option value="delivered" <?= $order['status'] === 'delivered' ? 'selected' : '' ?>><?= t('admin.edit.status.delivered_option') ?></option>
                     </select>
                 </div>
 
                 <!-- Current pickup password -->
                 <div class="form-group">
-                    <div class="field-label">Hasło odbioru</div>
+                    <div class="field-label"><?= t('public.index.pw_label') ?></div>
                     <?php if ($pw_display !== null && $pw_display !== false): ?>
                     <div class="location-display location-display-pw">
                         <?= htmlspecialchars($pw_display, ENT_QUOTES, 'UTF-8') ?>
                     </div>
                     <?php else: ?>
-                    <div class="location-note">Hasło zaszyfrowane bcrypt — ustaw nowe, aby wyświetlić je tutaj.</div>
+                    <div class="location-note"><?= t('admin.edit.pw_hashed_note') ?></div>
                     <?php endif; ?>
                 </div>
 
                 <!-- New password -->
                 <div class="form-group">
                     <label for="new_password">
-                        Nowe hasło odbioru
-                        <span class="hint">pozostaw puste, aby zachować bieżące</span>
+                        <?= t('admin.edit.new_pw_label') ?>
+                        <span class="hint"><?= t('admin.edit.new_pw_hint') ?></span>
                     </label>
                     <input type="text" id="new_password" name="new_password"
-                           autocomplete="off" placeholder="Nowe hasło (min. 4 znaki)">
+                           autocomplete="off" placeholder="<?= htmlspecialchars(t('admin.edit.new_pw_placeholder'), ENT_QUOTES, 'UTF-8') ?>">
                 </div>
 
                 <!-- Location text -->
                 <div class="form-group">
                     <label for="location">
-                        Opis lokalizacji
-                        <span class="hint">szyfrowane AES-256</span>
+                        <?= t('admin.new_order.location_label') ?>
+                        <span class="hint"><?= t('admin.edit.location_hint') ?></span>
                     </label>
                     <textarea id="location" name="location" rows="2"><?= htmlspecialchars($loc['text'], ENT_QUOTES, 'UTF-8') ?></textarea>
                 </div>
@@ -304,45 +304,45 @@ $init_zoom = $has_pin ? 17 : 12;
                 <!-- Map picker -->
                 <div class="form-group map-section">
                     <div class="field-label">
-                        Pinezka na mapie
-                        <span class="hint">kliknij, aby przenieść — puste = zachowaj bieżącą</span>
+                        <?= t('admin.new_order.pin_label') ?>
+                        <span class="hint"><?= t('admin.edit.pin_hint') ?></span>
                     </div>
                     <div class="map-search-row">
                         <input type="text" id="addr-search"
-                               placeholder="Szukaj adresu lub miejsca..." autocomplete="off">
-                        <button type="button" class="btn btn-sm" id="addr-btn">Szukaj</button>
+                               placeholder="<?= htmlspecialchars(t('admin.new_order.addr_search_placeholder'), ENT_QUOTES, 'UTF-8') ?>" autocomplete="off">
+                        <button type="button" class="btn btn-sm" id="addr-btn"><?= t('admin.new_order.search_button') ?></button>
                     </div>
                     <div id="map-picker"></div>
                     <div class="map-coords" id="coords-display">
                         <?= $has_pin
-                            ? 'Bieżąca pinezka: ' . htmlspecialchars(number_format((float)$loc['lat'], 6), ENT_QUOTES, 'UTF-8') . ', ' . htmlspecialchars(number_format((float)$loc['lng'], 6), ENT_QUOTES, 'UTF-8')
-                            : 'Brak pinezki — kliknij mapę, aby ją ustawić.' ?>
+                            ? t('admin.edit.current_pin', ['lat' => number_format((float)$loc['lat'], 6), 'lng' => number_format((float)$loc['lng'], 6)])
+                            : t('admin.new_order.no_pin') ?>
                     </div>
                 </div>
 
                 <!-- Instructions -->
                 <div class="form-group">
                     <label for="instructions">
-                        Instrukcje odbioru
-                        <span class="hint">szyfrowane AES-256</span>
+                        <?= t('admin.new_order.instructions_label') ?>
+                        <span class="hint"><?= t('admin.edit.location_hint') ?></span>
                     </label>
                     <textarea id="instructions" name="instructions" rows="4"><?= htmlspecialchars($loc['instructions'] ?? '', ENT_QUOTES, 'UTF-8') ?></textarea>
                 </div>
 
                 <!-- Notes -->
                 <div class="form-group">
-                    <label for="notes">Notatki <span class="hint">widoczne dla klienta</span></label>
+                    <label for="notes"><?= t('public.index.reveal.notes') ?> <span class="hint"><?= t('admin.new_order.notes_hint') ?></span></label>
                     <textarea id="notes" name="notes" rows="2"
-                              placeholder="Widoczne dla klienta po odblokowaniu"><?= htmlspecialchars($order['notes'] ?? '', ENT_QUOTES, 'UTF-8') ?></textarea>
+                              placeholder="<?= htmlspecialchars(t('admin.edit.notes_placeholder'), ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($order['notes'] ?? '', ENT_QUOTES, 'UTF-8') ?></textarea>
                 </div>
 
                 <!-- Existing photos -->
                 <?php if (!empty($photos)): ?>
                 <div class="form-group">
                     <div class="field-label">
-                        Zdjęcia (<?= count($photos) ?>)
+                        <?= t('admin.edit.photos_count_label', ['n' => count($photos)]) ?>
                         <?php if (count($photos) > 3): ?>
-                        <span class="hint">kliknij, aby zobaczyć wszystkie</span>
+                        <span class="hint"><?= t('admin.edit.photos_click_hint') ?></span>
                         <?php endif; ?>
                     </div>
                     <div class="photo-grid">
@@ -366,8 +366,8 @@ $init_zoom = $has_pin ? 17 : 12;
                 <!-- Add photos -->
                 <div class="form-group">
                     <label for="photos">
-                        Dodaj zdjęcia
-                        <span class="hint">JPEG / PNG / WebP / GIF · maks. <?= number_format((float)get_setting('max_photo_mb', '2'), 1) ?> MB</span>
+                        <?= t('admin.edit.add_photos_label') ?>
+                        <span class="hint">JPEG / PNG / WebP / GIF · <?= t('admin.new_order.photos_hint', ['mb' => number_format((float)get_setting('max_photo_mb', '2'), 1)]) ?></span>
                     </label>
                     <input type="file" id="photos" name="photos[]" multiple
                            accept="image/jpeg,image/png,image/webp,image/gif">
@@ -375,18 +375,18 @@ $init_zoom = $has_pin ? 17 : 12;
 
                 <!-- Metadata -->
                 <div class="form-group">
-                    <div class="field-label">Metadane</div>
+                    <div class="field-label"><?= t('admin.edit.metadata_label') ?></div>
                     <div class="meta">
-                        Utworzono: <?= htmlspecialchars($order['created_at'], ENT_QUOTES, 'UTF-8') ?><br>
-                        Dostarczone: <?= $order['delivered_at'] ? htmlspecialchars($order['delivered_at'], ENT_QUOTES, 'UTF-8') : '—' ?><br>
+                        <?= t('admin.edit.created_label') ?> <?= htmlspecialchars($order['created_at'], ENT_QUOTES, 'UTF-8') ?><br>
+                        <?= t('admin.edit.delivered_label') ?> <?= $order['delivered_at'] ? htmlspecialchars($order['delivered_at'], ENT_QUOTES, 'UTF-8') : '—' ?><br>
                         <?php if ($order['status'] === 'preparing'): ?>
-                        Wygasa: po dostarczeniu
+                        <?= t('admin.edit.expires_after_delivery') ?>
                         <?php else:
                             $exp_ts  = !empty($order['expires_at']) ? (int)strtotime($order['expires_at']) : 0;
                             $exp_rem = $exp_ts > 0 ? $exp_ts - time() : 0;
                             $exp_cls = $exp_rem <= 0 ? 'urgent' : ($exp_rem < 3600 ? 'urgent' : ($exp_rem < 21600 ? 'warning' : ''));
                         ?>
-                        Wygasa: <?= $exp_ts > 0 ? htmlspecialchars($order['expires_at'], ENT_QUOTES, 'UTF-8') : '—' ?>
+                        <?= t('admin.edit.expires_label') ?> <?= $exp_ts > 0 ? htmlspecialchars($order['expires_at'], ENT_QUOTES, 'UTF-8') : '—' ?>
                         <?php if ($exp_ts > 0): ?>
                         (<span class="expiry-timer <?= $exp_cls ?>"
                                data-expires="<?= $exp_ts ?>"><?= htmlspecialchars(format_countdown($exp_rem), ENT_QUOTES, 'UTF-8') ?></span>)
@@ -397,7 +397,7 @@ $init_zoom = $has_pin ? 17 : 12;
                 <?php if ($order['status'] === 'delivered'): ?>
                 <!-- Extend expiry -->
                 <div class="form-group">
-                    <div class="field-label">Przedłuż termin</div>
+                    <div class="field-label"><?= t('admin.edit.extend_label') ?></div>
                     <div class="extend-row">
                     <?php foreach (extend_hours_options() as $h): ?>
                     <button type="button" class="btn btn-sm"
@@ -418,8 +418,8 @@ $init_zoom = $has_pin ? 17 : 12;
                 <?php endif; ?>
 
                 <div class="form-actions">
-                    <button type="submit" class="btn">Zapisz zmiany</button>
-                    <a class="btn-cancel" href="/admin/orders.php">Anuluj</a>
+                    <button type="submit" class="btn"><?= t('admin.edit.save_button') ?></button>
+                    <a class="btn-cancel" href="/admin/orders.php"><?= t('common.cancel') ?></a>
                 </div>
 
                 <div class="edit-extra-actions">
@@ -427,7 +427,7 @@ $init_zoom = $has_pin ? 17 : 12;
                             data-copy
                             data-token="<?= htmlspecialchars($order['order_token'], ENT_QUOTES, 'UTF-8') ?>"
                             data-code="<?= htmlspecialchars($pw_display ?: '', ENT_QUOTES, 'UTF-8') ?>">
-                        Kopiuj dane
+                        <?= t('admin.edit.copy_data_button') ?>
                     </button>
                 </div>
 
@@ -436,11 +436,11 @@ $init_zoom = $has_pin ? 17 : 12;
             <!-- ── Delete form — OUTSIDE the edit form ─────────────────────── -->
             <div class="edit-extra-actions">
                 <form class="inline-form" method="POST" action="/admin/orders.php"
-                      data-confirm="Usunąć zamówienie <?= htmlspecialchars($order['order_token'], ENT_QUOTES, 'UTF-8') ?>? Tej operacji nie można cofnąć.">
+                      data-confirm="<?= htmlspecialchars(t('admin.edit.delete_confirm', ['token' => $order['order_token']]), ENT_QUOTES, 'UTF-8') ?>">
                     <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
                     <input type="hidden" name="action" value="delete">
                     <input type="hidden" name="id" value="<?= $id ?>">
-                    <button class="action-btn action-btn--danger">Usuń zamówienie</button>
+                    <button class="action-btn action-btn--danger"><?= t('admin.edit.delete_button') ?></button>
                 </form>
             </div>
 
@@ -484,13 +484,13 @@ $init_zoom = $has_pin ? 17 : 12;
         .then(function (d) {
             saving = false;
             if (d.ok) {
-                showPopup('✓ Zapisano', false);
+                showPopup(<?= json_encode('✓ ' . t('admin.edit.js.saved')) ?>, false);
                 setTimeout(function () { location.reload(); }, 600);
             } else {
-                showPopup(d.msg || 'Błąd zapisu.', true);
+                showPopup(d.msg || <?= json_encode(t('admin.edit.js.save_error')) ?>, true);
             }
         })
-        .catch(function () { saving = false; showPopup('Błąd połączenia.', true); });
+        .catch(function () { saving = false; showPopup(<?= json_encode(t('admin.edit.js.connection_error')) ?>, true); });
     }
 
     function scheduleSave(ms) {
@@ -548,7 +548,7 @@ $init_zoom = $has_pin ? 17 : 12;
     function setPin(lat, lng) {
         latInput.value = lat.toFixed(7);
         lngInput.value = lng.toFixed(7);
-        coordsDisp.textContent = 'Pinezka: ' + lat.toFixed(6) + ', ' + lng.toFixed(6);
+        coordsDisp.textContent = <?= json_encode(t('admin.new_order.pin_prefix')) ?> + lat.toFixed(6) + ', ' + lng.toFixed(6);
         if (mapReady) scheduleSave(500);
         if (marker) {
             marker.setLatLng([lat, lng]);
@@ -578,12 +578,12 @@ $init_zoom = $has_pin ? 17 : 12;
                 map.setView([lat, lng], 17);
                 setPin(lat, lng);
             } else {
-                coordsDisp.textContent = 'Nie znaleziono lokalizacji.';
+                coordsDisp.textContent = <?= json_encode(t('admin.new_order.geocode_not_found')) ?>;
             }
         } catch (err) {
-            coordsDisp.textContent = 'Błąd wyszukiwania.';
+            coordsDisp.textContent = <?= json_encode(t('admin.new_order.geocode_error')) ?>;
         } finally {
-            this.textContent = 'Szukaj';
+            this.textContent = <?= json_encode(t('admin.new_order.search_button')) ?>;
             this.disabled = false;
         }
     });
@@ -599,20 +599,20 @@ $init_zoom = $has_pin ? 17 : 12;
         alb.id = 'admin-lb';
         alb.innerHTML =
             '<div class="alb-backdrop"></div>' +
-            '<button class="alb-close" aria-label="Zamknij">&times;</button>' +
-            '<button class="alb-prev" aria-label="Poprzednie">&#8249;</button>' +
+            '<button class="alb-close" aria-label="<?= htmlspecialchars(t('public.gallery.close'), ENT_QUOTES, 'UTF-8') ?>">&times;</button>' +
+            '<button class="alb-prev" aria-label="<?= htmlspecialchars(t('public.gallery.prev'), ENT_QUOTES, 'UTF-8') ?>">&#8249;</button>' +
             '<div class="alb-stage">' +
                 '<img class="alb-img" src="" alt="">' +
                 '<div class="alb-caption"></div>' +
                 '<div class="alb-counter"></div>' +
-                '<form class="alb-delete-form" method="POST" action="/admin/photo_delete.php" data-confirm="Usunąć to zdjęcie?">' +
+                '<form class="alb-delete-form" method="POST" action="/admin/photo_delete.php" data-confirm="<?= htmlspecialchars(t('admin.edit.gallery.delete_confirm'), ENT_QUOTES, 'UTF-8') ?>">' +
                     '<input type="hidden" name="csrf_token" value="">' +
                     '<input type="hidden" name="photo_id" value="">' +
                     '<input type="hidden" name="order_id" value="">' +
-                    '<button type="submit" class="alb-delete-btn">Usuń zdjęcie</button>' +
+                    '<button type="submit" class="alb-delete-btn"><?= htmlspecialchars(t('admin.edit.gallery.delete_button'), ENT_QUOTES, 'UTF-8') ?></button>' +
                 '</form>' +
             '</div>' +
-            '<button class="alb-next" aria-label="Następne">&#8250;</button>';
+            '<button class="alb-next" aria-label="<?= htmlspecialchars(t('public.gallery.next'), ENT_QUOTES, 'UTF-8') ?>">&#8250;</button>';
         document.body.appendChild(alb);
 
         var albImg     = alb.querySelector('.alb-img');
