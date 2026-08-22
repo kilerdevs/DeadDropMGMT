@@ -21,6 +21,8 @@
 
 Please read the [README](README.md) first, especially the **Disclaimer** and **Security Model** sections — this project was built for educational purposes, and contributions are accepted under that same understanding. If you're not sure whether an idea fits the project, open an issue to discuss it before writing code.
 
+The project is [MIT licensed](LICENSE). By submitting a pull request, you agree your contribution is provided under the same license.
+
 ---
 
 ## Reporting a Security Vulnerability

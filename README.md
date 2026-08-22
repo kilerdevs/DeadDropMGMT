@@ -8,6 +8,7 @@ Recipients look up an order by token, unlock an encrypted location with a passwo
 ![Database](https://img.shields.io/badge/DB-MySQL%20%2F%20MariaDB-4479A1?logo=mysql&logoColor=white)
 ![Dependencies](https://img.shields.io/badge/dependencies-zero%20(no%20Composer)-brightgreen)
 ![2FA](https://img.shields.io/badge/2FA-TOTP%20(RFC%206238)-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
 
 ---
 
@@ -32,6 +33,7 @@ The author provides this software **"as is," without warranty of any kind**, and
 - [Setup](#setup)
 - [Requirements](#requirements)
 - [Contributing](#contributing)
+- [License](#license)
 
 ---
 
@@ -270,3 +272,11 @@ No server setup needed — log in, open **2FA** in the sidebar, scan the QR code
 ## Contributing
 
 Bug fixes, security hardening, and documentation improvements are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for coding conventions, how to submit changes, and — importantly — how to report a security vulnerability privately rather than through a public issue.
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE). The vendored third-party assets (Leaflet, QRCode.js, IBM Plex Mono) keep their own licenses; see [Third-Party Code & External Services](#third-party-code--external-services) for those.
+
+This is separate from, and doesn't limit, the [Disclaimer](#disclaimer) above — the MIT license governs your rights to use, modify, and distribute the code, while the disclaimer addresses liability for how the software is used.
