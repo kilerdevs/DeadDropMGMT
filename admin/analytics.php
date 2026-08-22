@@ -164,6 +164,7 @@ $csrf = generate_csrf();
     <?php $_active = 'analytics'; require __DIR__ . '/sidebar.php'; ?>
 
     <main class="main">
+    <?php require __DIR__ . '/totp_banner.php'; ?>
         <div class="page-heading">Analityka</div>
 
         <?php if (!analytics_enabled()): ?>

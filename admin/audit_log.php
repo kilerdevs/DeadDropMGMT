@@ -45,6 +45,7 @@ $pages = max(1, (int)ceil($total / $per_page));
     <?php $_active = 'audit'; require __DIR__ . '/sidebar.php'; ?>
 
     <main class="main">
+    <?php require __DIR__ . '/totp_banner.php'; ?>
         <div class="page-heading">Log audytu — akcje zapisu</div>
 
         <div class="table-wrap">

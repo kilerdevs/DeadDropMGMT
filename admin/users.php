@@ -45,6 +45,7 @@ $_active = 'users';
     <?php require __DIR__ . '/sidebar.php'; ?>
 
     <main class="main">
+    <?php require __DIR__ . '/totp_banner.php'; ?>
         <div class="page-heading">Użytkownicy</div>
 
         <?php if ($flash): ?>

@@ -228,6 +228,7 @@ $init_zoom = $has_pin ? 17 : 12;
     <?php $_active = 'edit'; require __DIR__ . '/sidebar.php'; ?>
 
     <main class="main">
+    <?php require __DIR__ . '/totp_banner.php'; ?>
         <div class="page-heading">
             Edytuj — <span class="token"><?= htmlspecialchars($order['order_token'], ENT_QUOTES, 'UTF-8') ?></span>
         </div>

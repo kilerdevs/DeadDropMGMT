@@ -31,6 +31,7 @@ $csrf = generate_csrf();
     <?php $_active = 'new_order'; require __DIR__ . '/sidebar.php'; ?>
 
     <main class="main">
+    <?php require __DIR__ . '/totp_banner.php'; ?>
         <div class="page-heading">Nowe zamówienie</div>
 
         <?php if ($flash): ?>

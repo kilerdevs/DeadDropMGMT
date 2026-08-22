@@ -131,6 +131,7 @@ $_active = 'orders';
     <?php require __DIR__ . '/sidebar.php'; ?>
 
     <main class="main">
+    <?php require __DIR__ . '/totp_banner.php'; ?>
         <div class="page-heading">Zamówienia</div>
 
         <?php if ($flash): ?>

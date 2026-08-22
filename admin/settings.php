@@ -119,6 +119,7 @@ function s_label(array $s, string $key): string {
     <?php $_active = 'settings'; require __DIR__ . '/sidebar.php'; ?>
 
     <main class="main">
+    <?php require __DIR__ . '/totp_banner.php'; ?>
         <div class="page-heading">Ustawienia</div>
 
         <?php if ($error):   ?><div class="flash"><?= htmlspecialchars($error,   ENT_QUOTES, 'UTF-8') ?></div><?php endif; ?>

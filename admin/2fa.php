@@ -147,6 +147,23 @@ $csrf = generate_csrf();
                 Nie masz takiej aplikacji? Zobacz
                 <a href="https://github.com/kilerdevs/DeadDropMGMT/blob/master/TOTP-APPS.md" target="_blank" rel="noopener">polecane aplikacje open source</a>.
             </div>
+            <details class="why-totp">
+                <summary>Dlaczego to ważne?</summary>
+                <?php if (is_owner()): ?>
+                <p>
+                    Konto właściciela ma pełny dostęp do wszystkich zamówień, lokalizacji, użytkowników i ustawień
+                    systemu — to najcenniejszy cel w razie wycieku hasła. 2FA nie jest wymagane dla właściciela,
+                    ale jest zdecydowanie zalecane: nawet silne, unikalne hasło może wyciec, a 2FA to dodatkowa
+                    bariera, którą atakujący musiałby pokonać.
+                </p>
+                <?php else: ?>
+                <p>
+                    Kurierzy pracują w terenie — często na współdzielonych urządzeniach lub sieciach publicznych,
+                    gdzie ryzyko przechwycenia hasła jest wyższe. 2FA chroni konto nawet jeśli hasło wycieknie,
+                    dlatego jest obowiązkowe dla kont kurierskich.
+                </p>
+                <?php endif; ?>
+            </details>
             <div class="form-group">
                 <div class="qr-box"><div id="qr-code"></div></div>
             </div>

@@ -96,6 +96,7 @@ $csrf = generate_csrf();
     <?php endif; ?>
 
     <main class="main">
+    <?php require __DIR__ . '/totp_banner.php'; ?>
 
     <?php if ($done): ?>
     <!-- ── Done ─────────────────────────────────────────────────────────── -->
