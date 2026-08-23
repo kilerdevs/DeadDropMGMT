@@ -56,3 +56,53 @@ jobs:
 
       - name: Run tests
         run: php tests/run_all.php
+
+  # Docker isn't installed on the maintainer's machine — these jobs are the
+  # only place the images and compose stacks actually get exercised.
+  docker:
+    runs-on: ubuntu-latest
+    env:
+      DDMGMT_DB_HOST: db
+      DDMGMT_DB_PORT: '3306'
+      DDMGMT_DB_USER: deaddrop
+      DDMGMT_DB_PASS: deaddrop-db
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Apache image
+        run: docker build -t deaddrop:apache .
+
+      - name: Build PHP-FPM image
+        run: docker build -f Dockerfile.fpm -t deaddrop:fpm .
+
+      - name: Validate compose files
+        run: |
+          docker compose -f docker-compose.yml config -q
+          docker compose -f docker-compose.nginx.yml config -q
+          docker compose -f docker-compose.caddy.yml config -q
+
+      # Smoke test = boot the full stack, wait for the public page to render.
+      - name: Smoke test (Apache)
+        run: |
+          docker compose up -d --build --quiet-pull
+          timeout 90 bash -c 'until curl -fs http://127.0.0.1:8080/ >/dev/null; do sleep 2; done'
+          curl -fs http://127.0.0.1:8080/ | grep -qi "<title>"
+          docker compose down -v
+
+      - name: Smoke test (nginx + fpm)
+        run: |
+          docker compose -f docker-compose.nginx.yml up -d --build --quiet-pull
+          timeout 90 bash -c 'until curl -fs http://127.0.0.1:8080/ >/dev/null; do sleep 2; done'
+          curl -fs http://127.0.0.1:8080/ | grep -qi "<title>"
+          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/includes/db.php)" = 403 ]
+          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/config.php)" = 403 ]
+          docker compose -f docker-compose.nginx.yml down -v
+
+      - name: Smoke test (Caddy + fpm)
+        run: |
+          docker compose -f docker-compose.caddy.yml up -d --build --quiet-pull
+          timeout 90 bash -c 'until curl -fs http://127.0.0.1:8080/ >/dev/null; do sleep 2; done'
+          curl -fs http://127.0.0.1:8080/ | grep -qi "<title>"
+          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/includes/db.php)" = 403 ]
+          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/config.php)" = 403 ]
+          docker compose -f docker-compose.caddy.yml down -v

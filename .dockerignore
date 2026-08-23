@@ -1,0 +1,12 @@
+.git
+.github
+tests
+config.php
+logs/*
+uploads/*
+cache/*
+*.md
+prompt.txt
+docker-compose*.yml
+Dockerfile*
+.env

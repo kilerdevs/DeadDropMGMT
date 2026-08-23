@@ -1,0 +1,28 @@
+# DeadDropMGMT — PHP-FPM variant shared by the nginx and Caddy stacks.
+# Same extensions and layout as the Apache image; only the front server differs.
+# The whole docroot stays in the image so a named volume can be populated from
+# it once and shared read-only with nginx/Caddy for static files.
+
+FROM php:8.3-fpm
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        libfreetype6-dev \
+        libjpeg62-turbo-dev \
+        libpng-dev \
+ && docker-php-ext-configure gd --with-freetype --with-jpeg \
+ && docker-php-ext-install -j"$(nproc)" gd pdo_mysql \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY . /usr/src/deaddrop
+
+RUN chmod +x /usr/local/bin/entrypoint.sh \
+ # pristine config template outside the docroot for first-boot rendering
+ && cp /usr/src/deaddrop/config.php.example /usr/local/share/config.php.template \
+ && mkdir -p /var/www/html/logs /var/www/html/uploads /var/www/html/cache/osm_tiles /config \
+ && chown -R www-data:www-data /var/www/html/logs /var/www/html/uploads /var/www/html/cache /config
+
+WORKDIR /var/www/html
+ENTRYPOINT ["entrypoint.sh"]
+CMD ["php-fpm"]

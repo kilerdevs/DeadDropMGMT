@@ -1,0 +1,70 @@
+# Caddy stack: Caddy (static + FastCGI front) + PHP-FPM image + MariaDB.
+#   docker compose -f docker-compose.caddy.yml up -d --build
+#
+# Same shared-docroot trick as the nginx stack. For automatic HTTPS replace
+# ":80" in docker/Caddyfile with your hostname and open 443 instead.
+
+name: deaddrop-caddy
+
+services:
+  db:
+    image: mariadb:11
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASS:-deaddrop-root}
+      MARIADB_DATABASE: deaddrops
+      MARIADB_USER: deaddrop
+      MARIADB_PASSWORD: ${DB_PASS:-deaddrop-db}
+    volumes:
+      - db-data:/var/lib/mysql
+      - ./setup.sql:/docker-entrypoint-initdb.d/setup.sql:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  fpm:
+    build:
+      context: .
+      dockerfile: Dockerfile.fpm
+    restart: unless-stopped
+    environment:
+      DDMGMT_DB_HOST: db
+      DDMGMT_DB_PORT: "3306"
+      DDMGMT_DB_NAME: deaddrops
+      DDMGMT_DB_USER: deaddrop
+      DDMGMT_DB_PASS: ${DB_PASS:-deaddrop-db}
+    volumes:
+      - app-src:/var/www/html        # populated from the image on first use…
+      - app-uploads:/var/www/html/uploads
+      - app-logs:/var/www/html/logs
+      - app-cache:/var/www/html/cache
+      - app-config:/config
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8080}:80"
+      # - "443:443"                  # enable when terminating TLS here
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config-caddy
+      - app-src:/var/www/html:ro     # …shared from fpm for static files
+    depends_on:
+      - fpm
+
+volumes:
+  db-data:
+  app-src:
+  app-uploads:
+  app-logs:
+  app-cache:
+  app-config:
+  caddy-data:
+  caddy-config:

@@ -1,0 +1,57 @@
+# Default stack: Apache all-in-one (mod_php) + MariaDB.
+#   docker compose up -d --build
+# nginx variant:  docker compose -f docker-compose.nginx.yml up -d --build
+# Caddy variant:  docker compose -f docker-compose.caddy.yml up -d --build
+#
+# Overrides live in .env (see .env.example): APP_PORT, DB_PASS, DDMGMT_AES_KEY_HEX.
+
+name: deaddrop
+
+services:
+  db:
+    image: mariadb:11
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASS:-deaddrop-root}
+      MARIADB_DATABASE: deaddrops
+      MARIADB_USER: deaddrop
+      MARIADB_PASSWORD: ${DB_PASS:-deaddrop-db}
+    volumes:
+      - db-data:/var/lib/mysql
+      # official image auto-executes this on first boot — full schema, idempotent
+      - ./setup.sql:/docker-entrypoint-initdb.d/setup.sql:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8080}:80"
+    environment:
+      DDMGMT_DB_HOST: db
+      DDMGMT_DB_PORT: "3306"
+      DDMGMT_DB_NAME: deaddrops
+      DDMGMT_DB_USER: deaddrop
+      DDMGMT_DB_PASS: ${DB_PASS:-deaddrop-db}
+      # Leave unset to have a key generated on first boot and persisted on the
+      # config volume — but then back that volume up like you'd back config.php!
+      # DDMGMT_AES_KEY_HEX: ...
+    volumes:
+      - app-uploads:/var/www/html/uploads
+      - app-logs:/var/www/html/logs
+      - app-cache:/var/www/html/cache
+      - app-config:/config   # holds the generated AES key across recreations
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  db-data:
+  app-uploads:
+  app-logs:
+  app-cache:
+  app-config:

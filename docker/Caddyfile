@@ -1,0 +1,20 @@
+# Caddy front for the PHP-FPM variant. Same protections as the nginx config.
+# Caddy would happily do automatic HTTPS on a public hostname — for local
+# testing this listens on :80; point your domain at it and swap :80 for the
+# hostname to get TLS terminated here instead of an external proxy.
+
+:80 {
+	root * /var/www/html
+
+	@blocked path /includes/* /logs/* /cron/* /config.php /.htaccess /.ht*
+	respond @blocked 403
+
+	request_body {
+		max_size 32MB
+	}
+
+	php_fastcgi fpm:9000 {
+		read_timeout 60s
+	}
+	file_server
+}

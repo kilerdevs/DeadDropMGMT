@@ -178,6 +178,34 @@ What remains after mitigations — stated plainly:
 
 ---
 
+## Docker
+
+Three interchangeable stacks — same app, different web server. Each boots
+Apache/nginx/Caddy plus MariaDB 11, auto-loads `setup.sql` on first boot,
+renders `config.php` from the committed template and (if no
+`DDMGMT_AES_KEY_HEX` is provided) generates a key and persists it on the
+`app-config` volume.
+
+```bash
+# Apache (mod_php), the default:
+docker compose up -d --build
+
+# nginx + PHP-FPM:
+docker compose -f docker-compose.nginx.yml up -d --build
+
+# Caddy + PHP-FPM (swap :80 for your hostname in docker/Caddyfile for auto-TLS):
+docker compose -f docker-compose.caddy.yml up -d --build
+```
+
+The app is then on http://localhost:8080 (`APP_PORT` in `.env` to change).
+Overrides live in `.env` (see `.env.example`) — DB password, port, AES key.
+**Back up the `app-config` volume** if you let the key auto-generate: losing it
+means losing all encrypted location data. TLS is never terminated by the app —
+put certbot/LB/Caddy-with-hostname in front. CI builds both images and smoke
+tests all three stacks end-to-end on every push.
+
+---
+
 ## Tests
 
 Zero-dependency PHP test suite — no PHPUnit, each file is a standalone script:
