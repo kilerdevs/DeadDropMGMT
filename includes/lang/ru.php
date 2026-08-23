@@ -154,6 +154,7 @@ return [
     'admin.2fa.code_from_app_label' => 'Код из приложения',
     'admin.2fa.disable_button'      => 'Отключить 2FA',
     'admin.2fa.courier_mandatory_notice' => '2FA включена для аккаунта <strong>{username}</strong> и <strong>обязательна для курьерских аккаунтов</strong> — вы не можете отключить её самостоятельно. При утере доступа попросите владельца сбросить её в разделе Пользователи.',
+    'admin.js.lang_save_failed' => 'Не удалось сохранить язык. Попробуйте ещё раз.',
     'admin.totp_banner.strong' => 'Двухфакторная аутентификация отключена.',
     'admin.totp_banner.text'   => 'Ваш аккаунт не защищён двухфакторной аутентификацией.',
     'admin.totp_banner.cta'    => 'Включить сейчас',

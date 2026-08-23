@@ -154,6 +154,7 @@ return [
     'admin.2fa.code_from_app_label' => 'Код із застосунку',
     'admin.2fa.disable_button'      => 'Вимкнути 2FA',
     'admin.2fa.courier_mandatory_notice' => "2FA увімкнено для акаунта <strong>{username}</strong> і <strong>обов'язкова для кур'єрських акаунтів</strong> — ви не можете вимкнути її самостійно. У разі втрати доступу попросіть власника скинути її в розділі Користувачі.",
+    'admin.js.lang_save_failed' => 'Не вдалося зберегти мову. Спробуйте ще раз.',
     'admin.totp_banner.strong' => 'Двофакторну автентифікацію вимкнено.',
     'admin.totp_banner.text'   => 'Ваш акаунт не захищено двофакторною автентифікацією.',
     'admin.totp_banner.cta'    => 'Увімкнути зараз',

@@ -154,6 +154,7 @@ return [
     'admin.2fa.code_from_app_label' => "Code de l'application",
     'admin.2fa.disable_button'      => 'Désactiver 2FA',
     'admin.2fa.courier_mandatory_notice' => "2FA est activée pour le compte <strong>{username}</strong> et <strong>obligatoire pour les comptes coursier</strong> — elle ne peut pas être désactivée par vous-même. En cas de perte d'accès, demandez au propriétaire de la réinitialiser dans la section Utilisateurs.",
+    'admin.js.lang_save_failed' => 'Impossible d\'enregistrer la langue. Veuillez réessayer.',
     'admin.totp_banner.strong' => 'La 2FA est désactivée.',
     'admin.totp_banner.text'   => 'Votre compte n\'est pas protégé par l\'authentification à deux facteurs.',
     'admin.totp_banner.cta'    => 'Activer maintenant',

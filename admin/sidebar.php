@@ -54,12 +54,27 @@ window.I18N = <?= json_encode([
     'copy_no_password'    => t('admin.js.copy_no_password'),
     'copy_warning' => t('admin.js.copy_warning', ['ttl' => order_ttl_hours()]),
     'menu_aria' => t('admin.js.menu_aria'),
+    'lang_save_failed' => t('admin.js.lang_save_failed'),
 ]) ?>;
 document.getElementById('sidebar-lang-select').addEventListener('change', function () {
+    var sel = this;
     var fd = new FormData();
     fd.append('csrf_token', <?= json_encode($_lang_csrf) ?>);
-    fd.append('lang', this.value);
+    fd.append('lang', sel.value);
     fetch('/admin/set_lang.php', { method: 'POST', body: fd })
-        .then(function () { location.reload(); });
+        .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+        .then(function (res) {
+            if (res.ok && res.j.ok) {
+                location.reload();
+            } else {
+                // Revert the picker and say why instead of pretending it worked
+                sel.value = <?= json_encode(current_lang()) ?>;
+                alert(res.j && res.j.error ? res.j.error : window.I18N.lang_save_failed);
+            }
+        })
+        .catch(function () {
+            sel.value = <?= json_encode(current_lang()) ?>;
+            alert(window.I18N.lang_save_failed);
+        });
 });
 </script>

@@ -154,6 +154,7 @@ return [
     'admin.2fa.code_from_app_label' => 'Kod z aplikacji',
     'admin.2fa.disable_button'      => 'Wyłącz 2FA',
     'admin.2fa.courier_mandatory_notice' => '2FA jest włączone dla konta <strong>{username}</strong> i <strong>wymagane dla kont kurierskich</strong> — nie można go samodzielnie wyłączyć. W razie utraty dostępu poproś właściciela o reset w sekcji Użytkownicy.',
+    'admin.js.lang_save_failed' => 'Nie udało się zapisać języka. Spróbuj ponownie.',
     'admin.totp_banner.strong' => '2FA jest wyłączone.',
     'admin.totp_banner.text'   => 'Twoje konto nie jest chronione weryfikacją dwuetapową.',
     'admin.totp_banner.cta'    => 'Włącz teraz',

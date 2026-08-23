@@ -154,6 +154,7 @@ return [
     'admin.2fa.code_from_app_label' => 'Code from the app',
     'admin.2fa.disable_button'      => 'Disable 2FA',
     'admin.2fa.courier_mandatory_notice' => '2FA is enabled for the account <strong>{username}</strong> and <strong>required for courier accounts</strong> — it cannot be disabled by yourself. If you lose access, ask the owner to reset it in the Users section.',
+    'admin.js.lang_save_failed' => 'Could not save the language. Please try again.',
     'admin.totp_banner.strong' => '2FA is disabled.',
     'admin.totp_banner.text'   => 'Your account is not protected by two-factor authentication.',
     'admin.totp_banner.cta'    => 'Enable now',

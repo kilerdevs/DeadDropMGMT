@@ -154,6 +154,7 @@ return [
     'admin.2fa.code_from_app_label' => 'Código de la aplicación',
     'admin.2fa.disable_button'      => 'Desactivar 2FA',
     'admin.2fa.courier_mandatory_notice' => '2FA está activada para la cuenta <strong>{username}</strong> y <strong>es obligatoria para las cuentas de repartidor</strong> — no puede desactivarla usted mismo. Si pierde el acceso, pida al propietario que la restablezca en la sección Usuarios.',
+    'admin.js.lang_save_failed' => 'No se pudo guardar el idioma. Inténtalo de nuevo.',
     'admin.totp_banner.strong' => 'La 2FA está desactivada.',
     'admin.totp_banner.text'   => 'Tu cuenta no está protegida por la autenticación de dos factores.',
     'admin.totp_banner.cta'    => 'Activar ahora',
