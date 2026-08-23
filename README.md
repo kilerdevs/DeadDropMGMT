@@ -1,5 +1,7 @@
 # DeadDropMGMT
 
+[![CI](https://github.com/kilerdevs/DeadDropMGMT/actions/workflows/ci.yml/badge.svg)](https://github.com/kilerdevs/DeadDropMGMT/actions/workflows/ci.yml)
+
 **A secure, bare-metal order management system for coordinating deliveries to dead-drop locations.**
 
 Recipients look up an order by token, unlock an encrypted location with a password, and confirm receipt — all without ever exposing the underlying data. Built with zero external PHP dependencies; every security concern is addressed at the application layer, not bolted on with a framework.
