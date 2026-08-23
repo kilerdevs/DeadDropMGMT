@@ -111,16 +111,7 @@ function admin_finish_login(int $user_id, string $role, string $username, bool $
 function admin_login(string $username, string $password): string {
     require_once dirname(__DIR__) . '/includes/db.php';
     try {
-        $db = get_db();
-
-        // Auto-seed owner from config constants if the users table is empty
-        $count = (int)$db->query('SELECT COUNT(*) FROM users')->fetchColumn();
-        if ($count === 0 && defined('ADMIN_USERNAME') && defined('ADMIN_PASSWORD_HASH')) {
-            $db->prepare('INSERT INTO users (username, password_hash, role) VALUES (?, ?, "owner")')
-               ->execute([ADMIN_USERNAME, ADMIN_PASSWORD_HASH]);
-        }
-
-        $stmt = $db->prepare('SELECT * FROM users WHERE username = ? LIMIT 1');
+        $stmt = get_db()->prepare('SELECT * FROM users WHERE username = ? LIMIT 1');
         $stmt->execute([$username]);
         $user = $stmt->fetch();
     } catch (Exception $e) {
