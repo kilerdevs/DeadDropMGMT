@@ -88,8 +88,10 @@ _pf_post("http://127.0.0.1:$port/", ['order_token' => $tokD, 'pickup_password' =
 [, $body, $cookie] = _pf_post("http://127.0.0.1:$port/", ['order_token' => $tokD, 'pickup_password' => $pass], $cookie);
 T::ok('rate limited: cooldown card instead of reveal', str_contains($body, 'cooldown-heading'));
 
-// 5. Clear the counter, unlock for real → PRG redirect → full reveal
+// 5. Clear the IP counter AND switch to a fresh session (the old session's
+// failure bucket is full by design), then unlock for real → PRG redirect
 $db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
+$cookie = '';
 [$st, , $cookie] = _pf_post("http://127.0.0.1:$port/", ['order_token' => $tokD, 'pickup_password' => $pass], $cookie);
 T::eq('correct password redirects (PRG)', 302, $st);
 [, $body, $cookie] = _pf_get("http://127.0.0.1:$port/", $cookie);
@@ -135,6 +137,21 @@ T::ok('order deleted from DB',
 T::eq('correct password on preparing order redirects too', 302, $st);
 [, $body, $cookie] = _pf_get("http://127.0.0.1:$port/", $cookie);
 T::ok('preparing order hides location', !str_contains($body, 'PUBLICFLOWTEST'));
+
+// 11. Session cookie bucket: blocks on ITS OWN budget even when the IP row is
+// clean — and does not punish a different browser behind the same IP.
+set_setting('rate_limit_max', '3');
+$db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
+$cookieA = '';
+for ($i = 0; $i < 3; $i++) {
+    [, , $cookieA] = _pf_post("http://127.0.0.1:$port/", ['order_token' => $tokP, 'pickup_password' => 'nope'], $cookieA);
+}
+[, $body] = _pf_post("http://127.0.0.1:$port/", ['order_token' => $tokP, 'pickup_password' => $pass], $cookieA);
+T::ok('session bucket blocks despite clean IP budget', str_contains($body, 'cooldown-heading'));
+$db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
+[, $body] = _pf_post("http://127.0.0.1:$port/", ['order_token' => $tokP], '');
+T::ok('fresh session same IP is not blocked by another bucket',
+    str_contains($body, 'status-badge') && !str_contains($body, 'cooldown-heading'));
 
 // Cleanup
 $db->prepare('DELETE FROM orders WHERE order_token IN (?, ?)')->execute([$tokD, $tokP]);

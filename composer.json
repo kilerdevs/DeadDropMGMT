@@ -1,0 +1,6 @@
+{
+    "description": "Dev-only tooling. The application itself has zero dependencies (ADR-001); this exists solely so CI can produce code coverage via php-code-coverage.",
+    "require-dev": {
+        "phpunit/php-code-coverage": "^11"
+    }
+}

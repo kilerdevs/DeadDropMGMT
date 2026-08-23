@@ -73,11 +73,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && $loc_data === null && !$correct_prep
 
 // ── Handle POST ───────────────────────────────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $rl = rl_status('public');
+    // Enforce whichever budget trips first: the IP's or this session cookie's.
+    $rl  = rl_status('public');
+    $bkt = bucket_status('public', rl_max());
 
-    if ($rl['blocked']) {
+    if ($rl['blocked'] || $bkt['blocked']) {
         $blocked       = true;
-        $cooldown_secs = (int)$rl['remaining'];
+        $cooldown_secs = max($rl['remaining'], bucket_remaining('public'));
     } else {
         $raw_token = trim($_POST['order_token'] ?? '');
         $password  = (string)($_POST['pickup_password'] ?? '');
@@ -103,6 +105,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $show_pw_step  = true;
                 } else {
                     if (verify_password($password, $order['pickup_password_hash'])) {
+                        bucket_clear('public');
                         if ($order['status'] === 'preparing') {
                             log_event('unlock_success', (int)$order['id'], $raw_token);
                             $_SESSION['reveal'] = ['type' => 'preparing', 'ts' => time()];
@@ -135,6 +138,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         }
                     } else {
                         rl_increment('public');
+                        bucket_fail('public');
                         log_event('unlock_fail', (int)$order['id'], $raw_token);
                         $error = t('public.index.error.invalid_credentials');
                     }

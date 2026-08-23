@@ -288,3 +288,37 @@ function rl_reset(string $scope = 'public'): void {
         // best-effort
     }
 }
+
+// ── Session failure bucket ───────────────────────────────────────────────────
+// The IP limiter has two blind spots: many strangers behind one NAT/VPN exit
+// can lock each other out, while an attacker rotating cheap IPs spreads
+// attempts wide. This per-session counter (the session cookie IS the bucket)
+// is enforced alongside the IP budget — whoever trips EITHER is blocked.
+// Legit users behind shared NAT keep their own bucket; an attacker must now
+// rotate both IP and cookie per attempt. Server-side storage means clearing
+// cookies is also visible as a brand-new session with zero history.
+
+function bucket_fail(string $scope = 'public'): void {
+    $cur = $_SESSION['pw_fail'][$scope] ?? null;
+    if (!$cur || (time() - $cur['ts']) >= 900) {
+        $_SESSION['pw_fail'][$scope] = ['n' => 1, 'ts' => time()];
+        return;
+    }
+    $cur['n']++;
+    $_SESSION['pw_fail'][$scope] = $cur;
+}
+
+function bucket_status(string $scope = 'public', int $max = 10): array {
+    $cur = $_SESSION['pw_fail'][$scope] ?? null;
+    $n   = ($cur && (time() - $cur['ts']) < 900) ? (int)$cur['n'] : 0;
+    return ['count' => $n, 'blocked' => $n >= max(1, $max)];
+}
+
+function bucket_remaining(string $scope = 'public'): int {
+    $cur = $_SESSION['pw_fail'][$scope] ?? null;
+    return $cur ? max(0, 900 - (time() - $cur['ts'])) : 0;
+}
+
+function bucket_clear(string $scope = 'public'): void {
+    unset($_SESSION['pw_fail'][$scope]);
+}

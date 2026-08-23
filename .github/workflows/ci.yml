@@ -57,6 +57,62 @@ jobs:
       - name: Run tests
         run: php tests/run_all.php
 
+  # Line coverage over includes/ (the security-critical library code).
+  # Separate job: needs pcov + the dev-only Composer dependency (ADR-001 keeps
+  # runtime dependency-free; composer.json is tooling, never shipped).
+  coverage:
+    runs-on: ubuntu-latest
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      DDMGMT_DB_HOST: 127.0.0.1
+      DDMGMT_DB_PORT: '3306'
+      DDMGMT_DB_USER: root
+      DDMGMT_DB_PASS: root
+      DDMGMT_TEST_DB: deaddrops_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: pdo_mysql, openssl, gd, fileinfo
+          coverage: pcov
+
+      - name: Prepare config
+        run: cp config.php.example config.php
+
+      - name: Install dev tooling
+        run: composer install --no-interaction --no-progress
+
+      - name: Load schema
+        run: php tests/schema_loader.php
+
+      - name: Run tests with coverage
+        run: |
+          php tests/coverage_runner.php | tee coverage.txt
+          grep -E "^\s*(Lines|Lines):" coverage.txt | head -1 >> $GITHUB_STEP_SUMMARY || true
+          grep -oP "Lines:\s+\K[\d.]+" coverage.txt | head -1 | \
+            { read pct; echo "### Line coverage: ${pct}%" >> $GITHUB_STEP_SUMMARY; } || true
+
+      - name: Upload HTML report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html
+          path: coverage-html
+          retention-days: 14
+
   # Docker isn't installed on the maintainer's machine — these jobs are the
   # only place the images and compose stacks actually get exercised.
   docker:

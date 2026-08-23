@@ -6,3 +6,6 @@ fromftp/
 _obs_payload.json
 prompt.txt
 .claude/
+
+vendor/
+coverage-html/

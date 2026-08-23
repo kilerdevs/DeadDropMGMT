@@ -29,13 +29,16 @@ The author provides this software **"as is," without warranty of any kind**, and
 - [Disclaimer](#disclaimer)
 - [Features](#features)
 - [Tech Stack](#tech-stack)
-- [Security Model](#security-model)
+- [Threat Model](#threat-model)
+- [Docker](#docker)
+- [Tests](#tests)
 - [Third-Party Code & External Services](#third-party-code--external-services)
 - [Project Structure](#project-structure)
 - [Setup](#setup)
 - [Requirements](#requirements)
 - [Contributing](#contributing)
 - [License](#license)
+- [Elsewhere: Architecture Decision Records](docs/ADR.md)
 
 ---
 
@@ -142,7 +145,7 @@ Browser ──[TLS, external]── Web server / PHP
 | Password storage | bcrypt cost=12 via `password_hash()` / `password_verify()` | S5 | A4 |
 | Account takeover | TOTP 2FA (RFC 6238) — self-service per account, secret GCM-encrypted at rest | S5 | A1, A2 |
 | Location data at rest | AES-256-GCM (authenticated), random nonce per record; legacy CBC rows still decrypt and re-encrypt to GCM on next edit. Key lives only in `config.php` or env (`DDMGMT_AES_KEY_HEX`), never in DB | S1, S4 | A4 |
-| Pickup password guessing | IP-based rate limiter, configurable and togglable; ~40-bit generated passphrases (4 words + digit + symbol) | S2 | A1 |
+| Pickup password guessing | Dual budget enforced together: IP-based limiter (DB-backed, togglable) **and** a per-session failure bucket — whoever trips either is blocked; ~40-bit generated passphrases (4 words + digit + symbol) | S2 | A1 |
 | Token enumeration | 16-char alphanumeric random tokens (~75 bits) | S3 | A1 |
 | Session fixation / theft | `session_regenerate_id(true)` on login; `httponly`, `samesite=Strict`, `secure` when HTTPS | S5 | A1, A2 |
 | CSRF | 64-byte random token in session, `hash_equals()` on every POST | S5, S7 | A2 |
@@ -171,8 +174,12 @@ What remains after mitigations — stated plainly:
 - **Legacy CBC rows** exist until each record is next edited (GCM fallback
   decrypt keeps them readable). Run the migration script or edit orders once
   to convert them eagerly.
-- **Rate limiting is IP-based**, which weakens behind shared NAT/VPN exits —
-  and conversely can be abused for lockout-style nuisance. Tunable in Settings.
+- **Rate limiting is IP-based *plus* a per-session failure bucket**, which
+  fixes both classic blind spots: strangers behind one NAT/VPN exit no longer
+  lock each other out (separate session buckets), and an attacker must rotate
+  IP *and* cookie per attempt. Still tunable in Settings; still no defense
+  against truly industrial distributed guessing — the ~40-bit passphrase and
+  auto-expiry carry that.
 - **Availability is best-effort**: pseudo-cron cleanup runs on page hits unless
   a real cron calls `cron/cleanup.php`; nothing protects against DDoS.
 
@@ -222,8 +229,19 @@ fallback (`CryptoTest`), login/2FA/session-fixation/logout (`AuthTest`),
 CSRF tokens (`CsrfTest`), RFC 4648 base32 + RFC 6238 vectors (`TotpTest`),
 rate-limit budgets/scopes/window-expiry/kill-switch (`RateLimitTest`),
 owner-vs-courier authorization (`AuthorizationTest`) and expiry cleanup with
-photo-file shredding (`CleanupTest`). Runs automatically in GitHub Actions
-(`.github/workflows/ci.yml`, MariaDB 11 service container).
+photo-file shredding (`CleanupTest`), and an end-to-end public-flow suite
+(`PublicFlowTest`) driving a real HTTP server: token lookup, password
+unlock, PRG reveal, receipt confirmation, rate limiting and the per-session
+failure bucket. Runs automatically in GitHub Actions
+(`.github/workflows/ci.yml`, MariaDB 11 service container) across PHP
+8.0–8.4, with smoke tests of all three Docker stacks.
+
+**Coverage.** A separate CI job runs the suite under `pcov` and reports line
+coverage over `includes/` — the security-critical library code (crypto,
+auth, TOTP, rate limiting, logger, cleanup). The summary lands in the job
+summary; a browsable HTML report is uploaded as an artifact for 14 days.
+Locally: `composer install && php tests/coverage_runner.php` — Composer is
+dev-only tooling, the application itself never touches it.
 
 ---
 
@@ -368,6 +386,40 @@ variable (`DDMGMT_AES_KEY_HEX`); `config.php` reads the environment first and
 falls back to the literal value. DB credentials work the same way via
 `DDMGMT_DB_USER` / `DDMGMT_DB_PASS`.
 **Back this up.** Losing it means losing all encrypted location data.
+
+#### Rotating the AES key
+
+Rotate when the key may have been exposed (leaked backup, departed admin,
+incident), or on a schedule you would defend to the people whose locations you
+hold — yearly is a reasonable default. The bundled tool makes it mechanical:
+
+```bash
+# rehearse first: verifies every row decrypts with the old key, writes nothing
+php tools/rotate_aes_key.php --old=<OLD_64HEX> --new=<NEW_64HEX> --dry-run
+
+# apply: re-encrypts orders.locations, pickup passwords and TOTP secrets,
+# verifies each row read-back under the new key, single transaction —
+# any undecryptable row aborts and rolls everything back
+php tools/rotate_aes_key.php --old=<OLD_64HEX> --new=<NEW_64HEX>
+```
+
+Procedure:
+
+1. **Back up the database.**
+2. **Verify the log chain** (Settings → *Verify log integrity*) and **archive
+   `logs/app.log`** — the chain is HMAC-keyed with the AES key, so historical
+   entries will not verify under the new key. The next entry starts a fresh
+   genesis chain; keep the archived file together with the old key if you may
+   ever need to re-prove it.
+3. Pick a maintenance window — no writes while rotating.
+4. Run the dry-run, then the real rotation.
+5. Switch `DDMGMT_AES_KEY_HEX` to the new key everywhere it lives (env vars,
+   `config.php`, backups of both) and restart the app.
+6. Destroy every copy of the old key — otherwise nothing was gained.
+
+Skipping rotation does not make data safer than rotating badly — but rotating
+*only in the docs while never doing it* is how key compromise becomes total:
+one leaked 64-char string decrypts the entire history.
 
 ### 3. Admin password hash
 

@@ -27,6 +27,12 @@ $session_dir = sys_get_temp_dir() . '/ddmgmt_test_sessions';
 if (!is_dir($session_dir)) { mkdir($session_dir, 0700, true); }
 ini_set('session.save_path', $session_dir);
 
+final class TExitSignal extends RuntimeException {
+    public function __construct(public readonly int $exitCode) {
+        parent::__construct('suite finished');
+    }
+}
+
 final class T {
     public static int $pass = 0;
     public static int $fail = 0;
@@ -58,10 +64,16 @@ final class T {
     }
 
     // Prints the per-file summary and returns the process exit code.
+    // Under the coverage runner (T_INPROCESS defined) a real exit() would kill
+    // collection after the first suite, so it throws a signal instead.
     public static function done(): int {
         foreach (self::$messages as $m) { fwrite(STDERR, $m . PHP_EOL); }
         printf("%s: %d passed, %d failed\n", basename($GLOBALS['argv'][0]), self::$pass, self::$fail);
-        return self::$fail > 0 ? 1 : 0;
+        $code = self::$fail > 0 ? 1 : 0;
+        if (defined('T_INPROCESS')) {
+            throw new TExitSignal($code);
+        }
+        return $code;
     }
 }
 
