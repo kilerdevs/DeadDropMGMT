@@ -350,6 +350,8 @@ function s_label(array $s, string $key): string {
         'px_discovering'    => t('admin.proxies.js.discovering'),
         'px_discovered'     => t('admin.proxies.js.discovered'),
         'px_none_working'   => t('admin.proxies.js.none_working'),
+        'log_verify_ok'     => t('admin.settings.log_verify_ok'),
+        'log_verify_fail'   => t('admin.settings.log_verify_fail'),
         'save_error'        => t('admin.edit.js.save_error'),
         'connection_error'  => t('admin.edit.js.connection_error'),
     ]) ?>;

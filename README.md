@@ -50,7 +50,7 @@ The author provides this software **"as is," without warranty of any kind**, and
 ### Admin dashboard
 - Role-based access: **Owner** (full control) and **Courier** (own orders only)
 - Create orders with an interactive Leaflet map picker
-- Auto-generated memorable pickup passphrases (150-word list)
+- Auto-generated memorable pickup passphrases (4 words + digit + symbol, ~40 bits)
 - Extend / close / delete orders with CSRF-protected actions
 - Photo upload with automatic GD compression
 - Configurable TTL — orders auto-expire and are securely wiped
@@ -82,30 +82,97 @@ The author provides this software **"as is," without warranty of any kind**, and
 
 ---
 
-## Security Model
+## Threat Model
 
-| Threat | Mitigation |
-|---|---|
-| SQL injection | PDO prepared statements throughout — zero string interpolation in SQL |
-| Password storage | bcrypt cost=12 via `password_hash()` / `password_verify()` |
-| Account takeover | TOTP 2FA (RFC 6238) — self-service per account, encrypted secret at rest |
-| Location data at rest | AES-256-GCM (authenticated), random nonce per record, key lives only in `config.php` (never in DB) |
-| Session fixation | `session_regenerate_id(true)` on login |
-| CSRF | 64-byte random token in session, `hash_equals()` comparison on every POST |
-| Brute-force | IP-based rate limiter, configurable and togglable — pickup guessing, admin login, 2FA codes |
-| XSS | `htmlspecialchars(..., ENT_QUOTES, 'UTF-8')` on all user-derived output |
-| Clickjacking / sniffing | `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, strict CSP, HSTS |
-| Error leakage | `display_errors=0`, all exceptions caught and logged, generic user-facing messages |
-| Direct file access | `includes/`, `config.php`, `logs/`, `cron/` blocked via `.htaccess` |
-| Cookie theft | `httponly`, `samesite=Strict`, `secure` (auto-enabled when HTTPS detected) |
-| Unaccountable writes | Every admin create/edit/delete/setting-change logged with actor, IP, timestamp |
-| Log tampering | Structured JSONL log (`logs/app.log`) chained with HMAC-SHA256 — any edit or deletion of a historical entry is detectable via one-click verification in Settings |
-| Key compromise blast radius | Log integrity key derived from `AES_KEY_HEX` with domain separation — no second secret to rotate |
-| Owner/courier IP exposure to third parties | Map tile and address-search requests from the admin panel are proxied server-side (`admin/tile_proxy.php`, `admin/geocode_proxy.php`) — neither an owner's nor a courier's real IP or search queries ever reach OpenStreetMap, only this server's does. Optionally (Settings → Network) those outbound requests are routed through a pool of HTTP proxies the owner configures — manually or via auto-discovery of public anonymity-focused proxies — so even this server's IP stays hidden from OSM; routing is fail-closed (all proxies dead = map features stop, never a silent direct fallback) |
+### 1. Attacker capabilities
 
-**Not included (configure externally):** TLS and WAF.
+The model assumes adversaries ranging from opportunistic to well-resourced:
 
-This application does not terminate TLS itself — it relies on the web server in front of it (or a reverse proxy) to provide HTTPS, and it has no web-application-firewall equivalent: no built-in request filtering beyond the input validation described above. A real production deployment should sit behind TLS termination (certbot on a VPS, AutoSSL/shared-hosting certificates, or a load balancer) and ideally a WAF or edge protection layer (Cloudflare, ModSecurity, fail2ban-style IP filtering) to absorb automated exploitation attempts, bot traffic, and application-layer floods before they reach PHP.
+| # | Adversary | Capabilities |
+|---|---|---|
+| A1 | Random internet scanner | Unauthenticated HTTP requests against public endpoints; automated exploitation tooling |
+| A2 | Curious recipient / courier | Legitimate access to their own order data; attempts to read *other* orders or admin functions |
+| A3 | Network observer | Passive traffic sniffing between client and server (mitigated externally by TLS — see Residual Risk) |
+| A4 | Malicious DB reader | Read (not write) access to the MySQL database via SQL injection elsewhere on a shared host, stolen dump, or careless backups |
+| A5 | Log/backup tamperer | Filesystem write access to `logs/` and `uploads/` through a path traversal bug or compromised cron — wants to erase traces of an intrusion |
+| A6 | Host-level attacker | Full code execution on the server |
+
+### 2. Assets
+
+| # | Asset | Sensitivity |
+|---|---|---|
+| S1 | Drop locations (encrypted at rest) | Core secret — physical safety of the recipient depends on it |
+| S2 | Pickup passwords | Gate location reveal |
+| S3 | Order tokens (16-char lookup codes) | Capability URLs — possession grants lookup access |
+| S4 | TOTP secrets | 2FA enrollment for owner/courier accounts |
+| S5 | Admin sessions & credentials | Full panel control |
+| S6 | Audit trail & application log integrity | Evidence — must survive tampering attempts (A5) |
+| S7 | Availability | Delivered orders auto-expire; loss is by design but premature loss is not |
+
+### 3. Trust boundaries
+
+```
+Browser ──[TLS, external]── Web server / PHP
+                                │
+        ┌───────────────────────┼──────────────────────┐
+   Public zone             Admin zone               Server-local
+   index.php               admin/* (session+CSRF    config.php
+   receive.php             + role checks)           includes/
+        │                        │                  logs/, uploads/
+        └────────┬───────────────┘                        │
+              MySQL (no trust in DB contents ←───────────┘
+                                 
+   Outbound: PHP → OSM/Nominatim (+ optional proxy pool)
+   Embedded: Browser iframe → OSM tiles  ⚠ leaks visitor IP to OSM
+```
+
+- **Public ↔ PHP**: no session, only rate limiting and token entropy protect S3
+- **Admin ↔ PHP**: session cookie + CSRF token + TOTP; owner vs courier role split
+- **PHP ↔ MySQL**: prepared statements; the DB is *never* trusted to hold secrets in readable form (S1–S4 encrypted/hashed before insert)
+- **PHP ↔ filesystem**: `.htaccess` denies direct web access to `includes/`, `logs/`, `config.php`
+- **PHP ↔ OSM**: server-side proxies so admin IPs never leave the server; fail-closed proxy pool optional
+
+### 4. Mitigations (capability → asset mapping)
+
+| Threat | Mitigation | Protects | Against |
+|---|---|---|---|
+| SQL injection | PDO prepared statements throughout — zero string interpolation in SQL | S1–S5 | A1–A2 |
+| Password storage | bcrypt cost=12 via `password_hash()` / `password_verify()` | S5 | A4 |
+| Account takeover | TOTP 2FA (RFC 6238) — self-service per account, secret GCM-encrypted at rest | S5 | A1, A2 |
+| Location data at rest | AES-256-GCM (authenticated), random nonce per record; legacy CBC rows still decrypt and re-encrypt to GCM on next edit. Key lives only in `config.php` or env (`DDMGMT_AES_KEY_HEX`), never in DB | S1, S4 | A4 |
+| Pickup password guessing | IP-based rate limiter, configurable and togglable; ~40-bit generated passphrases (4 words + digit + symbol) | S2 | A1 |
+| Token enumeration | 16-char alphanumeric random tokens (~75 bits) | S3 | A1 |
+| Session fixation / theft | `session_regenerate_id(true)` on login; `httponly`, `samesite=Strict`, `secure` when HTTPS | S5 | A1, A2 |
+| CSRF | 64-byte random token in session, `hash_equals()` on every POST | S5, S7 | A2 |
+| XSS | `htmlspecialchars(..., ENT_QUOTES, 'UTF-8')` on all user-derived output; strict CSP with nonces | S5 | A1, A2 |
+| Clickjacking / sniffing | `X-Frame-Options: DENY`, `nosniff`, HSTS | S5 | A1 |
+| Error leakage | `display_errors=0`, exceptions caught and logged, generic user-facing messages | S1–S5 | A1 |
+| Direct file access | `.htaccess` blocks `includes/`, `config.php`, `logs/`, `cron/` | all local assets | A1 |
+| Log tampering | Structured JSONL log chained with HMAC-SHA256; one-click verification reports first broken entry. HMAC key derived from AES key with domain separation | S6 | A5 |
+| Unaccountable writes | Every admin create/edit/delete/setting-change logged with actor, IP, timestamp | S6 | A2, A5 |
+| Admin IP exposure to OSM | Tile/geocode requests proxied server-side; optional fail-closed anonymity proxy pool (manual or auto-discovered) | owner/courier privacy | A3 |
+
+### 5. Residual risk
+
+What remains after mitigations — stated plainly:
+
+- **A6 wins by definition.** An attacker with code execution reads the AES key,
+  the DB, and the log-HMAC key from the same host; the log chain detects
+  tampering but cannot prevent it. The design goal is: everything short of
+  full host compromise stays defensible.
+- **TLS and WAF are external.** The app terminates neither; without HTTPS in
+  front, A3 sees everything including pickup passwords. Deploy behind
+  TLS (certbot, hosting certs, load balancer) and ideally a WAF/edge layer.
+- **OSM embed iframe** sends the *recipient's* IP to OpenStreetMap when viewing
+  a delivered order's location — browser-side, outside app control. Zero
+  third-party contact requires a self-hosted tile server.
+- **Legacy CBC rows** exist until each record is next edited (GCM fallback
+  decrypt keeps them readable). Run the migration script or edit orders once
+  to convert them eagerly.
+- **Rate limiting is IP-based**, which weakens behind shared NAT/VPN exits —
+  and conversely can be abused for lockout-style nuisance. Tunable in Settings.
+- **Availability is best-effort**: pseudo-cron cleanup runs on page hits unless
+  a real cron calls `cron/cleanup.php`; nothing protects against DDoS.
 
 ---
 
@@ -244,7 +311,11 @@ mysql -u root -p < setup.sql
 php -r "echo bin2hex(random_bytes(32)) . PHP_EOL;"
 ```
 
-Paste the 64-char hex output into `config.php` as `AES_KEY_HEX`.
+Paste the 64-char hex output into `config.php` as `AES_KEY_HEX` — or better,
+keep it out of the working tree entirely by exporting it as an environment
+variable (`DDMGMT_AES_KEY_HEX`); `config.php` reads the environment first and
+falls back to the literal value. DB credentials work the same way via
+`DDMGMT_DB_USER` / `DDMGMT_DB_PASS`.
 **Back this up.** Losing it means losing all encrypted location data.
 
 ### 3. Admin password hash

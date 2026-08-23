@@ -91,7 +91,10 @@ function verify_password(string $password, string $hash): bool {
 }
 
 // ── Passphrase generator ──────────────────────────────────────────────────────
-// Produces e.g. "Storm·Raven·47!" — pronounceable, memorable, strong enough.
+// Produces e.g. "Storm·Raven·Vault·47!" — pronounceable, memorable, strong enough.
+// 4 words from a 193-word list ≈ 34 bits, plus ~3.3 bits each from the number
+// and the symbol — roughly 40 bits of entropy, which the IP rate limiter on
+// pickup attempts stretches far beyond offline-attack relevance.
 
 function generate_passphrase(): string {
     static $words = [
@@ -123,9 +126,10 @@ function generate_passphrase(): string {
     $w1  = $words[random_int(0, $n)];
     $w2  = $words[random_int(0, $n)];
     $w3  = $words[random_int(0, $n)];
+    $w4  = $words[random_int(0, $n)];
     $num = random_int(10, 99);
     $sym = ['!', '@', '#', '$', '%', '&', '*', '+', '=', '?'][random_int(0, 9)];
-    return ucfirst($w1) . ucfirst($w2) . ucfirst($w3) . $num . $sym;
+    return ucfirst($w1) . ucfirst($w2) . ucfirst($w3) . ucfirst($w4) . $num . $sym;
 }
 
 // ── Photo upload helper ───────────────────────────────────────────────────────
