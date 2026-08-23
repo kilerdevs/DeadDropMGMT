@@ -101,11 +101,13 @@ function admin_finish_login(int $user_id, string $role, string $username, bool $
     $_SESSION['totp_enabled'] = $totp_enabled;
     $_SESSION['user_lang']    = $lang;
     $_SESSION['login_time']   = time();
-    unset($_SESSION['csrf_token'], $_SESSION['pending_2fa_user_id'], $_SESSION['pending_2fa_time']);
+    unset($_SESSION['csrf_token'], $_SESSION['pending_2fa_user_id'], $_SESSION['pending_2fa_time'],
+          $_SESSION['pending_setup_user_id'], $_SESSION['pending_setup_time']);
 }
 
 // Returns 'ok' (fully logged in), 'need_2fa' (password ok, TOTP code required
-// next), or 'fail' (bad credentials).
+// next), 'need_setup' (account exists but has no password yet — first login;
+// the pending-setup session state is armed), or 'fail' (bad credentials).
 function admin_login(string $username, string $password): string {
     require_once dirname(__DIR__) . '/includes/db.php';
     try {
@@ -132,7 +134,26 @@ function admin_login(string $username, string $password): string {
         return 'fail';
     }
 
-    if (!$user || !password_verify($password, $user['password_hash'])) {
+    if (!$user) {
+        return 'fail';
+    }
+
+    $hash = (string)$user['password_hash'];
+
+    // Accounts awaiting first login carry no password: an empty-password
+    // submit routes to the choose-a-password step, anything else just fails.
+    if ($hash === '') {
+        if ($password !== '') {
+            return 'fail';
+        }
+        session_regenerate_id(true);
+        $_SESSION['pending_setup_user_id'] = (int)$user['id'];
+        $_SESSION['pending_setup_time']    = time();
+        unset($_SESSION['csrf_token']);
+        return 'need_setup';
+    }
+
+    if (!password_verify($password, $hash)) {
         return 'fail';
     }
 

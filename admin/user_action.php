@@ -42,7 +42,9 @@ if ($action === 'create_courier') {
         header('Location: /admin/users.php');
         exit;
     }
-    if (strlen($password) < 8) {
+    // An empty password creates a first-login account: the courier picks
+    // their own password on sign-in. A preset one still needs min. 8 chars.
+    if ($password !== '' && strlen($password) < 8) {
         $_SESSION['flash']    = t('admin.users.flash.password_min8');
         $_SESSION['flash_ok'] = false;
         header('Location: /admin/users.php');
@@ -50,11 +52,14 @@ if ($action === 'create_courier') {
     }
 
     try {
+        $hash = $password === '' ? '' : password_hash($password, PASSWORD_BCRYPT, ['cost' => 12]);
         get_db()->prepare(
             'INSERT INTO users (username, password_hash, role) VALUES (?, ?, "courier")'
-        )->execute([$username, password_hash($password, PASSWORD_BCRYPT, ['cost' => 12])]);
-        audit('courier_create', null, null, $username);
-        $_SESSION['flash']    = t('admin.users.flash.courier_created', ['username' => $username]);
+        )->execute([$username, $hash]);
+        audit('courier_create', null, null, $password === '' ? $username . ' (first-login setup)' : $username);
+        $_SESSION['flash']    = $password === ''
+            ? t('admin.users.flash.courier_created_no_pw', ['username' => $username])
+            : t('admin.users.flash.courier_created', ['username' => $username]);
         $_SESSION['flash_ok'] = true;
     } catch (Exception $e) {
         $msg = str_contains($e->getMessage(), 'Duplicate') ? t('admin.users.flash.username_taken') : t('admin.users.flash.create_failed');

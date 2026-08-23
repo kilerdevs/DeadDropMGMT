@@ -651,6 +651,14 @@ label .hint {
     letter-spacing: 0;
 }
 
+/* First-login notice on the login form (password hidden for unclaimed accounts) */
+.login-hint {
+    font-size:   11px;
+    color:       var(--text-muted);
+    line-height: 1.6;
+    margin:      -18px 0 30px;
+}
+
 input[type="text"],
 input[type="password"],
 input[type="number"],

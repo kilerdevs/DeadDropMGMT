@@ -38,6 +38,10 @@ switch (admin_login($username, $password)) {
         rl_reset('admin_login');
         header('Location: /admin/verify_2fa.php');
         exit;
+    case 'need_setup':
+        rl_reset('admin_login');
+        header('Location: /admin/setup_password.php');
+        exit;
 }
 
 usleep(random_int(50000, 150000));
