@@ -28,7 +28,9 @@ if (!is_dir($session_dir)) { mkdir($session_dir, 0700, true); }
 ini_set('session.save_path', $session_dir);
 
 final class TExitSignal extends RuntimeException {
-    public function __construct(public readonly int $exitCode) {
+    public int $exitCode;
+    public function __construct(int $exitCode) {
+        $this->exitCode = $exitCode; // no property promotion+readonly: must parse on PHP 8.0
         parent::__construct('suite finished');
     }
 }

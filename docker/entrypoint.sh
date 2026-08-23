@@ -1,3 +1,4 @@
+#!/bin/sh
 # First-boot configuration for the DeadDrop container.
 # Runs as root (both apache2-foreground and php-fpm expect that), renders
 # config.php from the committed template if absent, generates + persists an

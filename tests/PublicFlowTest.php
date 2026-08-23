@@ -34,10 +34,12 @@ register_shutdown_function(static function () use ($proc): void {
     proc_close($proc);
 });
 
-// Wait until it answers (or bail after ~6 s)
+// Wait until it answers (or bail after ~6 s). Early polls hit connection
+// refused — a warning our error handler turns into an exception, so swallow.
 $up = false;
 for ($i = 0; $i < 30; $i++) {
-    [$st] = _pf_get("http://127.0.0.1:$port/");
+    try { [$st] = _pf_get("http://127.0.0.1:$port/"); }
+    catch (Throwable) { $st = 0; usleep(200000); continue; }
     if ($st === 200) { $up = true; break; }
     usleep(200000);
 }
