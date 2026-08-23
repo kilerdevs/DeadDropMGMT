@@ -5,6 +5,7 @@ require_once dirname(__DIR__) . '/config.php';
 // ── RFC 4648 base32 (no padding) — the format TOTP secrets are shared in ──────
 
 function base32_encode(string $data): string {
+    if ($data === '') return ''; // str_split('') returned [''] before PHP 8.2
     $alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
     $bits = '';
     foreach (str_split($data) as $c) { $bits .= str_pad(decbin(ord($c)), 8, '0', STR_PAD_LEFT); }
