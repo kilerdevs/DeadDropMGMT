@@ -99,6 +99,8 @@ The author provides this software **"as is," without warranty of any kind**, and
 | Direct file access | `includes/`, `config.php`, `logs/`, `cron/` blocked via `.htaccess` |
 | Cookie theft | `httponly`, `samesite=Strict`, `secure` (auto-enabled when HTTPS detected) |
 | Unaccountable writes | Every admin create/edit/delete/setting-change logged with actor, IP, timestamp |
+| Log tampering | Structured JSONL log (`logs/app.log`) chained with HMAC-SHA256 — any edit or deletion of a historical entry is detectable via one-click verification in Settings |
+| Key compromise blast radius | Log integrity key derived from `AES_KEY_HEX` with domain separation — no second secret to rotate |
 | Owner/courier IP exposure to third parties | Map tile and address-search requests from the admin panel are proxied server-side (`admin/tile_proxy.php`, `admin/geocode_proxy.php`) — neither an owner's nor a courier's real IP or search queries ever reach OpenStreetMap, only this server's does. Optionally (Settings → Network) those outbound requests are routed through a pool of HTTP proxies the owner configures — manually or via auto-discovery of public anonymity-focused proxies — so even this server's IP stays hidden from OSM; routing is fail-closed (all proxies dead = map features stop, never a silent direct fallback) |
 
 **Not included (configure externally):** TLS and WAF.
@@ -185,6 +187,7 @@ DeadDropMGMT/
 │   ├── mark_delivered.php    Status → delivered, starts TTL clock
 │   ├── photo_delete.php      Photo removal
 │   ├── save_setting.php      Settings auto-save endpoint
+│   ├── log_verify.php         Log chain integrity verification (owner only)
 │   ├── download_log.php      Error log export
 │   ├── proxy_action.php      OSM proxy pool management (add / delete / discover)
 │   ├── tile_proxy.php        Server-side OSM tile fetch (optional proxy routing)
@@ -212,6 +215,7 @@ DeadDropMGMT/
 │   ├── i18n.php              Translation engine (8 languages, CLDR plurals)
 │   ├── proxy.php             OSM outbound proxy pool + free-proxy discovery
 │   ├── analytics.php         Event logger
+│   ├── logger.php            Structured JSONL log + tamper-evident hash chain
 │   ├── cleanup.php           Expired order deletion (pseudo-cron + real cron)
 │   └── lang/                 Translations: pl, en, de, ru, fr, es, uk, it
 │

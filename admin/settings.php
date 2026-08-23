@@ -303,7 +303,12 @@ function s_label(array $s, string $key): string {
             <div class="log-toolbar-actions">
                 <?php if ($log_total > 0): ?>
                 <a class="action-btn" href="/admin/download_log.php"><?= t('admin.settings.download_log_button') ?></a>
+                <?php if (is_file(APP_LOG_PATH)): ?>
+                <a class="action-btn" href="/admin/download_log.php?file=app"><?= t('admin.settings.download_jsonl_button') ?></a>
                 <?php endif; ?>
+                <?php endif; ?>
+                <button type="button" class="action-btn" id="verify-log-btn"><?= t('admin.settings.verify_log_button') ?></button>
+                <span id="verify-log-result" class="td-muted"></span>
                 <form method="POST" action="/admin/settings.php">
                     <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
                     <input type="hidden" name="action" value="clear_log">
@@ -538,6 +543,30 @@ function s_label(array $s, string $key): string {
             });
         });
     });
+    // ── Log integrity verification ─────────────────────────────────────────────
+    var vBtn    = document.getElementById('verify-log-btn');
+    var vResult = document.getElementById('verify-log-result');
+    if (vBtn && vResult) {
+        vBtn.addEventListener('click', function () {
+            vBtn.disabled = true;
+            vResult.textContent = '…';
+            var fd = new FormData();
+            fd.append('csrf_token', csrf);
+            fetch('/admin/log_verify.php', { method: 'POST', body: fd })
+                .then(function (r) { return r.json(); })
+                .then(function (j) {
+                    if (j.valid) {
+                        vResult.textContent = I.log_verify_ok.replace('{n}', j.checked);
+                    } else {
+                        vResult.textContent = (I.log_verify_fail
+                            .replace('{n}', j.broken_line || '?')
+                            .replace('{r}', j.reason || '')) + ' (' + j.checked + ')';
+                    }
+                })
+                .catch(function () { vResult.textContent = I.connection_error; })
+                .finally(function () { vBtn.disabled = false; });
+        });
+    }
 })();
 </script>
 <script src="/admin/admin.js"></script>

@@ -12,18 +12,27 @@ if (get_setting('show_error_log', '0') !== '1') {
     exit;
 }
 
-if (!is_file(ERROR_LOG_PATH)) {
+if (($_GET['file'] ?? '') === 'app') {
+    $path     = APP_LOG_PATH;
+    $prefix   = 'structured';
+    $is_app   = true;
+} else {
+    $path   = ERROR_LOG_PATH;
+    $prefix = 'error';
+}
+
+if (!is_file($path)) {
     http_response_code(404);
     exit;
 }
 
-$size     = filesize(ERROR_LOG_PATH);
-$filename = 'error-' . date('Y-m-d_His') . '.log';
+$size     = filesize($path);
+$filename = $prefix . '-' . date('Y-m-d_His') . '.log';
 
 header('Content-Type: text/plain; charset=utf-8');
 header('Content-Disposition: attachment; filename="' . $filename . '"');
 header('Content-Length: ' . $size);
 header('Cache-Control: no-store');
 
-readfile(ERROR_LOG_PATH);
+readfile($path);
 exit;
