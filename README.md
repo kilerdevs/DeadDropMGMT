@@ -176,6 +176,27 @@ What remains after mitigations — stated plainly:
 
 ---
 
+## Tests
+
+Zero-dependency PHP test suite — no PHPUnit, each file is a standalone script:
+
+```bash
+php tests/schema_loader.php   # loads setup.sql into an isolated deaddrops_test DB
+php tests/run_all.php         # runs every tests/*Test.php, exits non-zero on failure
+```
+
+The suite never touches your real database: `tests/bootstrap.php` forces
+`DDMGMT_DB_NAME=deaddrops_test` and points the app at TCP loopback unless you
+say otherwise. Covered: AES-256-GCM roundtrip + tamper rejection + legacy CBC
+fallback (`CryptoTest`), login/2FA/session-fixation/logout (`AuthTest`),
+CSRF tokens (`CsrfTest`), RFC 4648 base32 + RFC 6238 vectors (`TotpTest`),
+rate-limit budgets/scopes/window-expiry/kill-switch (`RateLimitTest`),
+owner-vs-courier authorization (`AuthorizationTest`) and expiry cleanup with
+photo-file shredding (`CleanupTest`). Runs automatically in GitHub Actions
+(`.github/workflows/ci.yml`, MariaDB 11 service container).
+
+---
+
 ## Third-Party Code & External Services
 
 The PHP backend has zero dependencies — no Composer, no framework. The browser, however, does load a few third-party pieces. Full disclosure:

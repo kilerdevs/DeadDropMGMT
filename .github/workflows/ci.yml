@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [master, dev]
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    services:
+      # setup.sql uses MariaDB syntax (ALTER TABLE ... ADD COLUMN IF NOT EXISTS)
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      DDMGMT_DB_HOST: 127.0.0.1
+      DDMGMT_DB_PORT: '3306'
+      DDMGMT_DB_USER: root
+      DDMGMT_DB_PASS: root
+      DDMGMT_TEST_DB: deaddrops_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: pdo_mysql, openssl, gd, fileinfo
+
+      # config.php is gitignored — CI builds it from the committed template,
+      # secrets arrive via the DDMGMT_* environment variables (secret store).
+      - name: Prepare config
+        run: cp config.php.example config.php
+
+      - name: Lint
+        run: git ls-files '*.php' | xargs -n1 php -l > /dev/null
+
+      - name: Load schema into test database
+        run: php tests/schema_loader.php
+
+      - name: Run tests
+        run: php tests/run_all.php

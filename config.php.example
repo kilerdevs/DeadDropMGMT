@@ -1,0 +1,89 @@
+<?php
+// Example configuration — copy to config.php and fill in real values.
+// config.php is gitignored, so this file is the committed template.
+//
+// Secrets are read from environment variables first (DDMGMT_*), the literal
+// fallbacks below keep zero-config installs working. For production prefer
+// environment variables so secrets never live inside the working tree.
+
+function _secret(string $env_name, string $fallback): string {
+    $v = getenv($env_name);
+    return ($v !== false && $v !== '') ? $v : $fallback;
+}
+
+// ── Database ─────────────────────────────────────────────────────────────────
+define('DB_HOST',    _secret('DDMGMT_DB_HOST', 'localhost'));
+define('DB_PORT',    _secret('DDMGMT_DB_PORT', '3306'));
+define('DB_NAME',    _secret('DDMGMT_DB_NAME', 'deaddrops'));
+define('DB_USER',    _secret('DDMGMT_DB_USER', 'root'));
+define('DB_PASS',    _secret('DDMGMT_DB_PASS', ''));
+define('DB_CHARSET', 'utf8mb4');
+
+// ── AES-256-GCM key (32 bytes stored as 64-char hex) ─────────────────────────
+// Generate:  php -r "echo bin2hex(random_bytes(32)) . PHP_EOL;"
+define('AES_KEY_HEX', _secret('DDMGMT_AES_KEY_HEX', 'REPLACE_WITH_64_HEX_CHARS_FROM_PHP_R_ABOVE__________'));
+
+// ── Site identity ────────────────────────────────────────────────────────────
+// Fallback used only if the DB settings table is empty or unreachable.
+// define('SITE_NAME', 'MGT');
+
+// ── Error logging ─────────────────────────────────────────────────────────────
+define('ERROR_LOG_PATH', __DIR__ . '/logs/error.log');
+define('APP_LOG_PATH',   __DIR__ . '/logs/app.log');
+
+// Structured JSONL application log with tamper-evident hash chain.
+require_once __DIR__ . '/includes/logger.php';
+
+// ── Session ───────────────────────────────────────────────────────────────────
+define('SESSION_NAME',     'ddmgmt');
+define('SESSION_LIFETIME', 3600); // seconds
+
+// ── Rate limiting ─────────────────────────────────────────────────────────────
+define('RATE_LIMIT_MAX',    10);
+define('RATE_LIMIT_WINDOW', 900); // 15 minutes
+
+// ── Timezone (UTC everywhere so PHP + MySQL agree regardless of server clock) ─
+date_default_timezone_set('UTC');
+
+// ── PHP error config ──────────────────────────────────────────────────────────
+ini_set('display_errors', '0');
+ini_set('log_errors',     '1');
+ini_set('error_log',       ERROR_LOG_PATH);
+
+// ── Client IP resolution (used by rate limiting, audit log) ────────────────
+function get_client_ip(): string {
+    $candidates = [
+        'HTTP_CF_CONNECTING_IP',
+        'HTTP_X_FORWARDED_FOR',
+        'HTTP_X_REAL_IP',
+        'REMOTE_ADDR',
+    ];
+    foreach ($candidates as $key) {
+        if (!empty($_SERVER[$key])) {
+            $ip = trim(explode(',', $_SERVER[$key])[0]);
+            if (filter_var($ip, FILTER_VALIDATE_IP)) {
+                return $ip;
+            }
+        }
+    }
+    return '0.0.0.0';
+}
+
+// Overwrite file contents with null bytes before unlinking (best-effort)
+function secure_unlink(string $path): void {
+    if (!is_file($path)) return;
+    try {
+        $size = @filesize($path);
+        if ($size > 0) {
+            $fh = @fopen($path, 'r+');
+            if ($fh !== false) {
+                @fwrite($fh, str_repeat("\0", $size));
+                @fflush($fh);
+                @fclose($fh);
+            }
+        }
+        @unlink($path);
+    } catch (Throwable $t) {
+        // Best-effort — silently ignore if file ops are restricted on this host
+    }
+}
