@@ -155,58 +155,71 @@ All fetched from GitHub raw by the server (never the browser) when the owner cli
 ## Project Structure
 
 ```
-/
-├── index.php               Public order lookup & location reveal
-├── receive.php             Delivery confirmation endpoint
-├── public.js, gallery.js   Public-facing JS (lookup flow, photo gallery)
-├── style.css               Public CSS
-├── error/                  Localized error pages (403/404/500/503)
-├── config.php              DB credentials, AES key, admin hash  <- never commit
-├── setup.sql               Full database schema - one file, fresh install or upgrade from any version
-├── .htaccess               Blocks config, includes/, logs/ from web
-├── fonts/                  Self-hosted IBM Plex Mono (replaces Google Fonts)
-|
-├── admin/
-|   ├── index.php           Login wall
-|   ├── login.php           Credential check -> 2FA if enabled
-|   ├── verify_2fa.php      TOTP code prompt (login step 2)
-|   ├── set_lang.php        Per-account UI language switcher (AJAX)
-|   ├── 2fa.php             Self-service 2FA enroll / disable (QR + manual)
-|   ├── orders.php          Order list with courier filtering
-|   ├── new_order.php       Order creation form (Leaflet map picker)
-|   ├── create.php          Order creation handler
-|   ├── edit.php            Edit order - status, location, password, photos
-|   ├── delete.php, order_close.php, order_remove.php   Order removal variants
-|   ├── extend.php, mark_delivered.php, photo_delete.php   Order sub-actions
-|   ├── save_setting.php, download_log.php   Settings auto-save + log export
-|   ├── proxy_action.php    OSM proxy pool management (add/delete/discover)
-|   ├── tile_proxy.php      Server-side OSM tile fetch (optional proxy routing)
-|   ├── geocode_proxy.php   Server-side Nominatim address search
-|   ├── users.php, user_action.php   Courier management (owner only)
-|   ├── audit_log.php       Write-action audit trail (owner only)
-|   ├── analytics.php       Event log viewer + CSV download
-|   ├── panic.php           Emergency mode (owner only)
-|   ├── settings.php        Configurable site parameters
-|   ├── sidebar.php, totp_banner.php   Shared layout partials
-|   ├── admin.js, style.css Panel JS + CSS
-|   └── vendor/             Leaflet + QRCode.js - vendored locally, no CDN
-|
-├── includes/               Blocked from web via .htaccess
-|   ├── db.php              PDO singleton
-|   ├── auth.php            Session, CSRF, rate limiting, security headers
-|   ├── crypto.php          AES-256-CBC encrypt/decrypt, bcrypt, passphrase generator
-|   ├── totp.php            TOTP (RFC 6238) generate/verify, base32, otpauth:// URI
-|   ├── audit.php           Write-action audit logger
-|   ├── settings.php        Settings cache (one DB query per page load)
-|   ├── i18n.php            Translation engine (8 languages, CLDR plurals)
-|   ├── proxy.php           OSM outbound proxy pool + free-proxy discovery
-|   ├── analytics.php       Event logger
-|   ├── lang/               Translation files: pl, en, de, ru, fr, es, uk, it
-|   └── cleanup.php         Expired order deletion (pseudo-cron + real cron)
-|
-├── logs/, uploads/, cache/  Runtime dirs (error log, photos, OSM tile cache)
+DeadDropMGMT/
+│
+├── index.php                 Public order lookup & location reveal
+├── receive.php               Delivery confirmation endpoint
+├── public.js, gallery.js     Public-facing JS (lookup flow, photo gallery)
+├── style.css                 Public CSS
+├── favicon.svg               Green dead-drop pin on dark tile
+├── error/                    Localized error pages (403 / 404 / 500 / 503)
+├── config.php                DB credentials, AES key, admin hash   ← never commit
+├── setup.sql                 Full DB schema — one file, fresh install or upgrade
+├── .htaccess                 Blocks config.php, includes/, logs/ from web
+├── fonts/                    Self-hosted IBM Plex Mono (no Google Fonts)
+│
+├── admin/                    Admin panel (owner + courier roles)
+│   ├── index.php             Login wall
+│   ├── login.php             Credential check → 2FA if enabled
+│   ├── verify_2fa.php        TOTP code prompt (login step 2)
+│   ├── set_lang.php          Per-account UI language switcher (AJAX)
+│   ├── 2fa.php               Self-service 2FA enroll / disable (QR + manual)
+│   ├── orders.php            Order list with courier filtering
+│   ├── new_order.php         Order creation form (Leaflet map picker)
+│   ├── create.php            Order creation handler
+│   ├── edit.php              Edit order — status, location, password, photos
+│   ├── delete.php            Order deletion (wipes sensitive columns first)
+│   ├── order_close.php       Order close (immediate removal)
+│   ├── order_remove.php      Order removal variant
+│   ├── extend.php            Deadline extension
+│   ├── mark_delivered.php    Status → delivered, starts TTL clock
+│   ├── photo_delete.php      Photo removal
+│   ├── save_setting.php      Settings auto-save endpoint
+│   ├── download_log.php      Error log export
+│   ├── proxy_action.php      OSM proxy pool management (add / delete / discover)
+│   ├── tile_proxy.php        Server-side OSM tile fetch (optional proxy routing)
+│   ├── geocode_proxy.php     Server-side Nominatim address search
+│   ├── osm_status.php        Badge feed: which proxy served the last OSM request
+│   ├── osm_monit.php         Proxy status badge (map pages)
+│   ├── users.php             Courier management (owner only)
+│   ├── user_action.php       Courier create / delete / password / 2FA reset
+│   ├── audit_log.php         Write-action audit trail (owner only)
+│   ├── analytics.php         Event log viewer + CSV download
+│   ├── panic.php             Emergency mode (owner only)
+│   ├── settings.php          Configurable site parameters
+│   ├── sidebar.php           Shared sidebar partial
+│   ├── totp_banner.php       Shared disabled-2FA warning partial
+│   ├── admin.js, style.css   Panel JS + CSS
+│   └── vendor/               Leaflet + QRCode.js — vendored locally, no CDN
+│
+├── includes/                 Blocked from web via .htaccess
+│   ├── db.php                PDO singleton
+│   ├── auth.php              Session, CSRF, rate limiting, security headers
+│   ├── crypto.php            AES-256-CBC encrypt/decrypt, bcrypt, passphrase generator
+│   ├── totp.php              TOTP (RFC 6238) — base32, otpauth:// URI
+│   ├── audit.php             Write-action audit logger
+│   ├── settings.php          Settings cache (one DB query per page load)
+│   ├── i18n.php              Translation engine (8 languages, CLDR plurals)
+│   ├── proxy.php             OSM outbound proxy pool + free-proxy discovery
+│   ├── analytics.php         Event logger
+│   ├── cleanup.php           Expired order deletion (pseudo-cron + real cron)
+│   └── lang/                 Translations: pl, en, de, ru, fr, es, uk, it
+│
+├── logs/                     Error log (blocked from web)
+├── uploads/                  Order photos (blocked from web)
+├── cache/                    OSM tile disk cache (blocked from web)
 └── cron/
-    └── cleanup.php         Server-side cron endpoint (call hourly)
+    └── cleanup.php           Server-side cron endpoint (call hourly)
 ```
 
 ---
