@@ -133,7 +133,9 @@ return [
     'admin.new_order.drag_hint' => 'Sie können den Pin nach dem Platzieren verschieben.',
     'admin.new_order.instructions_label'       => 'Abholhinweise',
     'admin.new_order.instructions_hint'        => 'optional — verschlüsselt',
-    'admin.new_order.instructions_placeholder' => 'Schritt 1: Von der Nordseite betreten&#10;Schritt 2: 20m zum Brunnen gehen&#10;Schritt 3: Unter der Bank nachsehen',
+    'admin.new_order.instructions_placeholder' => 'Schritt 1: Von der Nordseite betreten
+Schritt 2: 20m zum Brunnen gehen
+Schritt 3: Unter der Bank nachsehen',
     'admin.new_order.pw_hint'        => 'leer lassen — wird automatisch generiert',
     'admin.new_order.pw_placeholder' => 'Leer lassen für automatische Generierung',
     'admin.new_order.photos_hint' => 'max. {mb} MB',

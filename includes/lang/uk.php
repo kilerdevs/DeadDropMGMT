@@ -133,7 +133,9 @@ return [
     'admin.new_order.drag_hint' => 'Мітку можна перетягнути після розміщення.',
     'admin.new_order.instructions_label'       => 'Інструкції з отримання',
     'admin.new_order.instructions_hint'        => "необов'язково — шифрується",
-    'admin.new_order.instructions_placeholder' => 'Крок 1: Увійдіть з північної сторони&#10;Крок 2: Пройдіть 20 м до фонтану&#10;Крок 3: Перевірте під лавкою',
+    'admin.new_order.instructions_placeholder' => 'Крок 1: Увійдіть з північної сторони
+Крок 2: Пройдіть 20 м до фонтану
+Крок 3: Перевірте під лавкою',
     'admin.new_order.pw_hint'        => 'залиште порожнім — буде згенеровано автоматично',
     'admin.new_order.pw_placeholder' => 'Залиште порожнім для автогенерації',
     'admin.new_order.photos_hint' => 'макс. {mb} МБ',

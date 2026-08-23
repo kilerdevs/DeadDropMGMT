@@ -133,7 +133,9 @@ return [
     'admin.new_order.drag_hint' => 'You can drag the pin after placing it.',
     'admin.new_order.instructions_label'       => 'Pickup instructions',
     'admin.new_order.instructions_hint'        => 'optional — encrypted',
-    'admin.new_order.instructions_placeholder' => 'Step 1: Enter from the north side&#10;Step 2: Walk 20m to the fountain&#10;Step 3: Check under the bench',
+    'admin.new_order.instructions_placeholder' => 'Step 1: Enter from the north side
+Step 2: Walk 20m to the fountain
+Step 3: Check under the bench',
     'admin.new_order.pw_hint'        => 'leave blank — one will be generated automatically',
     'admin.new_order.pw_placeholder' => 'Leave blank to auto-generate',
     'admin.new_order.photos_hint' => 'max {mb} MB',

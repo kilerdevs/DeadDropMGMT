@@ -133,7 +133,9 @@ return [
     'admin.new_order.drag_hint' => "Vous pouvez déplacer le repère après l'avoir placé.",
     'admin.new_order.instructions_label'       => 'Instructions de retrait',
     'admin.new_order.instructions_hint'        => 'facultatif — chiffré',
-    'admin.new_order.instructions_placeholder' => 'Étape 1 : Entrez par le côté nord&#10;Étape 2 : Marchez 20m jusqu\'à la fontaine&#10;Étape 3 : Vérifiez sous le banc',
+    'admin.new_order.instructions_placeholder' => 'Étape 1 : Entrez par le côté nord
+Étape 2 : Marchez 20m jusqu\'à la fontaine
+Étape 3 : Vérifiez sous le banc',
     'admin.new_order.pw_hint'        => 'laissez vide — sera généré automatiquement',
     'admin.new_order.pw_placeholder' => 'Laissez vide pour la génération automatique',
     'admin.new_order.photos_hint' => 'max {mb} Mo',

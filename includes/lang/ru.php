@@ -133,7 +133,9 @@ return [
     'admin.new_order.drag_hint' => 'Метку можно перетащить после размещения.',
     'admin.new_order.instructions_label'       => 'Инструкции по получению',
     'admin.new_order.instructions_hint'        => 'необязательно — шифруется',
-    'admin.new_order.instructions_placeholder' => 'Шаг 1: Войдите с северной стороны&#10;Шаг 2: Пройдите 20 м до фонтана&#10;Шаг 3: Проверьте под скамейкой',
+    'admin.new_order.instructions_placeholder' => 'Шаг 1: Войдите с северной стороны
+Шаг 2: Пройдите 20 м до фонтана
+Шаг 3: Проверьте под скамейкой',
     'admin.new_order.pw_hint'        => 'оставьте пустым — будет сгенерирован автоматически',
     'admin.new_order.pw_placeholder' => 'Оставьте пустым для автогенерации',
     'admin.new_order.photos_hint' => 'макс. {mb} МБ',

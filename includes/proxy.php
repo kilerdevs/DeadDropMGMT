@@ -121,10 +121,25 @@ function osm_fetch(string $url): string|false {
         return false; // enabled with an empty pool would mean going direct = leak
     }
 
-    shuffle($pool);
+    // Try the fastest known-good proxy first: working ones ordered by last
+    // measured latency, then untested, then previously-dead as last resort.
+    // Each attempt gets 3 seconds before moving on to the next candidate.
+    usort($pool, function ($a, $b) {
+        $rank = function ($p) {
+            return match ($p['last_status'] ?? '') {
+                'ok'   => 0,
+                'new'  => 1,
+                default => 2,
+            };
+        };
+        $ra = $rank($a);
+        if ($ra !== ($rb = $rank($b))) return $ra <=> $rb;
+        return ((int)($a['latency_ms'] ?? PHP_INT_MAX)) <=> ((int)($b['latency_ms'] ?? PHP_INT_MAX));
+    });
+
     foreach ($pool as $px) {
         $t0     = microtime(true);
-        $result = osm_fetch_via($url, $px['url']);
+        $result = osm_fetch_via($url, $px['url'], 3);
         $ms     = (int)round((microtime(true) - $t0) * 1000);
         osm_proxy_mark((int)$px['id'], $result !== false, $ms);
         if ($result !== false) {

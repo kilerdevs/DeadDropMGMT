@@ -40,7 +40,7 @@ $csrf = generate_csrf();
         <div class="flash <?= $flash_ok ? 'ok' : '' ?>"><?= htmlspecialchars($flash, ENT_QUOTES, 'UTF-8') ?></div>
         <?php endif; ?>
 
-        <div class="form-panel">
+        <div class="form-panel centered-panel">
             <form method="POST" action="/admin/create.php"
                   enctype="multipart/form-data" autocomplete="off">
                 <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">

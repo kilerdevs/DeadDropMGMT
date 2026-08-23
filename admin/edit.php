@@ -252,7 +252,7 @@ $init_zoom = $has_pin ? 17 : 12;
         </div>
         <?php endif; ?>
 
-        <div class="form-panel">
+        <div class="form-panel centered-panel">
 
             <!-- ── Main edit form ──────────────────────────────────────────── -->
             <form method="POST" action="/admin/edit.php?id=<?= $id ?>"

@@ -133,7 +133,9 @@ return [
     'admin.new_order.drag_hint' => 'Możesz przeciągnąć pinezkę po jej umieszczeniu.',
     'admin.new_order.instructions_label'       => 'Instrukcje odbioru',
     'admin.new_order.instructions_hint'        => 'opcjonalne — szyfrowane',
-    'admin.new_order.instructions_placeholder' => 'Krok 1: Wejdź od strony północnej&#10;Krok 2: Idź 20m do fontanny&#10;Krok 3: Sprawdź pod ławką',
+    'admin.new_order.instructions_placeholder' => 'Krok 1: Wejdź od strony północnej
+Krok 2: Idź 20m do fontanny
+Krok 3: Sprawdź pod ławką',
     'admin.new_order.pw_hint'        => 'zostaw puste — zostanie wygenerowane automatycznie',
     'admin.new_order.pw_placeholder' => 'Pozostaw puste dla auto-generacji',
     'admin.new_order.photos_hint' => 'maks. {mb} MB',

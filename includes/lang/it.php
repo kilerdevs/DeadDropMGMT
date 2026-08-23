@@ -133,7 +133,9 @@ return [
     'admin.new_order.drag_hint' => 'Puoi trascinare il segnaposto dopo averlo posizionato.',
     'admin.new_order.instructions_label'       => 'Istruzioni di ritiro',
     'admin.new_order.instructions_hint'        => 'facoltativo — crittografato',
-    'admin.new_order.instructions_placeholder' => 'Passo 1: Entra dal lato nord&#10;Passo 2: Cammina per 20m fino alla fontana&#10;Passo 3: Controlla sotto la panchina',
+    'admin.new_order.instructions_placeholder' => 'Passo 1: Entra dal lato nord
+Passo 2: Cammina per 20m fino alla fontana
+Passo 3: Controlla sotto la panchina',
     'admin.new_order.pw_hint'        => 'lascia vuoto — verrà generata automaticamente',
     'admin.new_order.pw_placeholder' => 'Lascia vuoto per la generazione automatica',
     'admin.new_order.photos_hint' => 'max {mb} MB',

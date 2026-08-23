@@ -133,7 +133,9 @@ return [
     'admin.new_order.drag_hint' => 'Puede arrastrar el marcador después de colocarlo.',
     'admin.new_order.instructions_label'       => 'Instrucciones de recogida',
     'admin.new_order.instructions_hint'        => 'opcional — cifrado',
-    'admin.new_order.instructions_placeholder' => 'Paso 1: Entre por el lado norte&#10;Paso 2: Camine 20m hasta la fuente&#10;Paso 3: Revise debajo del banco',
+    'admin.new_order.instructions_placeholder' => 'Paso 1: Entre por el lado norte
+Paso 2: Camine 20m hasta la fuente
+Paso 3: Revise debajo del banco',
     'admin.new_order.pw_hint'        => 'déjelo en blanco — se generará automáticamente',
     'admin.new_order.pw_placeholder' => 'Déjelo en blanco para generar automáticamente',
     'admin.new_order.photos_hint' => 'máx. {mb} MB',
