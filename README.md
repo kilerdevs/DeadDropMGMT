@@ -101,7 +101,9 @@ The author provides this software **"as is," without warranty of any kind**, and
 | Unaccountable writes | Every admin create/edit/delete/setting-change logged with actor, IP, timestamp |
 | Owner/courier IP exposure to third parties | Map tile and address-search requests from the admin panel are proxied server-side (`admin/tile_proxy.php`, `admin/geocode_proxy.php`) — neither an owner's nor a courier's real IP or search queries ever reach OpenStreetMap, only this server's does |
 
-**Not included (configure externally):** TLS.
+**Not included (configure externally):** TLS and WAF.
+
+This application does not terminate TLS itself — it relies on the web server in front of it (or a reverse proxy) to provide HTTPS, and it has no web-application-firewall equivalent: no built-in request filtering beyond the input validation described above. A real production deployment should sit behind TLS termination (certbot on a VPS, AutoSSL/shared-hosting certificates, or a load balancer) and ideally a WAF or edge protection layer (Cloudflare, ModSecurity, fail2ban-style IP filtering) to absorb automated exploitation attempts, bot traffic, and application-layer floods before they reach PHP.
 
 ---
 
