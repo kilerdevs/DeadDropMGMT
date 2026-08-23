@@ -140,13 +140,41 @@ chains — documented in the rotation procedure: archive logs before rotating.
 not be reachable via back-button/replay, nor live in URLs.
 
 **Decision.** Unlock POST stores the reveal payload in the server-side
-session, redirects (303-style GET) to `/`, the next GET consumes and clears
-it. Fresh sessions see nothing.
+session **sealed with the AES key** (`seal_payload()`/`open_payload()`),
+redirects to `/`, the next GET consumes, decrypts and clears it. Fresh
+sessions see nothing.
 
-**Consequences.** Location never appears in history/referrer/logs (+).
-Reveal survives exactly one page load — refresh loses it by design
-(communicated in UI copy). Session file briefly holds plaintext location
-(+ accepted: same trust domain as the decryption code itself).
+**Consequences.** Location never appears in history/referrer/logs (+). The
+session store holds only ciphertext — someone dumping session files learns
+exactly as much as from the encrypted database rows (+). Reveal survives
+exactly one page load — refresh loses it by design (communicated in UI
+copy). Decryption runs a second time per reveal (negligible cost).
+
+## ADR-013 · Enrollment secrets for passwordless accounts
+
+**Context.** Passwordless account creation originally made *the username*
+the claim credential: whoever knew an unclaimed courier's username could
+complete setup first. For admin/courier accounts that was the largest
+product-security blemish in the design.
+
+**Decision.** Creating an account without a password issues a single-use,
+24-hour enrollment secret (256-bit random, stored SHA-256-hashed, shown to
+the owner exactly once). The login form swaps the password field for an
+enrollment-code field for unclaimed usernames; `admin_login()` requires a
+valid, unexpired secret before arming the set-password step; claiming burns
+the secret. Owner bootstrap follows the same rule — its secret doubles as a
+recovery code shown once on the setup screen.
+
+**Alternatives rejected:** preset passwords (owner knows every credential —
+the original problem); magic links over email (no e-mail infrastructure in
+scope, and it would leak claim capability to a mail provider).
+
+**Consequences.** Username knowledge alone is worthless without the secret
+(+). The secret transits through the owner's hands exactly once and is
+never again present in the system un-hashed (+). Lost secrets require the
+owner to reset the password directly (− accepted, existing flow covers it).
+Accounts created passwordless before this change cannot be claimed until
+the owner resets them (− documented).
 
 ## ADR-009 · All third-party map traffic proxied server-side
 

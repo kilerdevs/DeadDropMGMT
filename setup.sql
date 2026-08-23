@@ -23,6 +23,8 @@ CREATE TABLE IF NOT EXISTS users (
     totp_secret_enc  TEXT                   DEFAULT NULL,
     totp_secret_iv   CHAR(32)               DEFAULT NULL,
     totp_enabled     TINYINT(1)    NOT NULL DEFAULT 0,
+    enrollment_hash  CHAR(64)               DEFAULT NULL,
+    enrollment_expires DATETIME             DEFAULT NULL,
     lang             CHAR(2)       NOT NULL DEFAULT 'en',
     created_at       DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_username (username)
@@ -37,6 +39,11 @@ ALTER TABLE users
 -- Installs from before per-account language existed won't have this column.
 ALTER TABLE users
     ADD COLUMN IF NOT EXISTS lang CHAR(2) NOT NULL DEFAULT 'en';
+
+-- Installs from before enrollment secrets existed won't have these columns.
+ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS enrollment_hash    CHAR(64) DEFAULT NULL,
+    ADD COLUMN IF NOT EXISTS enrollment_expires DATETIME DEFAULT NULL;
 
 -- ── Orders ────────────────────────────────────────────────────────────────────
 

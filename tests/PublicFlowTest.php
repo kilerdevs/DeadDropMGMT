@@ -48,10 +48,11 @@ if (!$up) { exit(T::done()); }
 
 // Seed one delivered + one preparing order
 $db   = get_db();
-$tokD = 'PFTOKENDELIVER01';
-$tokP = 'PFTOKENPREPARIN2';
-$pass = 'RevealPass1!';
-foreach ([$tokD, $tokP] as $t) { $db->prepare('DELETE FROM orders WHERE order_token = ?')->execute([$t]); }
+$tokD  = 'PFTOKENDELIVER01';
+$tokD2 = 'PFTOKENDELIVER02';
+$tokP  = 'PFTOKENPREPARIN2';
+$pass  = 'RevealPass1!';
+foreach ([$tokD, $tokD2, $tokP] as $t) { $db->prepare('DELETE FROM orders WHERE order_token = ?')->execute([$t]); }
 $enc = encrypt_location_data([
     'text'         => 'PUBLICFLOWTEST skrzynka pod trzecią ławą',
     'lat'          => 52.2297,
@@ -64,6 +65,7 @@ $ins  = $db->prepare(
      VALUES (?, ?, ?, ?, ?, NOW() + INTERVAL 24 HOUR, ?)"
 );
 $ins->execute([$tokD, $hash, $enc['ciphertext'], $enc['iv'], 'delivered', 'notka dla odbiorcy']);
+$ins->execute([$tokD2, $hash, $enc['ciphertext'], $enc['iv'], 'delivered', '']);
 $ins->execute([$tokP, $hash, $enc['ciphertext'], $enc['iv'], 'preparing', '']);
 
 set_setting('rate_limit_max', '3');
@@ -155,8 +157,37 @@ $db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
 T::ok('fresh session same IP is not blocked by another bucket',
     str_contains($body, 'status-badge') && !str_contains($body, 'cooldown-heading'));
 
+// 12. receive.php burns budget on the confirmation probe too — a blocked
+// visitor cannot even enumerate step 1. Needs a real unlocked session first:
+// only the reveal page issues the CSRF token receive.php accepts.
+set_setting('rate_limit_max', '3');
+$db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
+$cookie = '';
+[$stU, , $cookie] = _pf_post("http://127.0.0.1:$port/", ['order_token' => $tokD2, 'pickup_password' => $pass], $cookie);
+[, $body, $cookie] = _pf_get("http://127.0.0.1:$port/", $cookie);
+preg_match('/name="csrf_token"\s*value="([0-9a-f]{64})"/', $body, $mR);
+$rcsrf = $mR[1] ?? '';
+T::eq('unlock for confirmation flow redirects (test setup)', 302, $stU);
+T::ok('reveal page offers confirmation form (test setup)', $rcsrf !== '');
+
+for ($i = 0; $i < 3; $i++) {
+    [, , $cookie] = _pf_post(
+        "http://127.0.0.1:$port/receive.php",
+        ['csrf_token' => $rcsrf, 'order_token' => $tokD2, 'step' => '1'],
+        $cookie
+    );
+}
+[, $body] = _pf_post(
+    "http://127.0.0.1:$port/receive.php",
+    ['csrf_token' => $rcsrf, 'order_token' => $tokD2, 'step' => '2'],
+    $cookie
+);
+T::ok('blocked budget refuses even the destructive confirmation', str_contains($body, 'class="alert"'));
+T::ok('order survives blocked deletion attempt',
+    (bool)$db->query("SELECT 1 FROM orders WHERE order_token = '$tokD2'")->fetch());
+
 // Cleanup
-$db->prepare('DELETE FROM orders WHERE order_token IN (?, ?)')->execute([$tokD, $tokP]);
+$db->prepare('DELETE FROM orders WHERE order_token IN (?, ?, ?)')->execute([$tokD, $tokD2, $tokP]);
 $db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
 
 exit(T::done());

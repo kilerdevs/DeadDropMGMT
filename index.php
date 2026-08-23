@@ -30,19 +30,22 @@ $cooldown_secs     = 0;
 $current_token     = '';
 
 // ── PRG: restore reveal state from session after redirect ─────────────────────
+// The payload is AES-sealed inside the session — the session store never
+// holds the decrypted location, only ciphertext like the database.
 if ($_SERVER['REQUEST_METHOD'] === 'GET' && !empty($_SESSION['reveal'])) {
     $rv = $_SESSION['reveal'];
     unset($_SESSION['reveal']);
-    if ((time() - ($rv['ts'] ?? 0)) < 300) {
-        if (($rv['type'] ?? '') === 'delivered') {
-            $loc_data         = $rv['loc'];
+    if ((time() - ($rv['ts'] ?? 0)) < 300 && ($rv['type'] ?? '') === 'delivered') {
+        $dec = open_payload($rv['sealed'] ?? []);
+        if ($dec !== false) {
+            $loc_data         = $dec;
             $order_notes      = $rv['notes'];
             $order_expires_ts = $rv['expires'];
             $photos           = $rv['photos'];
             $current_token    = $rv['token'];
-        } elseif (($rv['type'] ?? '') === 'preparing') {
-            $correct_preparing = true;
         }
+    } elseif ((time() - ($rv['ts'] ?? 0)) < 300 && ($rv['type'] ?? '') === 'preparing') {
+        $correct_preparing = true;
     }
     unset($rv);
 }
@@ -125,7 +128,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 $ps->execute([$order['id']]);
                                 $_SESSION['reveal'] = [
                                     'type'    => 'delivered',
-                                    'loc'     => $dec,
+                                    'sealed'  => seal_payload($dec),
                                     'notes'   => trim($order['notes'] ?? ''),
                                     'expires' => $order['expires_at'] ? (int)strtotime($order['expires_at']) : 0,
                                     'photos'  => $ps->fetchAll(),

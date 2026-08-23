@@ -10,6 +10,15 @@ function _aes_key(): string {
     return $key;
 }
 
+// Proof that THIS session completed the pickup-password check for an order.
+// The post-unlock redirect keeps only token + this MAC in the session and the
+// reveal page re-decrypts from the DB — plaintext location data never rests
+// in the session store. Derived subkey keeps it separate from the AES key.
+function reveal_capability(string $token, int $order_id): string {
+    $mac_key = hash_hmac('sha256', 'ddmgmt-reveal-capability', _aes_key(), true);
+    return hash_hmac('sha256', $token . '|' . $order_id, $mac_key);
+}
+
 // ── Raw encrypt / decrypt ─────────────────────────────────────────────────────
 // AES-256-GCM (authenticated). Storage format: ciphertext column holds
 // ciphertext||tag (base64), iv column holds the 12-byte nonce in hex.
@@ -78,6 +87,44 @@ function decrypt_location_data(string $ciphertext_b64, string $iv_hex): array|fa
     }
     // Backwards-compatible: plain string from old records
     return ['text' => $plain, 'lat' => null, 'lng' => null, 'instructions' => ''];
+}
+
+// ── Sealed session payloads ───────────────────────────────────────────────────
+// The post-unlock reveal lives in the PHP session between the unlock POST and
+// the consuming GET. Sealing it with the AES key keeps the session store
+// ciphertext-only: someone reading session files gets the same protection the
+// database rows have, not plaintext locations.
+
+function seal_payload(array $data): array {
+    $nonce = random_bytes(12);
+    $tag   = '';
+    $ct    = openssl_encrypt(
+        json_encode($data, JSON_UNESCAPED_UNICODE),
+        'aes-256-gcm', _aes_key(), OPENSSL_RAW_DATA, $nonce, $tag
+    );
+    if ($ct === false) {
+        throw new RuntimeException('Sealing failed.');
+    }
+    return ['ct' => base64_encode($ct . $tag), 'iv' => bin2hex($nonce)];
+}
+
+function open_payload(array $sealed): array|false {
+    if (!isset($sealed['ct'], $sealed['iv']) || strlen((string)$sealed['iv']) !== 24) {
+        return false;
+    }
+    $raw = base64_decode((string)$sealed['ct'], true);
+    if ($raw === false || strlen($raw) < 16) {
+        return false;
+    }
+    $plain = openssl_decrypt(
+        substr($raw, 0, -16), 'aes-256-gcm', _aes_key(),
+        OPENSSL_RAW_DATA, hex2bin($sealed['iv']), substr($raw, -16)
+    );
+    if ($plain === false) {
+        return false;
+    }
+    $data = json_decode($plain, true);
+    return is_array($data) ? $data : false;
 }
 
 // ── Password hashing ──────────────────────────────────────────────────────────

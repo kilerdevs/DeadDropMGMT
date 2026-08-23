@@ -27,13 +27,22 @@ $deleted   = false;
 $error     = '';
 $csrf      = generate_csrf();
 
+// Token enumeration is limited on every public surface, not just the
+// destructive one: the confirmation probe burns budget like anything else.
+$rl = rl_status('public');
+if ($rl['blocked']) {
+    $error = t('public.receive.rate_limited', ['min' => (int)ceil($rl['remaining'] / 60)]);
+} else {
+    rl_increment('public');
+}
+
 if (strlen($raw_token) !== 16 || !ctype_alnum($raw_token)) {
     header('Location: /');
     exit;
 }
 
 // ── Step 1 — show confirmation page ──────────────────────────────────────────
-if ($step === 1) {
+if ($step === 1 && $error === '') {
     // Verify order still exists before showing the confirm page
     try {
         $stmt = get_db()->prepare('SELECT id, order_token, status FROM orders WHERE order_token = ? LIMIT 1');
@@ -51,39 +60,34 @@ if ($step === 1) {
     // Fall through to render the confirmation page below
 }
 
-// ── Step 2 — execute deletion ─────────────────────────────────────────────────
-if ($step === 2) {
-    $rl = rl_status('public');
-    if ($rl['blocked']) {
-        $error = t('public.receive.rate_limited', ['min' => (int)ceil($rl['remaining'] / 60)]);
-    } else {
-        try {
-            $db   = get_db();
-            $stmt = $db->prepare('SELECT * FROM orders WHERE order_token = ? LIMIT 1');
-            $stmt->execute([$raw_token]);
-            $order = $stmt->fetch();
+// ── Step 2 — execute deletion (blocked budget already set $error above) ──────
+if ($step === 2 && $error === '') {
+    try {
+        $db   = get_db();
+        $stmt = $db->prepare('SELECT * FROM orders WHERE order_token = ? LIMIT 1');
+        $stmt->execute([$raw_token]);
+        $order = $stmt->fetch();
 
-            if (!$order) {
-                $error = t('public.index.error.not_found');
-            } else {
-                log_event('received', (int)$order['id'], $raw_token);
+        if (!$order) {
+            $error = t('public.index.error.not_found');
+        } else {
+            log_event('received', (int)$order['id'], $raw_token);
 
-                // Securely delete photo files
-                $photos = $db->prepare('SELECT filename FROM order_photos WHERE order_id = ?');
-                $photos->execute([$order['id']]);
-                foreach ($photos->fetchAll() as $ph) {
-                    secure_unlink(__DIR__ . '/uploads/' . $ph['filename']);
-                }
-                $dir = __DIR__ . '/uploads/' . (int)$order['id'] . '/';
-                if (is_dir($dir) && count(glob($dir . '*')) === 0) { @rmdir($dir); }
-
-                $db->prepare('DELETE FROM orders WHERE id = ?')->execute([$order['id']]);
-                $deleted = true;
+            // Securely delete photo files
+            $photos = $db->prepare('SELECT filename FROM order_photos WHERE order_id = ?');
+            $photos->execute([$order['id']]);
+            foreach ($photos->fetchAll() as $ph) {
+                secure_unlink(__DIR__ . '/uploads/' . $ph['filename']);
             }
-        } catch (Exception $e) {
-            log_err('Receive step2: ' . $e->getMessage());
-            $error = t('public.receive.error.server');
+            $dir = __DIR__ . '/uploads/' . (int)$order['id'] . '/';
+            if (is_dir($dir) && count(glob($dir . '*')) === 0) { @rmdir($dir); }
+
+            $db->prepare('DELETE FROM orders WHERE id = ?')->execute([$order['id']]);
+            $deleted = true;
         }
+    } catch (Exception $e) {
+        log_err('Receive step2: ' . $e->getMessage());
+        $error = t('public.receive.error.server');
     }
 }
 ?>

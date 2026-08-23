@@ -52,15 +52,27 @@ if ($action === 'create_courier') {
     }
 
     try {
-        $hash = $password === '' ? '' : password_hash($password, PASSWORD_BCRYPT, ['cost' => 12]);
-        get_db()->prepare(
-            'INSERT INTO users (username, password_hash, role) VALUES (?, ?, "courier")'
-        )->execute([$username, $hash]);
-        audit('courier_create', null, null, $password === '' ? $username . ' (first-login setup)' : $username);
-        $_SESSION['flash']    = $password === ''
-            ? t('admin.users.flash.courier_created_no_pw', ['username' => $username])
-            : t('admin.users.flash.courier_created', ['username' => $username]);
-        $_SESSION['flash_ok'] = true;
+        if ($password === '') {
+            // Passwordless account: the enrollment secret is the claim
+            // credential, shown exactly once — the username alone must not
+            // be enough to reach the setup step.
+            $secret = enrollment_secret_generate();
+            get_db()->prepare(
+                'INSERT INTO users (username, password_hash, role, enrollment_hash, enrollment_expires)
+                 VALUES (?, "", "courier", ?, NOW() + INTERVAL 24 HOUR)'
+            )->execute([$username, enrollment_secret_hash($secret)]);
+            audit('courier_create', null, null, $username . ' (enrollment issued)');
+            $_SESSION['flash']    = t('admin.users.flash.courier_created_secret',
+                ['username' => $username, 'secret' => $secret]);
+            $_SESSION['flash_ok'] = true;
+        } else {
+            get_db()->prepare(
+                'INSERT INTO users (username, password_hash, role) VALUES (?, ?, "courier")'
+            )->execute([$username, password_hash($password, PASSWORD_BCRYPT, ['cost' => 12])]);
+            audit('courier_create', null, null, $username);
+            $_SESSION['flash']    = t('admin.users.flash.courier_created', ['username' => $username]);
+            $_SESSION['flash_ok'] = true;
+        }
     } catch (Exception $e) {
         $msg = str_contains($e->getMessage(), 'Duplicate') ? t('admin.users.flash.username_taken') : t('admin.users.flash.create_failed');
         log_err('Create courier: ' . $e->getMessage());

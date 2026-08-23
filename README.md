@@ -54,7 +54,7 @@ The author provides this software **"as is," without warranty of any kind**, and
 
 ### Admin dashboard
 - Role-based access: **Owner** (full control) and **Courier** (own orders only)
-- Passwordless first login: accounts can be created without a password — the login form hides the password field for such usernames, and an empty-password sign-in opens a set-password step before the session starts (5-minute window, race-guarded against double claims, audited). Presetting a password at creation still works; until an unclaimed account is claimed, whoever knows the username can claim it first, so hand credentials over promptly or preset a password when that's unacceptable
+- Passwordless first login with enrollment secrets: accounts can be created without a password — the owner receives a single-use, 24-hour enrollment code (shown exactly once, stored only hashed), and the login form asks for that code instead of a password for unclaimed usernames. Knowing just the username gets an attacker nothing; claiming burns the code (5-minute setup window, race-guarded, audited). Presetting a password at creation still works
 - Zero-config first run: on a fresh install (no accounts yet) the login page itself becomes a create-owner form — pick a username, set a password, done; no SQL or seed constants needed. The form disappears permanently once any account exists
 - Create orders with an interactive Leaflet map picker
 - Auto-generated memorable pickup passphrases (4 words + digit + symbol, ~40 bits)
@@ -145,7 +145,7 @@ Browser ──[TLS, external]── Web server / PHP
 |---|---|---|---|
 | SQL injection | PDO prepared statements throughout — zero string interpolation in SQL | S1–S5 | A1–A2 |
 | Password storage | bcrypt cost=12 via `password_hash()` / `password_verify()` | S5 | A4 |
-| Account takeover | TOTP 2FA (RFC 6238) — self-service per account, secret GCM-encrypted at rest | S5 | A1, A2 |
+| Account takeover | TOTP 2FA (RFC 6238) — self-service per account, secret GCM-encrypted at rest. Passwordless accounts are claimed only with a single-use enrollment secret, never by username alone | S5 | A1, A2 |
 | Location data at rest | AES-256-GCM (authenticated), random nonce per record; legacy CBC rows still decrypt and re-encrypt to GCM on next edit. Key lives only in `config.php` or env (`DDMGMT_AES_KEY_HEX`), never in DB | S1, S4 | A4 |
 | Pickup password guessing | Dual budget enforced together: IP-based limiter (DB-backed, togglable) **and** a per-session failure bucket — whoever trips either is blocked; ~40-bit generated passphrases (4 words + digit + symbol) | S2 | A1 |
 | Token enumeration | 16-char alphanumeric random tokens (~75 bits) | S3 | A1 |

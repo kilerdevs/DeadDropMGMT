@@ -53,7 +53,36 @@ T::ok('totp_enabled carried into session', $_SESSION['totp_enabled'] === true);
 admin_logout();
 T::eq('session destroyed on logout', PHP_SESSION_NONE, session_status());
 
+// ── Passwordless account: username alone must NOT reach the setup step ──────
+$_SESSION = [];
+start_secure_session(); // logout above destroyed the session
+$db->prepare("DELETE FROM users WHERE username = 't_auth_pending'")->execute();
+$db->prepare("INSERT INTO users (username, password_hash, role, enrollment_hash, enrollment_expires)
+              VALUES ('t_auth_pending', '', 'courier', ?, NOW() + INTERVAL 24 HOUR)")
+   ->execute([enrollment_secret_hash('ENROLL-CODE-123')]);
+$pendingId = (int)$db->lastInsertId();
+
+$_SESSION = [];
+$_POST = ['enrollment' => 'WRONG-CODE'];
+T::eq('wrong enrollment secret fails', 'fail', admin_login('t_auth_pending', ''));
+T::ok('failed claim leaves no pending setup', empty($_SESSION['pending_setup_user_id']));
+
+$_POST = [];
+T::eq('missing enrollment secret fails', 'fail', admin_login('t_auth_pending', ''));
+T::eq('non-empty password on unclaimed account fails', 'fail', admin_login('t_auth_pending', 'whatever'));
+
+$_POST = ['enrollment' => 'ENROLL-CODE-123'];
+T::eq('valid enrollment secret arms setup', 'need_setup', admin_login('t_auth_pending', ''));
+T::eq('pending setup user recorded', $pendingId, (int)$_SESSION['pending_setup_user_id']);
+
+// Expired secret is worthless even if it matches
+$db->prepare('UPDATE users SET enrollment_expires = NOW() - INTERVAL 1 HOUR WHERE id = ?')->execute([$pendingId]);
+$_SESSION = [];
+T::eq('expired enrollment secret fails', 'fail', admin_login('t_auth_pending', ''));
+
 // Cleanup
+$_POST = [];
+$db->prepare('DELETE FROM users WHERE id = ?')->execute([$pendingId]);
 $db->prepare('DELETE FROM users WHERE id IN (?, ?)')->execute([$ownerId, $courierId]);
 
 exit(T::done());

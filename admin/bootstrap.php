@@ -35,22 +35,37 @@ if ($rl['blocked']) {
 $username = trim($_POST['username'] ?? '');
 
 try {
-    // Lost the race or not actually fresh — never create a second owner here.
-    if ((int)get_db()->query('SELECT COUNT(*) FROM users')->fetchColumn() !== 0) {
+    $db = get_db();
+    // Named lock makes the empty-table check + insert atomic across concurrent
+    // requests — two simultaneous claimants can no longer both observe zero
+    // users and both proceed to INSERT.
+    if (!$db->query("SELECT GET_LOCK('deaddrop_owner_bootstrap', 5)")->fetchColumn()) {
         _bootstrap_back(t('admin.bootstrap.error.initialized'));
     }
+    try {
+        if ((int)$db->query('SELECT COUNT(*) FROM users')->fetchColumn() !== 0) {
+            _bootstrap_back(t('admin.bootstrap.error.initialized'));
+        }
 
-    if (strlen($username) < 3 || strlen($username) > 64) {
-        rl_increment('admin_login');
-        _bootstrap_back(t('admin.users.flash.username_length'));
-    }
-    if (!preg_match('/^[a-zA-Z0-9_\-\.]+$/', $username)) {
-        rl_increment('admin_login');
-        _bootstrap_back(t('admin.users.flash.username_chars'));
-    }
+        if (strlen($username) < 3 || strlen($username) > 64) {
+            rl_increment('admin_login');
+            _bootstrap_back(t('admin.users.flash.username_length'));
+        }
+        if (!preg_match('/^[a-zA-Z0-9_\-\.]+$/', $username)) {
+            rl_increment('admin_login');
+            _bootstrap_back(t('admin.users.flash.username_chars'));
+        }
 
-    get_db()->prepare('INSERT INTO users (username, password_hash, role) VALUES (?, \'\', "owner")')
-           ->execute([$username]);
+        // The owner's own enrollment secret: shown once on the next screen as
+        // the recovery credential should this setup session be lost. Without
+        // it, nobody can reach the password step for this account.
+        $enrollment = enrollment_secret_generate();
+        $db->prepare('INSERT INTO users (username, password_hash, role, enrollment_hash, enrollment_expires)
+                      VALUES (?, "", "owner", ?, NOW() + INTERVAL 24 HOUR)')
+               ->execute([$username, enrollment_secret_hash($enrollment)]);
+    } finally {
+        $db->exec("DO RELEASE_LOCK('deaddrop_owner_bootstrap')");
+    }
 } catch (Exception $e) {
     if (str_contains($e->getMessage(), 'Duplicate')) {
         _bootstrap_back(t('admin.bootstrap.error.taken'));
@@ -60,6 +75,9 @@ try {
 }
 
 audit('owner_bootstrap', null, null, $username);
+
+// One-time display of the enrollment secret on the set-password screen.
+$_SESSION['enrollment_flash'] = t('admin.bootstrap.enrollment_note', ['secret' => $enrollment]);
 
 session_regenerate_id(true);
 $_SESSION['pending_setup_user_id'] = (int)get_db()->lastInsertId();

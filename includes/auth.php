@@ -131,10 +131,12 @@ function admin_login(string $username, string $password): string {
 
     $hash = (string)$user['password_hash'];
 
-    // Accounts awaiting first login carry no password: an empty-password
-    // submit routes to the choose-a-password step, anything else just fails.
+    // Accounts awaiting first login carry no password: the enrollment secret
+    // issued at account creation is the claim credential — knowing only the
+    // username must never reach the setup step. Anything else just fails.
     if ($hash === '') {
-        if ($password !== '') {
+        $enrollment = trim((string)($_POST['enrollment'] ?? ''));
+        if ($password !== '' || $enrollment === '' || !enrollment_secret_valid((int)$user['id'], $enrollment)) {
             return 'fail';
         }
         session_regenerate_id(true);
@@ -333,4 +335,33 @@ function bucket_remaining(string $scope = 'public'): int {
 
 function bucket_clear(string $scope = 'public'): void {
     unset($_SESSION['pw_fail'][$scope]);
+}
+
+// ── Enrollment secrets (single-use claim credentials) ────────────────────────
+// Issued when an account is created passwordless; the recipient must present
+// it once at first login to reach the choose-password step. 256-bit random,
+// stored SHA-256-hashed, expires, cleared on successful claim.
+
+function enrollment_secret_generate(): string {
+    return bin2hex(random_bytes(24));
+}
+
+function enrollment_secret_hash(string $secret): string {
+    return hash('sha256', trim($secret));
+}
+
+function enrollment_secret_valid(int $user_id, string $secret): bool {
+    try {
+        $stmt = get_db()->prepare(
+            'SELECT enrollment_hash FROM users
+             WHERE id = ? AND enrollment_hash IS NOT NULL
+               AND (enrollment_expires IS NULL OR enrollment_expires > NOW())
+             LIMIT 1'
+        );
+        $stmt->execute([$user_id]);
+        $row = $stmt->fetch();
+        return $row && hash_equals((string)$row['enrollment_hash'], enrollment_secret_hash($secret));
+    } catch (Exception $e) {
+        return false;
+    }
 }

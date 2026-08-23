@@ -21,6 +21,11 @@ if ($pending_uid <= 0 || (time() - $pending_ts) > 300) {
 
 $csrf  = generate_csrf();
 $error = '';
+// One-time: the enrollment secret issued at account creation (owner bootstrap
+// or courier creation). Shown here because this is the only screen the
+// creator is guaranteed to see before the secret's context scrolls away.
+$enrollment_note = (string)($_SESSION['enrollment_flash'] ?? '');
+unset($_SESSION['enrollment_flash']);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!verify_csrf($_POST['csrf_token'] ?? '')) {
@@ -38,8 +43,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $db   = get_db();
                 // Guard: only claim an account that is still passwordless —
                 // if someone completed setup meanwhile, refuse to overwrite.
+                // Claiming also burns the enrollment secret (single use).
                 $stmt = $db->prepare(
-                    "UPDATE users SET password_hash = ? WHERE id = ? AND (password_hash = '' OR password_hash IS NULL)"
+                    "UPDATE users SET password_hash = ?, enrollment_hash = NULL, enrollment_expires = NULL
+                     WHERE id = ? AND (password_hash = '' OR password_hash IS NULL)"
                 );
                 $stmt->execute([password_hash($pw1, PASSWORD_BCRYPT, ['cost' => 12]), $pending_uid]);
 
@@ -100,6 +107,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <h1><?= t('admin.setup.h1') ?></h1>
     <?php if ($error): ?>
     <div class="alert"><?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?></div>
+    <?php endif; ?>
+    <?php if ($enrollment_note !== ''): ?>
+    <div class="alert"><?= htmlspecialchars($enrollment_note, ENT_QUOTES, 'UTF-8') ?></div>
     <?php endif; ?>
     <p class="setup-explain"><?= t('admin.setup.explain') ?></p>
     <form method="POST" action="/admin/setup_password.php" autocomplete="off">

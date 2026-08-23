@@ -77,6 +77,10 @@ unset($_SESSION['login_error']);
             <label for="password"><?= t('admin.login.password_label') ?></label>
             <input type="password" id="password" name="password" autocomplete="current-password">
         </div>
+        <div class="form-group" id="enrollment-group" hidden>
+            <label for="enrollment"><?= t('admin.login.enrollment_label') ?></label>
+            <input type="text" id="enrollment" name="enrollment" autocomplete="off" spellcheck="false">
+        </div>
         <button type="submit" class="btn"><?= t('admin.login.submit_button') ?></button>
     </form>
     <?php endif; ?>
@@ -84,24 +88,29 @@ unset($_SESSION['login_error']);
 <?php if (!$bootstrap): ?>
 <script nonce="<?= htmlspecialchars($nonce, ENT_QUOTES, 'UTF-8') ?>">
 (function () {
-    var u    = document.getElementById('username');
-    var grp  = document.getElementById('pw-group');
-    var pw   = document.getElementById('password');
-    var hint = document.getElementById('first-time-hint');
-    if (!u || !grp || !pw || !hint) return;
+    var u     = document.getElementById('username');
+    var grp   = document.getElementById('pw-group');
+    var pw    = document.getElementById('password');
+    var hint  = document.getElementById('first-time-hint');
+    var egrp  = document.getElementById('enrollment-group');
+    if (!u || !grp || !pw || !hint || !egrp) return;
 
     var csrf  = <?= json_encode($csrf) ?>;
     var timer = null;
 
     function showPw() {
         grp.style.display = '';
+        pw.disabled = false;
+        egrp.hidden = true;
+        document.getElementById('enrollment').disabled = true;
         hint.hidden = true;
     }
-    function hidePw() {
-        if (grp.style.display !== 'none') {
-            grp.style.display = 'none';
-            pw.value = ''; // never submit a stale autofilled value
-        }
+    function showEnrollment() {
+        grp.style.display = 'none';
+        pw.value = ''; // never submit a stale autofilled value
+        pw.disabled = true;
+        egrp.hidden = false;
+        document.getElementById('enrollment').disabled = false;
         hint.hidden = false;
     }
 
@@ -113,7 +122,7 @@ unset($_SESSION['login_error']);
         }).then(function (r) { return r.ok ? r.json() : null; }).then(function (d) {
             // Ignore stale responses (user kept typing) — a newer request is in flight.
             if (!d || u.value.trim() !== name) return;
-            d.needs_setup ? hidePw() : showPw();
+            d.needs_setup ? showEnrollment() : showPw();
         }).catch(function () { /* fail open: password field stays visible */ });
     }
 
