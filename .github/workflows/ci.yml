@@ -82,8 +82,10 @@ jobs:
           docker compose -f docker-compose.caddy.yml config -q
 
       # Smoke test = boot the full stack, wait for the public page to render.
+      # On failure dump container state + logs, or the failure stays a mystery.
       - name: Smoke test (Apache)
         run: |
+          trap 'docker compose ps -a; echo "--- APP LOGS ---"; docker compose logs --no-color app' ERR
           docker compose up -d --build --quiet-pull
           timeout 90 bash -c 'until curl -fs http://127.0.0.1:8080/ >/dev/null; do sleep 2; done'
           curl -fs http://127.0.0.1:8080/ | grep -qi "<title>"
