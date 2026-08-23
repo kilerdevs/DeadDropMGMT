@@ -90,6 +90,7 @@ $groups = [
     'behavior' => [
         'allow_status_lookup'      => ['type' => 'toggle'],
         'require_delivered_reveal' => ['type' => 'toggle'],
+        'compliance_note_enabled'  => ['type' => 'toggle'],
     ],
     'analytics' => [
         'analytics_enabled' => ['type' => 'toggle'],

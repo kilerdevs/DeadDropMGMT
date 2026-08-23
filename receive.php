@@ -152,7 +152,7 @@ if ($step === 2) {
         <span class="trust-sep">·</span>
         <span class="trust-text"><?= t('public.trust.no_tracking') ?></span>
     </div>
-    <div class="compliance-note"><?= t('common.compliance_note') ?></div>
+    <?php if (compliance_note_enabled()): ?><div class="compliance-note"><?= t('common.compliance_note') ?></div><?php endif; ?>
 </main>
 <?php if ($deleted): ?>
 <script src="/public.js"></script>

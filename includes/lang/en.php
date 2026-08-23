@@ -349,6 +349,7 @@ return [
     'admin.settings.label.rate_limit_window_min'   => 'Lockout window (minutes)',
     'admin.settings.label.admin_session_hours'     => 'Admin session duration (hours)',
     'admin.settings.label.max_photo_mb'            => 'Max. photo size (MB)',
+    'admin.settings.label.compliance_note_enabled' => 'Show compliance note on public pages',
     'admin.settings.label.allow_status_lookup'     => 'Allow status check without a password',
     'admin.settings.label.require_delivered_reveal'=> 'Hide location while PREPARING',
     'admin.settings.label.analytics_enabled'       => 'Enable analytics',

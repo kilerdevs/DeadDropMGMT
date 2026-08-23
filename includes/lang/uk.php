@@ -351,6 +351,7 @@ return [
     'admin.settings.label.rate_limit_window_min'   => 'Вікно блокування (хвилини)',
     'admin.settings.label.admin_session_hours'     => 'Тривалість сесії адміністратора (години)',
     'admin.settings.label.max_photo_mb'            => 'Макс. розмір фото (МБ)',
+    'admin.settings.label.compliance_note_enabled' => 'Показувати примітку про відповідність на публічних сторінках',
     'admin.settings.label.allow_status_lookup'     => 'Дозволити перевірку статусу без пароля',
     'admin.settings.label.require_delivered_reveal'=> 'Приховувати місцезнаходження, поки ГОТУЄТЬСЯ',
     'admin.settings.label.analytics_enabled'       => 'Увімкнути аналітику',

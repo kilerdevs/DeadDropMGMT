@@ -19,7 +19,7 @@ require_once dirname(__DIR__) . '/includes/i18n.php';
     <h1><?= t('error.500.title') ?></h1>
     <p class="form-footnote"><?= t('error.500.body') ?></p>
     <a href="/" class="btn"><?= t('common.home') ?></a>
-    <div class="compliance-note" style="margin-top:48px"><?= t('common.compliance_note') ?></div>
+    <?php if (compliance_note_enabled()): ?><div class="compliance-note" style="margin-top:48px"><?= t('common.compliance_note') ?></div><?php endif; ?>
 </main>
 </body>
 </html>

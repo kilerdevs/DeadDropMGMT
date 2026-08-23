@@ -349,6 +349,7 @@ return [
     'admin.settings.label.rate_limit_window_min'   => 'Sperrfenster (Minuten)',
     'admin.settings.label.admin_session_hours'     => 'Dauer der Admin-Sitzung (Stunden)',
     'admin.settings.label.max_photo_mb'            => 'Max. Fotogröße (MB)',
+    'admin.settings.label.compliance_note_enabled' => 'Compliance-Hinweis auf öffentlichen Seiten anzeigen',
     'admin.settings.label.allow_status_lookup'     => 'Statusprüfung ohne Passwort erlauben',
     'admin.settings.label.require_delivered_reveal'=> 'Standort verbergen, solange IN VORBEREITUNG',
     'admin.settings.label.analytics_enabled'       => 'Statistiken aktivieren',

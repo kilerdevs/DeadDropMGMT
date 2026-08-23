@@ -357,7 +357,7 @@ $csrf_public = generate_csrf();
         <span class="trust-sep">·</span>
         <span class="trust-text"><?= t('public.trust.no_tracking') ?></span>
     </div>
-    <div class="compliance-note"><?= t('common.compliance_note') ?></div>
+    <?php if (compliance_note_enabled()): ?><div class="compliance-note"><?= t('common.compliance_note') ?></div><?php endif; ?>
 </main>
 <?php if ($order_expires_ts > 0 || !empty($photos)): ?>
 <script nonce="<?= htmlspecialchars($csp_nonce, ENT_QUOTES, 'UTF-8') ?>">

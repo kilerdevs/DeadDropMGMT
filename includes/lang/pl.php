@@ -351,6 +351,7 @@ return [
     'admin.settings.label.rate_limit_window_min'   => 'Okno blokady (minuty)',
     'admin.settings.label.admin_session_hours'     => 'Czas sesji admina (godziny)',
     'admin.settings.label.max_photo_mb'            => 'Maks. rozmiar zdjęcia (MB)',
+    'admin.settings.label.compliance_note_enabled' => 'Pokaż notę o zgodności na stronach publicznych',
     'admin.settings.label.allow_status_lookup'     => 'Zezwól na sprawdzenie statusu bez hasła',
     'admin.settings.label.require_delivered_reveal'=> 'Ukryj lokalizację gdy W PRZYGOTOWANIU',
     'admin.settings.label.analytics_enabled'       => 'Włącz analitykę',

@@ -28,7 +28,7 @@ $value = $_POST['value'] ?? '';
 
 $numeric  = ['order_ttl_hours','rate_limit_max','rate_limit_window_min','admin_session_hours','max_photo_mb'];
 $floats   = ['admin_session_hours','max_photo_mb']; // stored as float strings
-$booleans = ['allow_status_lookup','require_delivered_reveal','analytics_enabled','show_error_log','rate_limit_enabled'];
+$booleans = ['allow_status_lookup','require_delivered_reveal','analytics_enabled','show_error_log','rate_limit_enabled','compliance_note_enabled'];
 $limits   = [
     'order_ttl_hours'       => [12,  72],
     'rate_limit_max'        => [3,   10],

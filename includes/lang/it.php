@@ -349,6 +349,7 @@ return [
     'admin.settings.label.rate_limit_window_min'   => 'Finestra di blocco (minuti)',
     'admin.settings.label.admin_session_hours'     => "Durata della sessione admin (ore)",
     'admin.settings.label.max_photo_mb'            => 'Dimensione max. foto (MB)',
+    'admin.settings.label.compliance_note_enabled' => 'Mostra la nota di conformità nelle pagine pubbliche',
     'admin.settings.label.allow_status_lookup'     => 'Consenti la verifica dello stato senza password',
     'admin.settings.label.require_delivered_reveal'=> 'Nascondi la posizione mentre IN PREPARAZIONE',
     'admin.settings.label.analytics_enabled'       => 'Attiva le statistiche',

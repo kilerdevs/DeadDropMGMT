@@ -68,6 +68,12 @@ function default_lang(): string {
     return get_setting('default_lang', 'en');
 }
 
+// Cosmetic "ISO compliant" footer shown on public pages. Off by default —
+// it is a marketing claim, not a fact about this software.
+function compliance_note_enabled(): bool {
+    return get_setting('compliance_note_enabled', '0') === '1';
+}
+
 function extend_hours_options(): array {
     $raw = get_setting('extend_hours_options', '24,48,72');
     $opts = [];

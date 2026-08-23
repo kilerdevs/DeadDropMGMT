@@ -166,6 +166,7 @@ INSERT INTO settings (key_name, value, label) VALUES
     ('allow_status_lookup',     '1',       'Zezwól na sprawdzenie statusu bez hasła'),
     ('require_delivered_reveal','1',       'Ukryj lokalizację gdy W PRZYGOTOWANIU'),
     ('analytics_enabled',       '1',       'Włącz analitykę'),
+    ('compliance_note_enabled', '0',       'Pokaż notę o zgodności na stronach publicznych'),
     ('show_error_log',          '0',       'Pokaż log błędów w ustawieniach'),
     ('last_cleanup',            '0',       '')
 ON DUPLICATE KEY UPDATE label = VALUES(label);

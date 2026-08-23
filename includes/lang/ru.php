@@ -351,6 +351,7 @@ return [
     'admin.settings.label.rate_limit_window_min'   => 'Окно блокировки (минуты)',
     'admin.settings.label.admin_session_hours'     => 'Время сессии администратора (часы)',
     'admin.settings.label.max_photo_mb'            => 'Макс. размер фото (МБ)',
+    'admin.settings.label.compliance_note_enabled' => 'Показывать примечание о соответствии на публичных страницах',
     'admin.settings.label.allow_status_lookup'     => 'Разрешить проверку статуса без пароля',
     'admin.settings.label.require_delivered_reveal'=> 'Скрывать местоположение, пока ГОТОВИТСЯ',
     'admin.settings.label.analytics_enabled'       => 'Включить аналитику',
