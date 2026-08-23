@@ -56,10 +56,11 @@ function require_admin(): void {
     }
 
     // 2FA is mandatory for couriers (optional for the owner). Gate every
-    // page but the enrollment page itself and logout.
+    // page but the enrollment page itself, logout, and self-service
+    // preference endpoints that touch nothing but the caller's own row.
     if (is_courier() && empty($_SESSION['totp_enabled'])) {
         $script = basename($_SERVER['SCRIPT_NAME'] ?? '');
-        if (!in_array($script, ['2fa.php', 'logout.php'], true)) {
+        if (!in_array($script, ['2fa.php', 'logout.php', 'set_lang.php'], true)) {
             header('Location: /admin/2fa.php?required=1');
             exit;
         }
