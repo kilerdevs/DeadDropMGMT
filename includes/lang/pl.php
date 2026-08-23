@@ -159,6 +159,7 @@ return [
     'admin.settings.label.osm_proxy_enabled' => 'Kieruj ruch OSM przez serwery proxy',
 
     'admin.proxies.section'       => 'Pula serwerów proxy dla OpenStreetMap',
+    'admin.proxies.enabled_empty' => 'Kierowanie jest włączone, ale pula jest pusta - kafelki map i wyszukiwanie adresów nie będą działać, dopóki nie dodasz lub nie wykryjesz proxy.',
     'admin.proxies.hint'          => 'Gdy przełącznik powyżej jest włączony, zapytania o kafelki i adresy z tego panelu są wysyłane przez jedno z tych proxy zamiast bezpośrednio z tego serwera - OSM nigdy nie zobaczy prawdziwego IP. Tryb fail-closed: jeśli wszystkie proxy padną, funkcje mapy przestaną działać, zamiast ujawniać IP. Autowykrywanie sprawdza publiczne listy proxy z naciskiem na anonimowość (HTTP z oceną anonimowości oraz SOCKS, anonimowy z założenia) i zostawia te, które faktycznie odpowiadają.',
     'admin.proxies.empty'         => 'Brak skonfigurowanych proxy.',
     'admin.proxies.th.proxy'      => 'Proxy',

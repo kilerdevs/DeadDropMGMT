@@ -159,6 +159,7 @@ return [
     'admin.settings.label.osm_proxy_enabled' => "Instradia il traffico OSM attraverso i proxy",
 
     'admin.proxies.section'       => 'Pool di proxy per OpenStreetMap',
+    'admin.proxies.enabled_empty' => 'L\'instradamento è attivo ma il pool è vuoto: tile e ricerca indirizzi non funzioneranno finché non aggiungi o rilevi proxy.',
     'admin.proxies.hint'          => "Quando l'interruttore sopra è attivo, le richieste di tile e indirizzi di questo pannello vengono inviate tramite uno di questi proxy invece che direttamente da questo server: OSM non vede mai il tuo vero IP. Fail-closed: se tutti i proxy cadono, le funzioni mappa smettono di funzionare invece di esporre l'IP. Il rilevamento automatico testa liste pubbliche orientate all'anonimato (HTTP con classificazione di anonimato e SOCKS anonimi per natura) e conserva quelle che rispondono davvero.",
     'admin.proxies.empty'         => 'Nessun proxy configurato.',
     'admin.proxies.th.proxy'      => 'Proxy',

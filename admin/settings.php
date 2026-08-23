@@ -98,9 +98,6 @@ $groups = [
     'analytics' => [
         'analytics_enabled' => ['type' => 'toggle'],
     ],
-    'network' => [
-        'osm_proxy_enabled' => ['type' => 'toggle'],
-    ],
     'diagnostics' => [
         'show_error_log' => ['type' => 'toggle'],
     ],
@@ -229,6 +226,23 @@ function s_label(array $s, string $key): string {
                 <!-- ── OSM proxy pool ─────────────────────────────────────── -->
                 <div class="settings-group">
                     <div class="settings-group-label"><?= htmlspecialchars(t('admin.proxies.section'), ENT_QUOTES, 'UTF-8') ?></div>
+
+                    <?php $pxOn = osm_proxy_enabled(); ?>
+                    <div class="sw-row">
+                        <span class="sw-row-label"><?= htmlspecialchars(t('admin.settings.label.osm_proxy_enabled'), ENT_QUOTES, 'UTF-8') ?></span>
+                        <label class="sw">
+                            <input type="checkbox"
+                                   name="osm_proxy_enabled"
+                                   value="1"
+                                   <?= $pxOn ? 'checked' : '' ?>>
+                            <span class="sw-track"><span class="sw-thumb"></span></span>
+                            <span class="sw-state"><?= $pxOn ? t('admin.settings.on') : t('admin.settings.off') ?></span>
+                        </label>
+                    </div>
+                    <?php if ($pxOn && !$proxy_pool): ?>
+                    <div class="settings-warning"><?= t('admin.proxies.enabled_empty') ?></div>
+                    <?php endif; ?>
+
                     <div class="proxies-hint"><?= t('admin.proxies.hint') ?></div>
 
                     <?php if (!$proxy_pool): ?>
