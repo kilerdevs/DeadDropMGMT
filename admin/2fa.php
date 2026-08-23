@@ -112,7 +112,7 @@ $csrf = generate_csrf();
         <?php if ($error):   ?><div class="flash"><?= htmlspecialchars($error,   ENT_QUOTES, 'UTF-8') ?></div><?php endif; ?>
         <?php if ($success): ?><div class="flash ok"><?= htmlspecialchars($success, ENT_QUOTES, 'UTF-8') ?></div><?php endif; ?>
 
-        <div class="form-panel">
+        <div class="form-panel totp-panel">
         <?php if ($enabled && is_owner()): ?>
             <div class="settings-warning">
                 <?= t('admin.2fa.enabled_notice', ['username' => htmlspecialchars(current_user_name(), ENT_QUOTES, 'UTF-8')]) ?>

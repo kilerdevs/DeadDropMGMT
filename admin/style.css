@@ -625,6 +625,11 @@ input[type="range"]::-moz-range-track { height: 2px; background: var(--border); 
 /* ── Form panels ─────────────────────────────────────────────────────────── */
 
 .form-panel { border: 1px solid var(--border); padding: 36px; max-width: 680px; }
+
+/* Centered panels for the settings and 2FA screens */
+.settings-panel { margin-inline: auto; }
+.totp-panel     { max-width: 560px; margin-inline: auto; }
+.totp-panel .totp-enroll { align-items: center; }
 .form-group { margin-bottom: 30px; }
 
 label, .field-label {
