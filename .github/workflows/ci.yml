@@ -8,6 +8,13 @@ on:
 jobs:
   tests:
     runs-on: ubuntu-latest
+    # README promises PHP 8.0+ — test the whole supported range.
+    # fail-fast so one broken version doesn't hide results from the others.
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.0', '8.1', '8.2', '8.3', '8.4']
+    name: tests (PHP ${{ matrix.php }})
     services:
       # setup.sql uses MariaDB syntax (ALTER TABLE ... ADD COLUMN IF NOT EXISTS)
       mariadb:
@@ -33,7 +40,7 @@ jobs:
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.3'
+          php-version: ${{ matrix.php }}
           extensions: pdo_mysql, openssl, gd, fileinfo
 
       # config.php is gitignored — CI builds it from the committed template,
