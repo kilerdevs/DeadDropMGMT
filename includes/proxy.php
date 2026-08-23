@@ -157,36 +157,81 @@ function osm_fetch(string $url): string|false {
 
 // ── Discovery ────────────────────────────────────────────────────────────────
 
-// Sources of candidate proxies. Proxifly ships structured JSON with
-// anonymity ratings; monosans publishes hourly pre-checked lists (plain
-// ip:port). Both are free and community-maintained.
+// Sources of candidate proxies — all free, community-maintained, fetched
+// from GitHub raw. 'rated' marks sources whose HTTP entries carry a real
+// anonymity rating (anonymous/elite); HTTP entries from unrated sources are
+// only accepted after passing a live anonymity check (see proxy_discover).
+// SOCKS proxies are header-anonymous by protocol and always qualify.
 const PROXY_DISCOVERY_SOURCES = [
-    'proxifly'      => 'https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/all/data.json',
-    'monosans_http' => 'https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt',
-    'monosans_s5'   => 'https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt',
+    // rated JSON with anonymity metadata
+    ['url' => 'https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/all/data.json', 'type' => 'proxifly', 'rated' => true],
+    // hourly pre-checked plain lists
+    ['url' => 'https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt',    'type' => 'plain', 'proto' => 'http',   'rated' => false],
+    ['url' => 'https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks4.txt',  'type' => 'plain', 'proto' => 'socks4', 'rated' => true],
+    ['url' => 'https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt',  'type' => 'plain', 'proto' => 'socks5', 'rated' => true],
+    // high-volume lists
+    ['url' => 'https://raw.githubusercontent.com/TheSpeedX/PROXY-LIST/master/http.txt',   'type' => 'plain', 'proto' => 'http',   'rated' => false],
+    ['url' => 'https://raw.githubusercontent.com/TheSpeedX/PROXY-LIST/master/socks4.txt', 'type' => 'plain', 'proto' => 'socks4', 'rated' => true],
+    ['url' => 'https://raw.githubusercontent.com/TheSpeedX/PROXY-LIST/master/socks5.txt', 'type' => 'plain', 'proto' => 'socks5', 'rated' => true],
+    // curated, regularly refreshed
+    ['url' => 'https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt',  'type' => 'plain', 'proto' => 'http',   'rated' => false],
+    ['url' => 'https://raw.githubusercontent.com/roosterkid/openproxylist/main/SOCKS5_RAW.txt', 'type' => 'plain', 'proto' => 'socks5', 'rated' => true],
 ];
 
-// Pull candidates from public sources, then probe them in parallel against a
-// real OSM tile URL. Returns [['url' => ..., 'latency_ms' => ...], ...] for
-// proxies that actually answered.
-//
-// Why probe against HTTPS: our real targets (tiles, Nominatim) are
-// HTTPS-only, which requires HTTP proxies to support CONNECT tunneling —
-// most free plain-HTTP proxies don't, so a proxy that only speaks plain
-// HTTP is useless here no matter how alive it looks. SOCKS proxies tunnel
-// arbitrary TCP natively and never inject HTTP headers (anonymity by
-// design), so they are probed the same way.
-function proxy_discover(int $max_test = 300, int $timeout_s = 4): array {
-    $candidates = [];
+// Header-echo judge used to verify that an HTTP proxy does not leak our IP
+// via Via / X-Forwarded-For style headers. Plain HTTP on purpose — it must
+// work through proxies that lack CONNECT support.
+const PROXY_ANONYMITY_JUDGES = [
+    'http://httpbin.org/get',
+    'http://azenv.net/',
+];
 
-    foreach (PROXY_DISCOVERY_SOURCES as $srcUrl) {
-        $raw = @file_get_contents($srcUrl, false, stream_context_create([
+// Learn this server's public IP so the judge response can be scanned for it.
+function proxy_public_ip(): ?string {
+    foreach (['https://api.ipify.org?format=text', 'http://httpbin.org/ip'] as $url) {
+        $raw = @file_get_contents($url, false, stream_context_create(['http' => ['timeout' => 8]]));
+        if ($raw === false) continue;
+        if (preg_match('/\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b/', $raw, $m)) {
+            return $m[1];
+        }
+    }
+    return null;
+}
+
+// Run one anonymity judge through a proxy. Returns true when the judge's
+// response does not contain our IP in any echoed header or origin field.
+function proxy_judge_anonymous(string $pxUrl, string $ourIp, int $timeout_s = 6): bool {
+    foreach (PROXY_ANONYMITY_JUDGES as $judge) {
+        $body = osm_fetch_via($judge, $pxUrl, $timeout_s);
+        if ($body === false) continue; // judge unreachable through this proxy — try next judge
+        if (str_contains($body, $ourIp)) {
+            return false; // our IP leaked into the request as seen by the target
+        }
+        return true;
+    }
+    return false; // could not verify — maximum security means reject
+}
+
+// Pull candidates from public sources, then probe them in parallel against a
+// real OSM tile URL. Returns [['url' => ..., 'latency_ms' => ...], ...],
+// sorted fastest first.
+//
+// Acceptance is security-first:
+//   1. must answer an HTTPS OSM tile (proves CONNECT/socks tunneling works),
+//   2. must be under 3000 ms — slower proxies are useless for a map UI,
+//   3. HTTP proxies without a source anonymity rating must additionally pass
+//      a live judge check proving our IP stays out of the request headers;
+//      SOCKS is header-anonymous by protocol and rated lists are trusted.
+function proxy_discover(int $max_test = 400, int $timeout_s = 4): array {
+    $candidates = []; // url => rated(bool)
+
+    foreach (PROXY_DISCOVERY_SOURCES as $src) {
+        $raw = @file_get_contents($src['url'], false, stream_context_create([
             'http' => ['timeout' => 10],
         ]));
         if ($raw === false) continue;
 
-        if (str_contains($srcUrl, 'data.json')) {
-            // Proxifly JSON — anonymity-rated
+        if ($src['type'] === 'proxifly') {
             $list = json_decode($raw, true);
             if (!is_array($list)) continue;
             foreach ($list as $entry) {
@@ -194,50 +239,93 @@ function proxy_discover(int $max_test = 300, int $timeout_s = 4): array {
                 $proto = strtolower((string)($entry['protocol'] ?? ''));
                 if ($proto === '') continue;
                 $anon = strtolower((string)($entry['anonymity'] ?? ''));
-                // HTTP proxies must be anonymity-rated (no transparent ones);
-                // SOCKS is header-anonymous by protocol, so rating is moot.
-                if (str_starts_with($proto, 'socks')) {
-                    // keep
-                } elseif (!in_array($anon, ['anonymous', 'elite'], true)) {
+                if (!str_starts_with($proto, 'socks')
+                    && !in_array($anon, ['anonymous', 'elite'], true)) {
                     continue;
                 }
                 $ip   = (string)($entry['ip'] ?? '');
                 $port = (string)($entry['port'] ?? '');
                 if ($ip === '' || $port === '') continue;
                 $norm = osm_proxy_normalize("$proto://$ip:$port");
-                if ($norm !== null) $candidates[$norm] = true;
+                if ($norm !== null) $candidates[$norm] = $src['rated'];
             }
         } else {
-            // monosans plain lists — one ip:port per line
             foreach (preg_split('/\r?\n/', trim($raw)) ?: [] as $line) {
-                $line = trim(explode(';', trim($line))[0]);
-                if ($line === '' || !str_contains($line, ':')) continue;
-                $scheme = str_contains($srcUrl, 'socks5') ? 'socks5' : 'http';
-                $norm   = osm_proxy_normalize("$scheme://$line");
-                if ($norm !== null) $candidates[$norm] = true;
+                // plain lists are one ip:port per line, but tolerate stray
+                // annotations by extracting the first ip:port on the line
+                if (!preg_match('/\b(\d{1,3}(?:\.\d{1,3}){3}:\d{2,5})\b/', $line, $m)) continue;
+                $norm = osm_proxy_normalize($src['proto'] . '://' . $m[1]);
+                if ($norm !== null) {
+                    // a URL seen in a rated source stays rated even if another
+                    // source also lists it unrated
+                    $candidates[$norm] = ($candidates[$norm] ?? false) || $src['rated'];
+                }
             }
         }
     }
 
     if (!$candidates) return [];
-    $candidates = array_keys($candidates);
-    shuffle($candidates); // lists are ordered; random slice spreads the load
-    $toTest = array_slice($candidates, 0, $max_test);
+    $all = array_keys($candidates);
+    shuffle($all); // lists are ordered; random slice spreads the load
+    $toTest = array_slice($all, 0, $max_test);
 
-    // Probe against a real OSM tile so we know the proxy works for this use.
+    // Round 1: functional + latency probe against a real OSM tile.
     $probeUrl = 'https://a.tile.openstreetmap.org/13/4051/2749.png';
+    $results  = proxy_multi_probe($toTest, $probeUrl, $timeout_s, $timeout_s);
+
+    $working = [];
+    foreach ($results as $pxUrl => [$code, $ms]) {
+        if ($code >= 200 && $code < 300 && $ms < 3000) {
+            $working[$pxUrl] = ['url' => $pxUrl, 'latency_ms' => $ms];
+        }
+    }
+    if (!$working) return [];
+
+    // Round 2: live anonymity verification for unrated HTTP proxies.
+    $unrated = array_values(array_filter($working, fn($p) => $candidates[$p['url']] === false
+        && str_starts_with($p['url'], 'http://')));
+    if ($unrated) {
+        $ourIp = proxy_public_ip();
+        if ($ourIp === null) {
+            // Cannot verify anonymity — maximum security means drop them all.
+            $working = array_values(array_filter($working, fn($p) => $candidates[$p['url']] !== false
+                || !str_starts_with($p['url'], 'http://')));
+        } else {
+            $judged = [];
+            foreach (array_chunk($unrated, 50) as $chunk) {
+                $urls     = array_column($chunk, 'url');
+                $judgeRes = proxy_multi_probe($urls, PROXY_ANONYMITY_JUDGES[0], $timeout_s, $timeout_s, false);
+                foreach ($urls as $pxUrl) {
+                    [$code, ] = $judgeRes[$pxUrl] ?? [0, 0];
+                    $judged[$pxUrl] = $code >= 200 && $code < 300 && proxy_judge_anonymous($pxUrl, $ourIp);
+                }
+            }
+            $working = array_values(array_filter($working, fn($p) =>
+                $candidates[$p['url']] !== false
+                || !str_starts_with($p['url'], 'http://')
+                || ($judged[$p['url']] ?? false)));
+        }
+    }
+
+    usort($working, fn($a, $b) => $a['latency_ms'] <=> $b['latency_ms']);
+    return array_values($working);
+}
+
+// Run a batch of GETs through different proxies in parallel.
+// Returns [proxyUrl => [httpCode, totalMs]]. $head controls HEAD vs GET.
+function proxy_multi_probe(array $proxies, string $url, int $timeout_s, int $connect_s, bool $head = true): array {
     $mh = curl_multi_init();
     /** @var CurlHandle[] $handles */
     $handles = [];
-    foreach ($toTest as $pxUrl) {
-        $ch = curl_init($probeUrl);
+    foreach ($proxies as $pxUrl) {
+        $ch = curl_init($url);
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_PROXY          => $pxUrl,
             CURLOPT_TIMEOUT        => $timeout_s,
-            CURLOPT_CONNECTTIMEOUT => $timeout_s,
+            CURLOPT_CONNECTTIMEOUT => $connect_s,
             CURLOPT_USERAGENT      => 'DeadDropMGMT/1.0',
-            CURLOPT_NOBODY         => true,
+            CURLOPT_NOBODY         => $head,
         ]);
         curl_multi_add_handle($mh, $ch);
         $handles[$pxUrl] = $ch;
@@ -250,17 +338,14 @@ function proxy_discover(int $max_test = 300, int $timeout_s = 4): array {
         }
     } while ($active && $status === CURLM_OK);
 
-    $working = [];
+    $out = [];
     foreach ($handles as $pxUrl => $ch) {
         $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
         $ms   = (int)round((float)curl_getinfo($ch, CURLINFO_TOTAL_TIME) * 1000);
-        if ($code >= 200 && $code < 300) {
-            $working[] = ['url' => $pxUrl, 'latency_ms' => $ms];
-        }
+        $out[$pxUrl] = [$code, $ms];
         curl_multi_remove_handle($mh, $ch);
         curl_close($ch);
     }
     curl_multi_close($mh);
-
-    return $working;
+    return $out;
 }
