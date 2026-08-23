@@ -162,6 +162,7 @@ return [
 
     'admin.proxies.section'       => 'Pool de proxys pour OpenStreetMap',
     'admin.osm_monit.via'    => 'Requête OSM via',
+    'admin.osm_monit.failover' => 'bascule ×{n}',
     'admin.osm_monit.failed' => 'La dernière requête OSM a échoué - vérifiez le pool de proxys dans les paramètres.',
     'admin.proxies.enabled_empty' => 'Le routage est activé mais le pool est vide - les tuiles et la recherche d\'adresses échoueront tant que vous n\'aurez pas ajouté ou découvert des proxys.',
     'admin.proxies.hint'          => "Lorsque l'interrupteur ci-dessus est activé, les demandes de tuiles et d'adresses de ce panneau passent par l'un de ces proxys au lieu d'être envoyées directement depuis ce serveur - OSM ne voit jamais votre vraie IP. Mode fail-closed : si tous les proxys tombent, les fonctions de carte cessent de fonctionner plutôt que de fuiter l'IP. La découverte automatique teste des listes publiques orientées anonymat (HTTP notés pour l\'anonymat et SOCKS anonymes par conception) et garde celles qui répondent réellement.",

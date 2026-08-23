@@ -162,6 +162,7 @@ Schritt 3: Unter der Bank nachsehen',
 
     'admin.proxies.section'       => 'Proxy-Pool für OpenStreetMap',
     'admin.osm_monit.via'    => 'OSM-Anfrage über',
+    'admin.osm_monit.failover' => 'Failover ×{n}',
     'admin.osm_monit.failed' => 'Letzte OSM-Anfrage fehlgeschlagen - Proxy-Pool in den Einstellungen prüfen.',
     'admin.proxies.enabled_empty' => 'Routing ist aktiv, aber der Pool ist leer - Kacheln und Adresssuche schlagen fehl, bis Sie Proxys hinzufügen oder suchen.',
     'admin.proxies.hint'          => 'Ist der Schalter oben aktiv, werden Kachel- und Adressabfragen dieses Admin-Panels über einen dieser Proxys gesendet statt direkt von diesem Server - OSM sieht Ihre echte IP nie. Fail-closed: Sind alle Proxys ausgefallen, funktionieren die Kartenfunktionen nicht, statt die IP preiszugeben. Die automatische Suche prüft öffentliche Anonymitätslisten (HTTP mit Anonymitätsrating und von Natur aus anonyme SOCKS-Proxys) und behält nur Proxys, die wirklich antworten.',

@@ -116,7 +116,7 @@ function osm_fetch(string $url): string|false {
     $pool = osm_proxy_pool();
     if (!$pool) {
         if (session_status() === PHP_SESSION_ACTIVE) {
-            $_SESSION['osm_last_via'] = ['via' => null, 'failed' => true];
+            $_SESSION['osm_last_via'] = ['via' => null, 'failed' => true, 'attempts' => 0, 'skipped' => []];
         }
         return false; // enabled with an empty pool would mean going direct = leak
     }
@@ -137,20 +137,30 @@ function osm_fetch(string $url): string|false {
         return ((int)($a['latency_ms'] ?? PHP_INT_MAX)) <=> ((int)($b['latency_ms'] ?? PHP_INT_MAX));
     });
 
+    $attempts = 0;
+    $skipped  = []; // proxies that timed out / failed before the winner
     foreach ($pool as $px) {
+        $attempts++;
         $t0     = microtime(true);
         $result = osm_fetch_via($url, $px['url'], 3);
         $ms     = (int)round((microtime(true) - $t0) * 1000);
         osm_proxy_mark((int)$px['id'], $result !== false, $ms);
         if ($result !== false) {
             if (session_status() === PHP_SESSION_ACTIVE) {
-                $_SESSION['osm_last_via'] = ['via' => $px['url'], 'latency_ms' => $ms, 'failed' => false];
+                $_SESSION['osm_last_via'] = [
+                    'via'        => $px['url'],
+                    'latency_ms' => $ms,
+                    'failed'     => false,
+                    'attempts'   => $attempts,
+                    'skipped'    => $skipped,
+                ];
             }
             return $result;
         }
+        $skipped[] = $px['url'];
     }
     if (session_status() === PHP_SESSION_ACTIVE) {
-        $_SESSION['osm_last_via'] = ['via' => null, 'failed' => true];
+        $_SESSION['osm_last_via'] = ['via' => null, 'failed' => true, 'attempts' => $attempts, 'skipped' => $skipped];
     }
     return false;
 }
