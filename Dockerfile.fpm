@@ -15,11 +15,11 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
-COPY . /usr/src/deaddrop
+COPY . /var/www/html
 
 RUN chmod +x /usr/local/bin/entrypoint.sh \
  # pristine config template outside the docroot for first-boot rendering
- && cp /usr/src/deaddrop/config.php.example /usr/local/share/config.php.template \
+ && cp /var/www/html/config.php.example /usr/local/share/config.php.template \
  && mkdir -p /var/www/html/logs /var/www/html/uploads /var/www/html/cache/osm_tiles /config \
  && chown -R www-data:www-data /var/www/html/logs /var/www/html/uploads /var/www/html/cache /config
 

@@ -21,11 +21,11 @@ RUN apt-get update \
 COPY docker/apache.conf /etc/apache2/conf-available/deaddrop.conf
 RUN a2enconf deaddrop
 
-COPY . /usr/src/deaddrop
+COPY . /var/www/html
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh \
- # keep a pristine template outside the docroot for first-boot rendering
- && cp /usr/src/deaddrop/config.php.example /usr/local/share/config.php.template \
+ # pristine config template outside the docroot for first-boot rendering
+ && cp /var/www/html/config.php.example /usr/local/share/config.php.template \
  # writable runtime dirs; real content comes from volumes at runtime
  && mkdir -p /var/www/html/logs /var/www/html/uploads /var/www/html/cache/osm_tiles /config \
  && chown -R www-data:www-data /var/www/html/logs /var/www/html/uploads /var/www/html/cache /config
