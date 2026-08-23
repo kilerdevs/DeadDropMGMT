@@ -54,6 +54,7 @@ The author provides this software **"as is," without warranty of any kind**, and
 
 ### Admin dashboard
 - Role-based access: **Owner** (full control) and **Courier** (own orders only)
+- Passwordless first login: accounts can be created without a password — the login form hides the password field for such usernames, and an empty-password sign-in opens a set-password step before the session starts (5-minute window, race-guarded against double claims, audited). Presetting a password at creation still works; until an unclaimed account is claimed, whoever knows the username can claim it first, so hand credentials over promptly or preset a password when that's unacceptable
 - Create orders with an interactive Leaflet map picker
 - Auto-generated memorable pickup passphrases (4 words + digit + symbol, ~40 bits)
 - Extend / close / delete orders with CSRF-protected actions
@@ -204,7 +205,7 @@ docker compose -f docker-compose.nginx.yml up -d --build
 docker compose -f docker-compose.caddy.yml up -d --build
 ```
 
-The app is then on http://localhost:8080 (`APP_PORT` in `.env` to change).
+The app is then on http://localhost:2137 (`APP_PORT` in `.env` to change).
 Overrides live in `.env` (see `.env.example`) — DB password, port, AES key.
 **Back up the `app-config` volume** if you let the key auto-generate: losing it
 means losing all encrypted location data. TLS is never terminated by the app —
