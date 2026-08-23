@@ -159,6 +159,8 @@ return [
     'admin.settings.label.osm_proxy_enabled' => 'Enrutar el tráfico de OSM mediante proxies',
 
     'admin.proxies.section'       => 'Grupo de proxies para OpenStreetMap',
+    'admin.osm_monit.via'    => 'Petición OSM vía',
+    'admin.osm_monit.failed' => 'La última petición OSM falló: revisa el grupo de proxies en la configuración.',
     'admin.proxies.enabled_empty' => 'El enrutamiento está activado pero el grupo está vacío: las teselas y la búsqueda de direcciones fallarán hasta que añada o descubra proxies.',
     'admin.proxies.hint'          => 'Cuando el interruptor de arriba está activado, las peticiones de teselas y direcciones de este panel se envían a través de uno de estos proxies en lugar de directamente desde este servidor: OSM nunca verá su IP real. Fail-closed: si todos los proxies fallan, las funciones del mapa dejan de funcionar en lugar de filtrar la IP. El descubrimiento automático sondea listas públicas centradas en el anonimato (HTTP con clasificación de anonimato y SOCKS anónimos por diseño) y conserva las que realmente responden.',
     'admin.proxies.empty'         => 'No hay proxies configurados.',

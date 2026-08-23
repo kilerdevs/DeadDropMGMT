@@ -159,6 +159,8 @@ return [
     'admin.settings.label.osm_proxy_enabled' => 'Route OSM traffic through proxies',
 
     'admin.proxies.section'       => 'OpenStreetMap proxy pool',
+    'admin.osm_monit.via'    => 'OSM request via',
+    'admin.osm_monit.failed' => 'Last OSM request failed - check the proxy pool in settings.',
     'admin.proxies.enabled_empty' => 'Routing is on but the pool is empty - map tiles and address search will fail until you add or discover proxies.',
     'admin.proxies.hint'          => 'When the toggle above is on, tile and address lookups from this admin panel are sent through one of these proxies instead of directly from this server - OSM never sees your real IP. Fail-closed: if every proxy is down, map features stop working rather than leak. Auto-discovery probes public anonymity-focused lists (anonymity-rated HTTP and header-anonymous SOCKS) and keeps the ones that actually respond.',
     'admin.proxies.empty'         => 'No proxies configured.',

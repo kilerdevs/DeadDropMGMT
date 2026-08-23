@@ -1143,6 +1143,36 @@ h1 {
     min-width: 0;
 }
 
+/* ── OSM proxy monit (map pages) ─────────────────────────────────────────── */
+
+.osm-monit {
+    position:        fixed;
+    right:           16px;
+    bottom:          16px;
+    z-index:         5000;
+    display:         flex;
+    align-items:     center;
+    gap:             8px;
+    background:      var(--surface, #111);
+    border:          1px solid var(--border, #333);
+    padding:         6px 12px;
+    font-family:     'IBM Plex Mono', monospace;
+    font-size:       10px;
+    letter-spacing:  0.05em;
+    color:           var(--text-muted, #999);
+    word-break:      break-all;
+    max-width:       60vw;
+    pointer-events:  none;
+}
+.osm-monit-dot {
+    flex:            none;
+    width:           7px;
+    height:          7px;
+    border-radius:   50%;
+    background:      #4caf50;
+}
+.osm-monit--fail .osm-monit-dot { background: #f44336; }
+
 .settings-group { margin-bottom: 0; }
 
 .settings-group-label {

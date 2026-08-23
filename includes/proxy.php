@@ -106,6 +106,8 @@ function osm_proxy_mark(int $id, bool $ok, ?int $latency_ms = null): void {
 // Fetch an OSM resource honouring the osm_proxy_enabled setting. Tries each
 // pool member in random order; gives up (returns false) if all fail while
 // routing is enabled — that is the point of fail-closed.
+// Records which proxy served the request in the session so the admin UI
+// can show it (see admin/osm_monit.php).
 function osm_fetch(string $url): string|false {
     if (!osm_proxy_enabled()) {
         return osm_fetch_via($url, null);
@@ -113,6 +115,9 @@ function osm_fetch(string $url): string|false {
 
     $pool = osm_proxy_pool();
     if (!$pool) {
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            $_SESSION['osm_last_via'] = ['via' => null, 'failed' => true];
+        }
         return false; // enabled with an empty pool would mean going direct = leak
     }
 
@@ -123,8 +128,14 @@ function osm_fetch(string $url): string|false {
         $ms     = (int)round((microtime(true) - $t0) * 1000);
         osm_proxy_mark((int)$px['id'], $result !== false, $ms);
         if ($result !== false) {
+            if (session_status() === PHP_SESSION_ACTIVE) {
+                $_SESSION['osm_last_via'] = ['via' => $px['url'], 'latency_ms' => $ms, 'failed' => false];
+            }
             return $result;
         }
+    }
+    if (session_status() === PHP_SESSION_ACTIVE) {
+        $_SESSION['osm_last_via'] = ['via' => null, 'failed' => true];
     }
     return false;
 }

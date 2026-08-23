@@ -33,6 +33,7 @@ $csrf = generate_csrf();
 
     <main class="main">
     <?php require __DIR__ . '/totp_banner.php'; ?>
+    <?php require __DIR__ . '/osm_monit.php'; ?>
         <div class="page-heading"><?= t('admin.new_order.title') ?></div>
 
         <?php if ($flash): ?>
