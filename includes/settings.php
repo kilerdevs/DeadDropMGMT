@@ -74,6 +74,13 @@ function compliance_note_enabled(): bool {
     return get_setting('compliance_note_enabled', '0') === '1';
 }
 
+// Route admin-panel OpenStreetMap traffic (tiles, geocoding) through the
+// osm_proxies pool. Off by default — with no proxies configured it would
+// only add failure modes.
+function osm_proxy_enabled(): bool {
+    return get_setting('osm_proxy_enabled', '0') === '1';
+}
+
 function extend_hours_options(): array {
     $raw = get_setting('extend_hours_options', '24,48,72');
     $opts = [];

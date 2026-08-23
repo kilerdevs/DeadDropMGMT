@@ -69,6 +69,9 @@ try {
     $analytics_orders = 0;
 }
 
+require_once dirname(__DIR__) . '/includes/proxy.php';
+$proxy_pool = osm_proxy_pool();
+
 $groups = [
     'service' => [
         'site_name'    => ['type' => 'text', 'placeholder' => 'MGT'],
@@ -94,6 +97,9 @@ $groups = [
     ],
     'analytics' => [
         'analytics_enabled' => ['type' => 'toggle'],
+    ],
+    'network' => [
+        'osm_proxy_enabled' => ['type' => 'toggle'],
     ],
     'diagnostics' => [
         'show_error_log' => ['type' => 'toggle'],
@@ -220,6 +226,47 @@ function s_label(array $s, string $key): string {
                 </div>
                 <?php endforeach; ?>
 
+                <!-- ── OSM proxy pool ─────────────────────────────────────── -->
+                <div class="settings-group">
+                    <div class="settings-group-label"><?= htmlspecialchars(t('admin.proxies.section'), ENT_QUOTES, 'UTF-8') ?></div>
+                    <div class="proxies-hint"><?= t('admin.proxies.hint') ?></div>
+
+                    <?php if (!$proxy_pool): ?>
+                    <div class="log-empty"><?= t('admin.proxies.empty') ?></div>
+                    <?php else: ?>
+                    <table class="proxies-table">
+                        <thead>
+                        <tr>
+                            <th><?= t('admin.proxies.th.proxy') ?></th>
+                            <th><?= t('admin.proxies.th.source') ?></th>
+                            <th><?= t('admin.proxies.th.status') ?></th>
+                            <th><?= t('admin.proxies.th.latency') ?></th>
+                            <th></th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        <?php foreach ($proxy_pool as $px): ?>
+                        <tr data-id="<?= (int)$px['id'] ?>">
+                            <td class="px-url"><?= htmlspecialchars($px['url'], ENT_QUOTES, 'UTF-8') ?></td>
+                            <td><?= htmlspecialchars($px['source'], ENT_QUOTES, 'UTF-8') ?></td>
+                            <td><span class="px-status px-status--<?= htmlspecialchars($px['last_status'], ENT_QUOTES, 'UTF-8') ?>"><?= t('admin.proxies.status.' . $px['last_status']) ?></span></td>
+                            <td><?= $px['latency_ms'] !== null ? (int)$px['latency_ms'] . ' ms' : '&mdash;' ?></td>
+                            <td class="px-actions"><button type="button" class="action-btn action-btn--danger px-del"><?= t('admin.proxies.delete_button') ?></button></td>
+                        </tr>
+                        <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                    <?php endif; ?>
+
+                    <div class="proxies-toolbar">
+                        <input type="text" id="px-url" autocomplete="off"
+                               placeholder="<?= htmlspecialchars(t('admin.proxies.add_placeholder'), ENT_QUOTES, 'UTF-8') ?>"
+                               aria-label="<?= htmlspecialchars(t('admin.proxies.add_placeholder'), ENT_QUOTES, 'UTF-8') ?>">
+                        <button type="button" id="px-add" class="action-btn"><?= t('admin.proxies.add_button') ?></button>
+                        <button type="button" id="px-discover" class="action-btn"><?= t('admin.proxies.discover_button') ?></button>
+                    </div>
+                </div>
+
             </div>
         </div>
 
@@ -279,6 +326,12 @@ function s_label(array $s, string $key): string {
         'enable_analytics_line1'    => t('admin.settings.enable_analytics_confirm_line1'),
         'enable_analytics_line2'    => t('admin.settings.enable_analytics_confirm_line2'),
         'enable_analytics_question' => t('admin.settings.enable_analytics_confirm_question'),
+        'px_added'          => t('admin.proxies.js.added'),
+        'px_discovering'    => t('admin.proxies.js.discovering'),
+        'px_discovered'     => t('admin.proxies.js.discovered'),
+        'px_none_working'   => t('admin.proxies.js.none_working'),
+        'save_error'        => t('admin.edit.js.save_error'),
+        'connection_error'  => t('admin.edit.js.connection_error'),
     ]) ?>;
 
     // Confirm destructive form submissions
@@ -410,6 +463,64 @@ function s_label(array $s, string $key): string {
         inp.addEventListener('blur', function () {
             clearTimeout(timers[inp.name]);
             saveSetting(inp.name, inp.value);
+        });
+    });
+
+    // ── OSM proxy pool management ─────────────────────────────────────────────
+    var pxUrl  = document.getElementById('px-url');
+    var pxAdd  = document.getElementById('px-add');
+    var pxDisc = document.getElementById('px-discover');
+
+    function pxPost(action, extra) {
+        var fd = new FormData();
+        fd.append('csrf_token', csrf);
+        fd.append('action', action);
+        if (extra) Object.keys(extra).forEach(function (k) { fd.append(k, extra[k]); });
+        return fetch('/admin/proxy_action.php', { method: 'POST', body: fd })
+            .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+            .catch(function () { return { ok: false, j: { error: I.connection_error } }; });
+    }
+
+    if (pxAdd && pxUrl) {
+        pxAdd.addEventListener('click', function () {
+            pxAdd.disabled = true;
+            pxPost('add', { url: pxUrl.value }).then(function (res) {
+                pxAdd.disabled = false;
+                if (res.ok && res.j.ok) { showPopup(I.px_added, false); setTimeout(function () { location.reload(); }, 600); }
+                else showPopup(res.j.error || I.save_error, true);
+            });
+        });
+    }
+
+    if (pxDisc) {
+        pxDisc.addEventListener('click', function () {
+            pxDisc.disabled = true;
+            var orig = pxDisc.textContent;
+            pxDisc.textContent = I.px_discovering;
+            // Discovery probes dozens of proxies — this legitimately takes a while.
+            pxPost('discover').then(function (res) {
+                pxDisc.disabled = false;
+                pxDisc.textContent = orig;
+                if (res.ok && res.j.ok) {
+                    showPopup(res.j.working > 0
+                        ? I.px_discovered.replace('{n}', res.j.added)
+                        : I.px_none_working, res.j.working === 0);
+                    if (res.j.working > 0) setTimeout(function () { location.reload(); }, 1200);
+                } else {
+                    showPopup(res.j.error || I.save_error, true);
+                }
+            });
+        });
+    }
+
+    document.querySelectorAll('.px-del').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            var tr = btn.closest('tr');
+            btn.disabled = true;
+            pxPost('delete', { id: tr.dataset.id }).then(function (res) {
+                if (res.ok && res.j.ok) { tr.remove(); }
+                else { btn.disabled = false; showPopup(res.j.error || I.save_error, true); }
+            });
         });
     });
 })();

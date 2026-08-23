@@ -1091,6 +1091,58 @@ h1 {
 
 .settings-panel { max-width: 600px; }
 
+/* ── OSM proxy pool (settings page) ──────────────────────────────────────── */
+
+.proxies-hint {
+    font-size: 11px;
+    line-height: 1.6;
+    color: var(--text-muted);
+    margin-bottom: 16px;
+}
+
+.proxies-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+    margin-bottom: 18px;
+}
+.proxies-table th {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    text-align: left;
+    padding: 8px 10px 8px 0;
+    border-bottom: 1px solid var(--border);
+}
+.proxies-table td {
+    padding: 9px 10px 9px 0;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+}
+.proxies-table .px-url { word-break: break-all; }
+.proxies-table .px-actions { text-align: right; }
+
+.px-status {
+    font-size: 9px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+}
+.px-status--ok   { color: #4caf50; }
+.px-status--fail { color: #f44336; }
+.px-status--new  { color: var(--text-muted); }
+
+.proxies-toolbar {
+    display: flex;
+    gap: 10px;
+    align-items: stretch;
+}
+.proxies-toolbar input[type="text"] {
+    flex: 1;
+    min-width: 0;
+}
+
 .settings-group { margin-bottom: 0; }
 
 .settings-group-label {

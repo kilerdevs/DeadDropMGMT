@@ -99,7 +99,7 @@ The author provides this software **"as is," without warranty of any kind**, and
 | Direct file access | `includes/`, `config.php`, `logs/`, `cron/` blocked via `.htaccess` |
 | Cookie theft | `httponly`, `samesite=Strict`, `secure` (auto-enabled when HTTPS detected) |
 | Unaccountable writes | Every admin create/edit/delete/setting-change logged with actor, IP, timestamp |
-| Owner/courier IP exposure to third parties | Map tile and address-search requests from the admin panel are proxied server-side (`admin/tile_proxy.php`, `admin/geocode_proxy.php`) — neither an owner's nor a courier's real IP or search queries ever reach OpenStreetMap, only this server's does |
+| Owner/courier IP exposure to third parties | Map tile and address-search requests from the admin panel are proxied server-side (`admin/tile_proxy.php`, `admin/geocode_proxy.php`) — neither an owner's nor a courier's real IP or search queries ever reach OpenStreetMap, only this server's does. Optionally (Settings → Network) those outbound requests are routed through a pool of HTTP proxies the owner configures — manually or via auto-discovery of public anonymity-focused proxies — so even this server's IP stays hidden from OSM; routing is fail-closed (all proxies dead = map features stop, never a silent direct fallback) |
 
 **Not included (configure externally):** TLS and WAF.
 
@@ -131,6 +131,7 @@ The admin map picker (`admin/new_order.php`, `admin/edit.php`) never talks to Op
 |---|---|---|---|
 | OpenStreetMap embed (`www.openstreetmap.org`) | Public location-reveal page | Embedded `<iframe>` map showing the pickup pin | Rendered server-side per arbitrary coordinate on request — there's nothing static to bundle |
 | Google Maps / Apple Maps | Public location-reveal page | Plain outbound `<a href>` links | Not a resource load at all — nothing is fetched or embedded, so there's nothing to bundle. Clicking just opens the respective site in a new tab |
+| Proxifly free-proxy-list (`raw.githubusercontent.com`) | Admin → Settings → proxy pool, only when the owner clicks **Auto-discover** | Source of candidate anonymity-focused public proxies for the optional OSM proxy routing | A live, regularly-refreshed community list — bundling it would be stale within days |
 
 These are exactly the hosts allowlisted in the public CSP (`includes/auth.php`) — nothing else can load. **Worth knowing:** the embedded map iframe sends the *customer's* IP to OSM when they view a delivered order's location — that's a request their own browser makes, and is in some tension with the "no tracking" claim shown on the public pages (that claim is about *this app* not tracking recipients, not about the third party it embeds a map from). If your threat model requires zero third-party contact even for that, the only remaining option is standing up your own tile server and pointing the public page at a self-hosted map instead of the OSM embed.
 
@@ -141,39 +142,56 @@ These are exactly the hosts allowlisted in the public CSP (`includes/auth.php`) 
 ```
 /
 ├── index.php               Public order lookup & location reveal
-├── receive.php              Delivery confirmation endpoint
-├── config.php               DB credentials, AES key, admin hash  ← never commit
-├── setup.sql                 Full database schema — one file, fresh install or upgrade from any version
-├── .htaccess                  Blocks config, includes/, logs/ from web
-├── fonts/                      Self-hosted IBM Plex Mono (replaces Google Fonts)
-│
+├── receive.php             Delivery confirmation endpoint
+├── public.js, gallery.js   Public-facing JS (lookup flow, photo gallery)
+├── style.css               Public CSS
+├── error/                  Localized error pages (403/404/500/503)
+├── config.php              DB credentials, AES key, admin hash  <- never commit
+├── setup.sql               Full database schema - one file, fresh install or upgrade from any version
+├── .htaccess               Blocks config, includes/, logs/ from web
+├── fonts/                  Self-hosted IBM Plex Mono (replaces Google Fonts)
+|
 ├── admin/
-│   ├── index.php             Login wall
-│   ├── login.php              Credential check → 2FA if enabled
-│   ├── verify_2fa.php          TOTP code prompt (login step 2)
-│   ├── 2fa.php                 Self-service 2FA enroll / disable (QR + manual)
-│   ├── orders.php             Order list with courier filtering
-│   ├── new_order.php          Order creation form (Leaflet map picker)
-│   ├── edit.php                Edit order — status, location, password, photos
-│   ├── users.php               Courier management (owner only)
-│   ├── audit_log.php            Write-action audit trail (owner only)
-│   ├── analytics.php           Event log viewer + CSV download
-│   ├── settings.php             Configurable site parameters
-│   ├── panic.php                Emergency mode (owner only)
-│   └── vendor/                  Leaflet + QRCode.js — vendored locally, no CDN
-│
-├── includes/                Blocked from web via .htaccess
-│   ├── db.php                PDO singleton
-│   ├── auth.php                Session, CSRF, rate limiting, security headers
-│   ├── crypto.php               AES-256-CBC encrypt/decrypt, bcrypt, passphrase generator
-│   ├── totp.php                  TOTP (RFC 6238) generate/verify, base32, otpauth:// URI
-│   ├── audit.php                 Write-action audit logger
-│   ├── settings.php              Settings cache (one DB query per page load)
-│   ├── analytics.php              Event logger
-│   └── cleanup.php                Expired order deletion (pseudo-cron + real cron)
-│
+|   ├── index.php           Login wall
+|   ├── login.php           Credential check -> 2FA if enabled
+|   ├── verify_2fa.php      TOTP code prompt (login step 2)
+|   ├── set_lang.php        Per-account UI language switcher (AJAX)
+|   ├── 2fa.php             Self-service 2FA enroll / disable (QR + manual)
+|   ├── orders.php          Order list with courier filtering
+|   ├── new_order.php       Order creation form (Leaflet map picker)
+|   ├── create.php          Order creation handler
+|   ├── edit.php            Edit order - status, location, password, photos
+|   ├── delete.php, order_close.php, order_remove.php   Order removal variants
+|   ├── extend.php, mark_delivered.php, photo_delete.php   Order sub-actions
+|   ├── save_setting.php, download_log.php   Settings auto-save + log export
+|   ├── proxy_action.php    OSM proxy pool management (add/delete/discover)
+|   ├── tile_proxy.php      Server-side OSM tile fetch (optional proxy routing)
+|   ├── geocode_proxy.php   Server-side Nominatim address search
+|   ├── users.php, user_action.php   Courier management (owner only)
+|   ├── audit_log.php       Write-action audit trail (owner only)
+|   ├── analytics.php       Event log viewer + CSV download
+|   ├── panic.php           Emergency mode (owner only)
+|   ├── settings.php        Configurable site parameters
+|   ├── sidebar.php, totp_banner.php   Shared layout partials
+|   ├── admin.js, style.css Panel JS + CSS
+|   └── vendor/             Leaflet + QRCode.js - vendored locally, no CDN
+|
+├── includes/               Blocked from web via .htaccess
+|   ├── db.php              PDO singleton
+|   ├── auth.php            Session, CSRF, rate limiting, security headers
+|   ├── crypto.php          AES-256-CBC encrypt/decrypt, bcrypt, passphrase generator
+|   ├── totp.php            TOTP (RFC 6238) generate/verify, base32, otpauth:// URI
+|   ├── audit.php           Write-action audit logger
+|   ├── settings.php        Settings cache (one DB query per page load)
+|   ├── i18n.php            Translation engine (8 languages, CLDR plurals)
+|   ├── proxy.php           OSM outbound proxy pool + free-proxy discovery
+|   ├── analytics.php       Event logger
+|   ├── lang/               Translation files: pl, en, de, ru, fr, es, uk, it
+|   └── cleanup.php         Expired order deletion (pseudo-cron + real cron)
+|
+├── logs/, uploads/, cache/  Runtime dirs (error log, photos, OSM tile cache)
 └── cron/
-    └── cleanup.php             Server-side cron endpoint (call hourly)
+    └── cleanup.php         Server-side cron endpoint (call hourly)
 ```
 
 ---

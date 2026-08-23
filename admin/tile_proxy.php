@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 require_once dirname(__DIR__) . '/includes/auth.php';
+require_once dirname(__DIR__) . '/includes/proxy.php';
 require_admin();
 
 $z = filter_input(INPUT_GET, 'z', FILTER_VALIDATE_INT);
@@ -28,16 +29,11 @@ if (is_file($cacheFile) && (time() - filemtime($cacheFile)) < $cacheTtl) {
 $subdomain = ['a', 'b', 'c'][random_int(0, 2)];
 $url = "https://$subdomain.tile.openstreetmap.org/$z/$x/$y.png";
 
-$context = stream_context_create(['http' => [
-    'method'  => 'GET',
-    'header'  => "User-Agent: DeadDropMGMT/1.0 (admin panel tile proxy)\r\n",
-    'timeout' => 5,
-]]);
-
-$data = @file_get_contents($url, false, $context);
+$data = osm_fetch($url);
 if ($data === false) {
+    header('Content-Type: text/plain');
     http_response_code(502);
-    exit;
+    exit('tile fetch failed');
 }
 
 $dir = dirname($cacheFile);

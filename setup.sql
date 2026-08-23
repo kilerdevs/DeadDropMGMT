@@ -98,6 +98,23 @@ CREATE TABLE IF NOT EXISTS order_photos (
     INDEX idx_order_id (order_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- ── OSM proxy pool ────────────────────────────────────────────────────────────
+-- Optional outbound proxies for the admin panel's OpenStreetMap requests
+-- (tile_proxy.php / geocode_proxy.php). Empty table = direct connection.
+
+CREATE TABLE IF NOT EXISTS osm_proxies (
+    id           INT          AUTO_INCREMENT PRIMARY KEY,
+    url          VARCHAR(255) NOT NULL,
+    label        VARCHAR(128) NOT NULL DEFAULT '',
+    source       VARCHAR(16)  NOT NULL DEFAULT 'manual',
+    last_status  VARCHAR(16)  NOT NULL DEFAULT 'new',
+    latency_ms   INT                   DEFAULT NULL,
+    last_checked DATETIME              DEFAULT NULL,
+    created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    UNIQUE KEY uq_url (url)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- ── Event log ─────────────────────────────────────────────────────────────────
 -- event_type is VARCHAR (not ENUM) for forward compatibility.
 
@@ -167,6 +184,7 @@ INSERT INTO settings (key_name, value, label) VALUES
     ('require_delivered_reveal','1',       'Ukryj lokalizację gdy W PRZYGOTOWANIU'),
     ('analytics_enabled',       '1',       'Włącz analitykę'),
     ('compliance_note_enabled', '0',       'Pokaż notę o zgodności na stronach publicznych'),
+    ('osm_proxy_enabled',       '0',       'Przekieruj ruch OSM przez serwery proxy'),
     ('show_error_log',          '0',       'Pokaż log błędów w ustawieniach'),
     ('last_cleanup',            '0',       '')
 ON DUPLICATE KEY UPDATE label = VALUES(label);
