@@ -135,6 +135,21 @@ The admin map picker (`admin/new_order.php`, `admin/edit.php`) never talks to Op
 
 These are exactly the hosts allowlisted in the public CSP (`includes/auth.php`) — nothing else can load. **Worth knowing:** the embedded map iframe sends the *customer's* IP to OSM when they view a delivered order's location — that's a request their own browser makes, and is in some tension with the "no tracking" claim shown on the public pages (that claim is about *this app* not tracking recipients, not about the third party it embeds a map from). If your threat model requires zero third-party contact even for that, the only remaining option is standing up your own tile server and pointing the public page at a self-hosted map instead of the OSM embed.
 
+### Proxy auto-discovery sources (server-side, only on explicit owner action)
+
+All fetched from GitHub raw by the server (never the browser) when the owner clicks **Auto-discover** in Settings → proxy pool. Candidates are probed against a real OSM tile; HTTP proxies from unrated sources must additionally pass a live anonymity check (below). Sources, and what each contributes (`includes/proxy.php` is the single place these are configured):
+
+| Source | Repo | Provides | Anonymity metadata |
+|---|---|---|---|
+| Proxifly | `proxifly/free-proxy-list` | HTTP + SOCKS4/5 (structured JSON) | Yes — per-proxy rating; only anonymous/elite HTTP accepted |
+| monosans | `monosans/proxy-list` | HTTP, SOCKS4, SOCKS5 (hourly pre-checked) | No — HTTP entries treated as unrated, SOCKS anonymous by protocol |
+| TheSpeedX | `TheSpeedX/PROXY-LIST` | HTTP, SOCKS4, SOCKS5 (high volume) | No — HTTP entries treated as unrated |
+| roosterkid | `roosterkid/openproxylist` | HTTPS (CONNECT-capable HTTP), SOCKS5 (curated) | No — HTTP entries treated as unrated |
+
+**Anonymity judges.** HTTP proxies without a source-provided rating are verified live: the server fetches a header-echo page *through* the candidate proxy and rejects it if the echo contains the server's own IP in the origin or any forwarded header (`Via`, `X-Forwarded-For`, …). Judges used, in order: `httpbin.org/get`, `azenv.net/` (plain HTTP so the check also works through CONNECT-less proxies). If the server's own public IP cannot be determined first, all unrated HTTP candidates are dropped rather than trusted. SOCKS proxies are never header-injecting by protocol design and skip this check.
+
+**What this means for your server's exposure:** clicking Auto-discover makes your server's IP visible to GitHub (list fetch, direct — not proxied), to every candidate proxy probed, and to the judge services. OSM itself is only contacted through accepted proxies while routing is enabled.
+
 ---
 
 ## Project Structure
