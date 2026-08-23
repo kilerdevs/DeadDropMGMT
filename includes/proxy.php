@@ -104,10 +104,18 @@ function osm_proxy_mark(int $id, bool $ok, ?int $latency_ms = null): void {
 }
 
 // Fetch an OSM resource honouring the osm_proxy_enabled setting. Tries each
-// pool member in random order; gives up (returns false) if all fail while
+// pool member fastest-first; gives up (returns false) if all fail while
 // routing is enabled — that is the point of fail-closed.
-// Records which proxy served the request in the session so the admin UI
-// can show it (see admin/osm_monit.php).
+//
+// Session note: this function never touches $_SESSION directly. The caller
+// is expected to session_write_close() before invoking it (so a slow proxy
+// chain doesn't lock out every other admin page) and then call
+// osm_last_via_flush() afterwards, which re-opens the session just long
+// enough to record what happened for the admin badge.
+//
+// Bail-outs between attempts: an overall wall-clock budget (a big pool
+// must not churn for minutes) and a client-disconnect check, so a user who
+// navigated away stops generating further proxy attempts.
 function osm_fetch(string $url): string|false {
     if (!osm_proxy_enabled()) {
         return osm_fetch_via($url, null);
@@ -115,9 +123,7 @@ function osm_fetch(string $url): string|false {
 
     $pool = osm_proxy_pool();
     if (!$pool) {
-        if (session_status() === PHP_SESSION_ACTIVE) {
-            $_SESSION['osm_last_via'] = ['via' => null, 'failed' => true, 'attempts' => 0, 'skipped' => []];
-        }
+        osm_last_via_set(['via' => null, 'failed' => true, 'attempts' => 0, 'skipped' => []]);
         return false; // enabled with an empty pool would mean going direct = leak
     }
 
@@ -137,32 +143,63 @@ function osm_fetch(string $url): string|false {
         return ((int)($a['latency_ms'] ?? PHP_INT_MAX)) <=> ((int)($b['latency_ms'] ?? PHP_INT_MAX));
     });
 
+    $deadline = microtime(true) + 20.0; // whole-request budget across all attempts
     $attempts = 0;
     $skipped  = []; // proxies that timed out / failed before the winner
     foreach ($pool as $px) {
+        if (microtime(true) >= $deadline || connection_aborted()) {
+            break; // budget exhausted or client gone — stop burning the pool
+        }
         $attempts++;
         $t0     = microtime(true);
         $result = osm_fetch_via($url, $px['url'], 3);
         $ms     = (int)round((microtime(true) - $t0) * 1000);
         osm_proxy_mark((int)$px['id'], $result !== false, $ms);
         if ($result !== false) {
-            if (session_status() === PHP_SESSION_ACTIVE) {
-                $_SESSION['osm_last_via'] = [
-                    'via'        => $px['url'],
-                    'latency_ms' => $ms,
-                    'failed'     => false,
-                    'attempts'   => $attempts,
-                    'skipped'    => $skipped,
-                ];
-            }
+            osm_last_via_set([
+                'via'        => $px['url'],
+                'latency_ms' => $ms,
+                'failed'     => false,
+                'attempts'   => $attempts,
+                'skipped'    => $skipped,
+            ]);
             return $result;
         }
         $skipped[] = $px['url'];
     }
-    if (session_status() === PHP_SESSION_ACTIVE) {
-        $_SESSION['osm_last_via'] = ['via' => null, 'failed' => true, 'attempts' => $attempts, 'skipped' => $skipped];
-    }
+    osm_last_via_set(['via' => null, 'failed' => true, 'attempts' => $attempts, 'skipped' => $skipped]);
     return false;
+}
+
+// Shared storage for the staged badge info of the current request.
+function osm_last_via_stage(?array $info = null): ?array {
+    static $staged = null;
+    if ($info !== null) {
+        $staged = $info;
+    }
+    return $staged;
+}
+
+// Stash badge info for the current request; flushed to the session later by
+// osm_last_via_flush() once the caller has released the session lock.
+function osm_last_via_set(array $info): void {
+    osm_last_via_stage($info);
+}
+
+// Write the staged badge info to the session. Safe to call even when the
+// session was closed (or never started) — it re-opens the session briefly,
+// writes, and closes again so locks are held only for milliseconds.
+function osm_last_via_flush(): void {
+    $staged = osm_last_via_stage();
+    if ($staged === null) return;
+    osm_last_via_stage(null); // consume
+    if (session_status() !== PHP_SESSION_ACTIVE && !headers_sent()) {
+        session_start();
+    }
+    if (session_status() === PHP_SESSION_ACTIVE) {
+        $_SESSION['osm_last_via'] = $staged;
+        session_write_close();
+    }
 }
 
 // ── Discovery ────────────────────────────────────────────────────────────────
@@ -174,18 +211,18 @@ function osm_fetch(string $url): string|false {
 // SOCKS proxies are header-anonymous by protocol and always qualify.
 const PROXY_DISCOVERY_SOURCES = [
     // rated JSON with anonymity metadata
-    ['url' => 'https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/all/data.json', 'type' => 'proxifly', 'rated' => true],
+    ['name' => 'proxifly',   'url' => 'https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/all/data.json', 'type' => 'proxifly', 'rated' => true],
     // hourly pre-checked plain lists
-    ['url' => 'https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt',    'type' => 'plain', 'proto' => 'http',   'rated' => false],
-    ['url' => 'https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks4.txt',  'type' => 'plain', 'proto' => 'socks4', 'rated' => true],
-    ['url' => 'https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt',  'type' => 'plain', 'proto' => 'socks5', 'rated' => true],
+    ['name' => 'monosans',   'url' => 'https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt',    'type' => 'plain', 'proto' => 'http',   'rated' => false],
+    ['name' => 'monosans',   'url' => 'https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks4.txt',  'type' => 'plain', 'proto' => 'socks4', 'rated' => true],
+    ['name' => 'monosans',   'url' => 'https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt',  'type' => 'plain', 'proto' => 'socks5', 'rated' => true],
     // high-volume lists
-    ['url' => 'https://raw.githubusercontent.com/TheSpeedX/PROXY-LIST/master/http.txt',   'type' => 'plain', 'proto' => 'http',   'rated' => false],
-    ['url' => 'https://raw.githubusercontent.com/TheSpeedX/PROXY-LIST/master/socks4.txt', 'type' => 'plain', 'proto' => 'socks4', 'rated' => true],
-    ['url' => 'https://raw.githubusercontent.com/TheSpeedX/PROXY-LIST/master/socks5.txt', 'type' => 'plain', 'proto' => 'socks5', 'rated' => true],
+    ['name' => 'thespeedx',  'url' => 'https://raw.githubusercontent.com/TheSpeedX/PROXY-LIST/master/http.txt',   'type' => 'plain', 'proto' => 'http',   'rated' => false],
+    ['name' => 'thespeedx',  'url' => 'https://raw.githubusercontent.com/TheSpeedX/PROXY-LIST/master/socks4.txt', 'type' => 'plain', 'proto' => 'socks4', 'rated' => true],
+    ['name' => 'thespeedx',  'url' => 'https://raw.githubusercontent.com/TheSpeedX/PROXY-LIST/master/socks5.txt', 'type' => 'plain', 'proto' => 'socks5', 'rated' => true],
     // curated, regularly refreshed
-    ['url' => 'https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt',  'type' => 'plain', 'proto' => 'http',   'rated' => false],
-    ['url' => 'https://raw.githubusercontent.com/roosterkid/openproxylist/main/SOCKS5_RAW.txt', 'type' => 'plain', 'proto' => 'socks5', 'rated' => true],
+    ['name' => 'roosterkid', 'url' => 'https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt',  'type' => 'plain', 'proto' => 'http',   'rated' => false],
+    ['name' => 'roosterkid', 'url' => 'https://raw.githubusercontent.com/roosterkid/openproxylist/main/SOCKS5_RAW.txt', 'type' => 'plain', 'proto' => 'socks5', 'rated' => true],
 ];
 
 // Header-echo judge used to verify that an HTTP proxy does not leak our IP
@@ -233,13 +270,23 @@ function proxy_judge_anonymous(string $pxUrl, string $ourIp, int $timeout_s = 6)
 //      a live judge check proving our IP stays out of the request headers;
 //      SOCKS is header-anonymous by protocol and rated lists are trusted.
 function proxy_discover(int $max_test = 400, int $timeout_s = 4): array {
-    $candidates = []; // url => rated(bool)
+    $candidates = []; // url => ['rated' => bool, 'source' => list name]
 
     foreach (PROXY_DISCOVERY_SOURCES as $src) {
         $raw = @file_get_contents($src['url'], false, stream_context_create([
             'http' => ['timeout' => 10],
         ]));
         if ($raw === false) continue;
+
+        $record = function (string $norm) use ($src, &$candidates): void {
+            // first source wins, but a rated listing outranks an unrated one
+            if (!isset($candidates[$norm])) {
+                $candidates[$norm] = ['rated' => $src['rated'], 'source' => $src['name']];
+            } elseif ($src['rated'] && !$candidates[$norm]['rated']) {
+                $candidates[$norm]['rated'] = true;
+                $candidates[$norm]['source'] = $src['name'];
+            }
+        };
 
         if ($src['type'] === 'proxifly') {
             $list = json_decode($raw, true);
@@ -257,7 +304,7 @@ function proxy_discover(int $max_test = 400, int $timeout_s = 4): array {
                 $port = (string)($entry['port'] ?? '');
                 if ($ip === '' || $port === '') continue;
                 $norm = osm_proxy_normalize("$proto://$ip:$port");
-                if ($norm !== null) $candidates[$norm] = $src['rated'];
+                if ($norm !== null) $record($norm);
             }
         } else {
             foreach (preg_split('/\r?\n/', trim($raw)) ?: [] as $line) {
@@ -265,11 +312,7 @@ function proxy_discover(int $max_test = 400, int $timeout_s = 4): array {
                 // annotations by extracting the first ip:port on the line
                 if (!preg_match('/\b(\d{1,3}(?:\.\d{1,3}){3}:\d{2,5})\b/', $line, $m)) continue;
                 $norm = osm_proxy_normalize($src['proto'] . '://' . $m[1]);
-                if ($norm !== null) {
-                    // a URL seen in a rated source stays rated even if another
-                    // source also lists it unrated
-                    $candidates[$norm] = ($candidates[$norm] ?? false) || $src['rated'];
-                }
+                if ($norm !== null) $record($norm);
             }
         }
     }
@@ -286,7 +329,11 @@ function proxy_discover(int $max_test = 400, int $timeout_s = 4): array {
     $working = [];
     foreach ($results as $pxUrl => [$code, $ms]) {
         if ($code >= 200 && $code < 300 && $ms < 3000) {
-            $working[$pxUrl] = ['url' => $pxUrl, 'latency_ms' => $ms];
+            $working[$pxUrl] = [
+                'url'        => $pxUrl,
+                'latency_ms' => $ms,
+                'source'     => $candidates[$pxUrl]['source'],
+            ];
         }
     }
     if (!$working) return [];

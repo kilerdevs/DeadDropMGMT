@@ -4,6 +4,12 @@ require_once dirname(__DIR__) . '/includes/auth.php';
 require_once dirname(__DIR__) . '/includes/proxy.php';
 require_admin();
 
+// Release the session lock immediately — a slow proxy chain must not lock
+// out every other admin page the user tries to open meanwhile. The badge
+// info is staged by osm_fetch and written back at the end via
+// osm_last_via_flush(), which re-opens the session only for milliseconds.
+session_write_close();
+
 $z = filter_input(INPUT_GET, 'z', FILTER_VALIDATE_INT);
 $x = filter_input(INPUT_GET, 'x', FILTER_VALIDATE_INT);
 $y = filter_input(INPUT_GET, 'y', FILTER_VALIDATE_INT);
@@ -30,6 +36,10 @@ $subdomain = ['a', 'b', 'c'][random_int(0, 2)];
 $url = "https://$subdomain.tile.openstreetmap.org/$z/$x/$y.png";
 
 $data = osm_fetch($url);
+
+// Record which proxy served the request (re-opens session briefly).
+osm_last_via_flush();
+
 if ($data === false) {
     header('Content-Type: text/plain');
     http_response_code(502);

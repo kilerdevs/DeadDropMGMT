@@ -106,7 +106,7 @@ CREATE TABLE IF NOT EXISTS osm_proxies (
     id           INT          AUTO_INCREMENT PRIMARY KEY,
     url          VARCHAR(255) NOT NULL,
     label        VARCHAR(128) NOT NULL DEFAULT '',
-    source       VARCHAR(16)  NOT NULL DEFAULT 'manual',
+    source       VARCHAR(64)  NOT NULL DEFAULT 'manual',
     last_status  VARCHAR(16)  NOT NULL DEFAULT 'new',
     latency_ms   INT                   DEFAULT NULL,
     last_checked DATETIME              DEFAULT NULL,
@@ -114,6 +114,22 @@ CREATE TABLE IF NOT EXISTS osm_proxies (
 
     UNIQUE KEY uq_url (url)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Older installs created source as VARCHAR(16) ('manual'/'discovered' only);
+-- widen it so discovery can record the actual list a proxy came from.
+SET @src_len = (
+    SELECT CHARACTER_MAXIMUM_LENGTH FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME   = 'osm_proxies'
+      AND COLUMN_NAME  = 'source'
+);
+SET @src_sql = IF(@src_len IS NOT NULL AND @src_len < 64,
+    'ALTER TABLE osm_proxies MODIFY source VARCHAR(64) NOT NULL DEFAULT ''manual''',
+    'SELECT 1'
+);
+PREPARE src_stmt FROM @src_sql;
+EXECUTE src_stmt;
+DEALLOCATE PREPARE src_stmt;
 
 -- ── Event log ─────────────────────────────────────────────────────────────────
 -- event_type is VARCHAR (not ENUM) for forward compatibility.

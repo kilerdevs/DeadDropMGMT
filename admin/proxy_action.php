@@ -86,12 +86,12 @@ switch ($action) {
             $db = get_db();
             $ins = $db->prepare(
                 'INSERT INTO osm_proxies (url, source, last_status, latency_ms, last_checked)
-                 VALUES (?, "discovered", "ok", ?, NOW())
+                 VALUES (?, ?, "ok", ?, NOW())
                  ON DUPLICATE KEY UPDATE last_status = "ok", latency_ms = VALUES(latency_ms), last_checked = NOW()'
             );
             $added = 0;
             foreach ($found as $px) {
-                $ins->execute([$px['url'], $px['latency_ms']]);
+                $ins->execute([$px['url'], (string)$px['source'], $px['latency_ms']]);
                 if ($ins->rowCount() === 1) $added++; // 2 = updated existing row
             }
             audit('proxy_discover', null, null, 'working=' . count($found));
