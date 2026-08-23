@@ -6,6 +6,7 @@ require_once dirname(__DIR__) . '/includes/auth.php';
 require_once dirname(__DIR__) . '/includes/crypto.php';
 require_once dirname(__DIR__) . '/includes/settings.php';
 require_once dirname(__DIR__) . '/includes/audit.php';
+require_once dirname(__DIR__) . '/includes/i18n.php';
 
 set_security_headers(true);
 start_secure_session();
@@ -17,7 +18,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 }
 
 if (!verify_csrf($_POST['csrf_token'] ?? '')) {
-    $_SESSION['flash']    = 'Nieprawidłowy token CSRF.';
+    $_SESSION['flash']    = t('admin.common.invalid_csrf');
     $_SESSION['flash_ok'] = false;
     header('Location: /admin/new_order.php');
     exit;
@@ -31,7 +32,7 @@ $raw_lat      = $_POST['lat'] ?? '';
 $raw_lng      = $_POST['lng'] ?? '';
 
 if ($location === '' && $instructions === '' && $raw_lat === '') {
-    $_SESSION['flash']    = 'Podaj opis lokalizacji lub ustaw pinezkę na mapie.';
+    $_SESSION['flash']    = t('admin.new_order.flash.missing_location');
     $_SESSION['flash_ok'] = false;
     header('Location: /admin/new_order.php#new-order');
     exit;
@@ -42,8 +43,8 @@ $generated_password = false;
 if ($password === '') {
     $password           = generate_passphrase();
     $generated_password = true;
-} elseif (strlen($password) < 4) {
-    $_SESSION['flash']    = 'Hasło odbioru musi mieć co najmniej 4 znaki.';
+    } elseif (strlen($password) < 4) {
+        $_SESSION['flash']    = t('admin.new_order.flash.password_short');
     $_SESSION['flash_ok'] = false;
     header('Location: /admin/new_order.php#new-order');
     exit;
@@ -116,16 +117,17 @@ try {
         }
     }
 
-    $msg = 'Zamówienie utworzone. Token: ' . $token
-         . ($generated_password ? ' | Hasło: ' . $password : '');
+    $msg = $generated_password
+        ? t('admin.new_order.flash.created_with_pw', ['token' => $token, 'password' => $password])
+        : t('admin.new_order.flash.created', ['token' => $token]);
     if (!empty($photo_errors)) {
-        $msg .= ' | Błąd przesyłania: ' . implode(', ', $photo_errors);
+        $msg .= ' | ' . t('admin.new_order.flash.upload_errors', ['files' => implode(', ', $photo_errors)]);
     }
     $_SESSION['flash']    = $msg;
     $_SESSION['flash_ok'] = true;
 } catch (Exception $e) {
     log_err('Create order error: ' . $e->getMessage());
-    $_SESSION['flash']    = 'Nie udało się utworzyć zamówienia. Sprawdź log błędów.';
+    $_SESSION['flash']    = t('admin.new_order.flash.create_failed');
     $_SESSION['flash_ok'] = false;
 }
 

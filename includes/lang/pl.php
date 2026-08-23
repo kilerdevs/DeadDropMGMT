@@ -355,4 +355,36 @@ return [
     'admin.settings.label.require_delivered_reveal'=> 'Ukryj lokalizację gdy W PRZYGOTOWANIU',
     'admin.settings.label.analytics_enabled'       => 'Włącz analitykę',
     'admin.settings.label.show_error_log'          => 'Pokaż log błędów w ustawieniach',
+
+    // Endpointy backendu: komunikaty flash
+    'admin.common.invalid_request' => 'Nieprawidłowe żądanie.',
+
+    'admin.users.flash.username_length'        => 'Nazwa użytkownika musi mieć 3–64 znaki.',
+    'admin.users.flash.username_chars'         => 'Nazwa użytkownika może zawierać tylko litery, cyfry, _, - i .',
+    'admin.users.flash.password_min8'          => 'Hasło musi mieć co najmniej 8 znaków.',
+    'admin.users.flash.courier_created'        => 'Konto kuriera {username} zostało utworzone.',
+    'admin.users.flash.username_taken'         => 'Ta nazwa użytkownika jest już zajęta.',
+    'admin.users.flash.create_failed'          => 'Błąd tworzenia konta.',
+    'admin.users.flash.not_courier'            => 'Konto nie istnieje lub nie jest kontem kuriera.',
+    'admin.users.flash.courier_deleted'        => 'Konto kuriera {username} zostało usunięte.',
+    'admin.users.flash.delete_failed'          => 'Błąd podczas usuwania konta.',
+    'admin.users.flash.new_password_min8'      => 'Nowe hasło musi mieć co najmniej 8 znaków.',
+    'admin.users.flash.password_changed'       => 'Hasło zostało zmienione.',
+    'admin.users.flash.password_change_failed' => 'Błąd zmiany hasła.',
+    'admin.users.flash.twofa_reset'            => 'Weryfikacja dwuetapowa została wyłączona dla tego konta.',
+    'admin.users.flash.twofa_reset_failed'     => 'Błąd resetowania 2FA.',
+
+    'admin.orders.flash.invalid_data'         => 'Nieprawidłowe dane.',
+    'admin.orders.flash.extended'             => 'Termin przedłużony o {hours}h.',
+    'admin.orders.flash.extend_failed'        => 'Nie udało się przedłużyć terminu.',
+    'admin.orders.flash.marked_delivered'     => 'Status zmieniony na: dostarczone.',
+    'admin.orders.flash.already_delivered'    => 'Zamówienie już oznaczone jako dostarczone.',
+    'admin.orders.flash.status_change_failed' => 'Nie udało się zmienić statusu.',
+
+    'admin.new_order.flash.missing_location' => 'Podaj opis lokalizacji lub ustaw pinezkę na mapie.',
+    'admin.new_order.flash.password_short'   => 'Hasło odbioru musi mieć co najmniej 4 znaki.',
+    'admin.new_order.flash.created'          => 'Zamówienie utworzone. Token: {token}',
+    'admin.new_order.flash.created_with_pw'  => 'Zamówienie utworzone. Token: {token} | Hasło: {password}',
+    'admin.new_order.flash.upload_errors'    => 'Błąd przesyłania: {files}',
+    'admin.new_order.flash.create_failed'    => 'Nie udało się utworzyć zamówienia. Sprawdź log błędów.',
 ];

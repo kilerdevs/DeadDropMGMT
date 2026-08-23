@@ -4,6 +4,7 @@ require_once dirname(__DIR__) . '/config.php';
 require_once dirname(__DIR__) . '/includes/db.php';
 require_once dirname(__DIR__) . '/includes/auth.php';
 require_once dirname(__DIR__) . '/includes/audit.php';
+require_once dirname(__DIR__) . '/includes/i18n.php';
 
 set_security_headers(true);
 start_secure_session();
@@ -15,7 +16,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 }
 
 if (!verify_csrf($_POST['csrf_token'] ?? '')) {
-    $_SESSION['flash']    = 'Nieprawidłowy token CSRF.';
+    $_SESSION['flash']    = t('admin.common.invalid_csrf');
     $_SESSION['flash_ok'] = false;
     header('Location: /admin/orders.php');
     exit;
@@ -28,7 +29,7 @@ if ($id <= 0) {
 }
 
 if (!courier_owns_order($id)) {
-    $_SESSION['flash']    = 'Brak dostępu do tego zamówienia.';
+    $_SESSION['flash']    = t('admin.orders.flash.no_access');
     $_SESSION['flash_ok'] = false;
     header('Location: /admin/orders.php');
     exit;
@@ -61,11 +62,11 @@ try {
     if ($stmt->rowCount() > 0) {
         audit('order_delete', $id, $order_token);
     }
-    $_SESSION['flash']    = $stmt->rowCount() > 0 ? 'Zamówienie usunięte.' : 'Zamówienie nie istnieje.';
+    $_SESSION['flash']    = $stmt->rowCount() > 0 ? t('admin.orders.flash.deleted') : t('admin.orders.flash.not_found');
     $_SESSION['flash_ok'] = $stmt->rowCount() > 0;
 } catch (Exception $e) {
     log_err('Delete error: ' . $e->getMessage());
-    $_SESSION['flash']    = 'Nie udało się usunąć zamówienia.';
+    $_SESSION['flash']    = t('admin.orders.flash.delete_failed');
     $_SESSION['flash_ok'] = false;
 }
 

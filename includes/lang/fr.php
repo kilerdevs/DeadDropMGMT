@@ -353,4 +353,36 @@ return [
     'admin.settings.label.require_delivered_reveal'=> 'Masquer la localisation tant qu\'EN PRÉPARATION',
     'admin.settings.label.analytics_enabled'       => 'Activer les statistiques',
     'admin.settings.label.show_error_log'          => 'Afficher le journal des erreurs dans les paramètres',
+
+    // Points de terminaison backend : messages flash
+    'admin.common.invalid_request' => 'Requête invalide.',
+
+    'admin.users.flash.username_length'        => "Le nom d'utilisateur doit contenir entre 3 et 64 caractères.",
+    'admin.users.flash.username_chars'         => "Le nom d'utilisateur ne peut contenir que des lettres, chiffres, _, - et .",
+    'admin.users.flash.password_min8'          => 'Le mot de passe doit contenir au moins 8 caractères.',
+    'admin.users.flash.courier_created'        => 'Compte coursier {username} créé.',
+    'admin.users.flash.username_taken'         => "Ce nom d'utilisateur est déjà pris.",
+    'admin.users.flash.create_failed'          => 'Échec de la création du compte.',
+    'admin.users.flash.not_courier'            => "Le compte n'existe pas ou n'est pas un compte coursier.",
+    'admin.users.flash.courier_deleted'        => 'Compte coursier {username} supprimé.',
+    'admin.users.flash.delete_failed'          => 'Échec de la suppression du compte.',
+    'admin.users.flash.new_password_min8'      => 'Le nouveau mot de passe doit contenir au moins 8 caractères.',
+    'admin.users.flash.password_changed'       => 'Mot de passe modifié.',
+    'admin.users.flash.password_change_failed' => 'Échec du changement de mot de passe.',
+    'admin.users.flash.twofa_reset'            => "L'authentification à deux facteurs a été désactivée pour ce compte.",
+    'admin.users.flash.twofa_reset_failed'     => 'Échec de la réinitialisation 2FA.',
+
+    'admin.orders.flash.invalid_data'         => 'Données invalides.',
+    'admin.orders.flash.extended'             => 'Délai prolongé de {hours} h.',
+    'admin.orders.flash.extend_failed'        => 'Échec de la prolongation du délai.',
+    'admin.orders.flash.marked_delivered'     => 'Statut changé en : livré.',
+    'admin.orders.flash.already_delivered'    => 'Commande déjà marquée comme livrée.',
+    'admin.orders.flash.status_change_failed' => 'Échec du changement de statut.',
+
+    'admin.new_order.flash.missing_location' => 'Indiquez une description du lieu ou placez une épingle sur la carte.',
+    'admin.new_order.flash.password_short'   => 'Le mot de passe de retrait doit contenir au moins 4 caractères.',
+    'admin.new_order.flash.created'          => 'Commande créée. Jeton : {token}',
+    'admin.new_order.flash.created_with_pw'  => 'Commande créée. Jeton : {token} | Mot de passe : {password}',
+    'admin.new_order.flash.upload_errors'    => "Échec de l'envoi des photos : {files}",
+    'admin.new_order.flash.create_failed'    => 'Échec de la création de la commande. Vérifiez le journal des erreurs.',
 ];

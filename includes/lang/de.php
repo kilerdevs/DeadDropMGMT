@@ -353,4 +353,36 @@ return [
     'admin.settings.label.require_delivered_reveal'=> 'Standort verbergen, solange IN VORBEREITUNG',
     'admin.settings.label.analytics_enabled'       => 'Statistiken aktivieren',
     'admin.settings.label.show_error_log'          => 'Fehlerprotokoll in den Einstellungen anzeigen',
+
+    // Backend-Endpunkte: Flash-Meldungen
+    'admin.common.invalid_request' => 'Ungültige Anfrage.',
+
+    'admin.users.flash.username_length'        => 'Benutzername muss 3–64 Zeichen haben.',
+    'admin.users.flash.username_chars'         => 'Benutzername darf nur Buchstaben, Ziffern, _, - und . enthalten.',
+    'admin.users.flash.password_min8'          => 'Passwort muss mindestens 8 Zeichen haben.',
+    'admin.users.flash.courier_created'        => 'Kurierkonto {username} erstellt.',
+    'admin.users.flash.username_taken'         => 'Dieser Benutzername ist bereits vergeben.',
+    'admin.users.flash.create_failed'          => 'Kontoerstellung fehlgeschlagen.',
+    'admin.users.flash.not_courier'            => 'Konto existiert nicht oder ist kein Kurierkonto.',
+    'admin.users.flash.courier_deleted'        => 'Kurierkonto {username} gelöscht.',
+    'admin.users.flash.delete_failed'          => 'Löschen des Kontos fehlgeschlagen.',
+    'admin.users.flash.new_password_min8'      => 'Neues Passwort muss mindestens 8 Zeichen haben.',
+    'admin.users.flash.password_changed'       => 'Passwort geändert.',
+    'admin.users.flash.password_change_failed' => 'Passwortänderung fehlgeschlagen.',
+    'admin.users.flash.twofa_reset'            => 'Zwei-Faktor-Authentifizierung wurde für dieses Konto deaktiviert.',
+    'admin.users.flash.twofa_reset_failed'     => '2FA-Zurücksetzung fehlgeschlagen.',
+
+    'admin.orders.flash.invalid_data'         => 'Ungültige Daten.',
+    'admin.orders.flash.extended'             => 'Frist um {hours} Std. verlängert.',
+    'admin.orders.flash.extend_failed'        => 'Verlängerung der Frist fehlgeschlagen.',
+    'admin.orders.flash.marked_delivered'     => 'Status geändert in: Zugestellt.',
+    'admin.orders.flash.already_delivered'    => 'Bestellung bereits als zugestellt markiert.',
+    'admin.orders.flash.status_change_failed' => 'Statusänderung fehlgeschlagen.',
+
+    'admin.new_order.flash.missing_location' => 'Ortsbeschreibung angeben oder Pin auf der Karte setzen.',
+    'admin.new_order.flash.password_short'   => 'Abholpasswort muss mindestens 4 Zeichen haben.',
+    'admin.new_order.flash.created'          => 'Bestellung erstellt. Token: {token}',
+    'admin.new_order.flash.created_with_pw'  => 'Bestellung erstellt. Token: {token} | Passwort: {password}',
+    'admin.new_order.flash.upload_errors'    => 'Foto-Upload fehlgeschlagen: {files}',
+    'admin.new_order.flash.create_failed'    => 'Bestellung konnte nicht erstellt werden. Fehlerprotokoll prüfen.',
 ];

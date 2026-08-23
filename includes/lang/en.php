@@ -353,4 +353,36 @@ return [
     'admin.settings.label.require_delivered_reveal'=> 'Hide location while PREPARING',
     'admin.settings.label.analytics_enabled'       => 'Enable analytics',
     'admin.settings.label.show_error_log'          => 'Show error log in settings',
+
+    // Backend endpoints: flash messages
+    'admin.common.invalid_request' => 'Invalid request.',
+
+    'admin.users.flash.username_length'        => 'Username must be 3–64 characters.',
+    'admin.users.flash.username_chars'         => 'Username may contain only letters, digits, _, - and .',
+    'admin.users.flash.password_min8'          => 'Password must be at least 8 characters.',
+    'admin.users.flash.courier_created'        => 'Courier account {username} created.',
+    'admin.users.flash.username_taken'         => 'That username is already taken.',
+    'admin.users.flash.create_failed'          => 'Account creation failed.',
+    'admin.users.flash.not_courier'            => 'Account does not exist or is not a courier account.',
+    'admin.users.flash.courier_deleted'        => 'Courier account {username} deleted.',
+    'admin.users.flash.delete_failed'          => 'Failed to delete the account.',
+    'admin.users.flash.new_password_min8'      => 'New password must be at least 8 characters.',
+    'admin.users.flash.password_changed'       => 'Password changed.',
+    'admin.users.flash.password_change_failed' => 'Password change failed.',
+    'admin.users.flash.twofa_reset'            => 'Two-factor authentication has been disabled for this account.',
+    'admin.users.flash.twofa_reset_failed'     => '2FA reset failed.',
+
+    'admin.orders.flash.invalid_data'         => 'Invalid data.',
+    'admin.orders.flash.extended'             => 'Deadline extended by {hours}h.',
+    'admin.orders.flash.extend_failed'        => 'Failed to extend the deadline.',
+    'admin.orders.flash.marked_delivered'     => 'Status changed to: delivered.',
+    'admin.orders.flash.already_delivered'    => 'Order already marked as delivered.',
+    'admin.orders.flash.status_change_failed' => 'Failed to change the status.',
+
+    'admin.new_order.flash.missing_location' => 'Provide a location description or set a pin on the map.',
+    'admin.new_order.flash.password_short'   => 'Pickup password must be at least 4 characters.',
+    'admin.new_order.flash.created'          => 'Order created. Token: {token}',
+    'admin.new_order.flash.created_with_pw'  => 'Order created. Token: {token} | Password: {password}',
+    'admin.new_order.flash.upload_errors'    => 'Photo upload failed: {files}',
+    'admin.new_order.flash.create_failed'    => 'Failed to create the order. Check the error log.',
 ];

@@ -353,4 +353,36 @@ return [
     'admin.settings.label.require_delivered_reveal'=> 'Ocultar la ubicación mientras esté EN PREPARACIÓN',
     'admin.settings.label.analytics_enabled'       => 'Activar analítica',
     'admin.settings.label.show_error_log'          => 'Mostrar el registro de errores en la configuración',
+
+    // Endpoints de backend: mensajes flash
+    'admin.common.invalid_request' => 'Solicitud no válida.',
+
+    'admin.users.flash.username_length'        => 'El nombre de usuario debe tener entre 3 y 64 caracteres.',
+    'admin.users.flash.username_chars'         => 'El nombre de usuario solo puede contener letras, dígitos, _, - y .',
+    'admin.users.flash.password_min8'          => 'La contraseña debe tener al menos 8 caracteres.',
+    'admin.users.flash.courier_created'        => 'Cuenta de mensajero {username} creada.',
+    'admin.users.flash.username_taken'         => 'Ese nombre de usuario ya está en uso.',
+    'admin.users.flash.create_failed'          => 'Error al crear la cuenta.',
+    'admin.users.flash.not_courier'            => 'La cuenta no existe o no es una cuenta de mensajero.',
+    'admin.users.flash.courier_deleted'        => 'Cuenta de mensajero {username} eliminada.',
+    'admin.users.flash.delete_failed'          => 'Error al eliminar la cuenta.',
+    'admin.users.flash.new_password_min8'      => 'La nueva contraseña debe tener al menos 8 caracteres.',
+    'admin.users.flash.password_changed'       => 'Contraseña cambiada.',
+    'admin.users.flash.password_change_failed' => 'Error al cambiar la contraseña.',
+    'admin.users.flash.twofa_reset'            => 'La autenticación de dos factores ha sido desactivada para esta cuenta.',
+    'admin.users.flash.twofa_reset_failed'     => 'Error al restablecer la 2FA.',
+
+    'admin.orders.flash.invalid_data'         => 'Datos no válidos.',
+    'admin.orders.flash.extended'             => 'Plazo ampliado {hours} h.',
+    'admin.orders.flash.extend_failed'        => 'No se pudo ampliar el plazo.',
+    'admin.orders.flash.marked_delivered'     => 'Estado cambiado a: entregado.',
+    'admin.orders.flash.already_delivered'    => 'El pedido ya está marcado como entregado.',
+    'admin.orders.flash.status_change_failed' => 'No se pudo cambiar el estado.',
+
+    'admin.new_order.flash.missing_location' => 'Indica una descripción del lugar o coloca un pin en el mapa.',
+    'admin.new_order.flash.password_short'   => 'La contraseña de recogida debe tener al menos 4 caracteres.',
+    'admin.new_order.flash.created'          => 'Pedido creado. Token: {token}',
+    'admin.new_order.flash.created_with_pw'  => 'Pedido creado. Token: {token} | Contraseña: {password}',
+    'admin.new_order.flash.upload_errors'    => 'Error al subir fotos: {files}',
+    'admin.new_order.flash.create_failed'    => 'No se pudo crear el pedido. Revisa el registro de errores.',
 ];

@@ -4,6 +4,7 @@ require_once dirname(__DIR__) . '/config.php';
 require_once dirname(__DIR__) . '/includes/db.php';
 require_once dirname(__DIR__) . '/includes/auth.php';
 require_once dirname(__DIR__) . '/includes/audit.php';
+require_once dirname(__DIR__) . '/includes/i18n.php';
 
 set_security_headers(true);
 start_secure_session();
@@ -15,7 +16,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 }
 
 if (!verify_csrf($_POST['csrf_token'] ?? '')) {
-    $_SESSION['flash']    = 'Invalid CSRF token.';
+    $_SESSION['flash']    = t('admin.common.invalid_csrf');
     $_SESSION['flash_ok'] = false;
     header('Location: /admin/orders.php');
     exit;

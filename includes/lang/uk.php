@@ -355,4 +355,36 @@ return [
     'admin.settings.label.require_delivered_reveal'=> 'Приховувати місцезнаходження, поки ГОТУЄТЬСЯ',
     'admin.settings.label.analytics_enabled'       => 'Увімкнути аналітику',
     'admin.settings.label.show_error_log'          => 'Показувати журнал помилок у налаштуваннях',
+
+    // Бекенд-ендпоінти: flash-повідомлення
+    'admin.common.invalid_request' => 'Неправильний запит.',
+
+    'admin.users.flash.username_length'        => "Ім'я користувача має містити 3–64 символи.",
+    'admin.users.flash.username_chars'         => "Ім'я користувача може містити лише літери, цифри, _, - і .",
+    'admin.users.flash.password_min8'          => 'Пароль має містити щонайменше 8 символів.',
+    'admin.users.flash.courier_created'        => "Акаунт кур'єра {username} створено.",
+    'admin.users.flash.username_taken'         => "Це ім'я користувача вже зайняте.",
+    'admin.users.flash.create_failed'          => 'Не вдалося створити акаунт.',
+    'admin.users.flash.not_courier'            => "Акаунт не існує або не є акаунтом кур'єра.",
+    'admin.users.flash.courier_deleted'        => "Акаунт кур'єра {username} видалено.",
+    'admin.users.flash.delete_failed'          => 'Не вдалося видалити акаунт.',
+    'admin.users.flash.new_password_min8'      => 'Новий пароль має містити щонайменше 8 символів.',
+    'admin.users.flash.password_changed'       => 'Пароль змінено.',
+    'admin.users.flash.password_change_failed' => 'Не вдалося змінити пароль.',
+    'admin.users.flash.twofa_reset'            => 'Двофакторну автентифікацію вимкнено для цього акаунта.',
+    'admin.users.flash.twofa_reset_failed'     => 'Не вдалося скинути 2FA.',
+
+    'admin.orders.flash.invalid_data'         => 'Неправильні дані.',
+    'admin.orders.flash.extended'             => 'Термін продовжено на {hours} год.',
+    'admin.orders.flash.extend_failed'        => 'Не вдалося продовжити термін.',
+    'admin.orders.flash.marked_delivered'     => 'Статус змінено на: доставлено.',
+    'admin.orders.flash.already_delivered'    => 'Замовлення вже позначено як доставлене.',
+    'admin.orders.flash.status_change_failed' => 'Не вдалося змінити статус.',
+
+    'admin.new_order.flash.missing_location' => 'Вкажіть опис місця або позначте точку на карті.',
+    'admin.new_order.flash.password_short'   => 'Пароль отримання має містити щонайменше 4 символи.',
+    'admin.new_order.flash.created'          => 'Замовлення створено. Токен: {token}',
+    'admin.new_order.flash.created_with_pw'  => 'Замовлення створено. Токен: {token} | Пароль: {password}',
+    'admin.new_order.flash.upload_errors'    => 'Не вдалося завантажити фото: {files}',
+    'admin.new_order.flash.create_failed'    => 'Не вдалося створити замовлення. Перевірте журнал помилок.',
 ];

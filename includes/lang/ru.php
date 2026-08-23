@@ -355,4 +355,36 @@ return [
     'admin.settings.label.require_delivered_reveal'=> 'Скрывать местоположение, пока ГОТОВИТСЯ',
     'admin.settings.label.analytics_enabled'       => 'Включить аналитику',
     'admin.settings.label.show_error_log'          => 'Показывать журнал ошибок в настройках',
+
+    // Бэкенд-эндпоинты: flash-сообщения
+    'admin.common.invalid_request' => 'Неверный запрос.',
+
+    'admin.users.flash.username_length'        => 'Имя пользователя должно содержать 3–64 символа.',
+    'admin.users.flash.username_chars'         => 'Имя пользователя может содержать только буквы, цифры, _, - и .',
+    'admin.users.flash.password_min8'          => 'Пароль должен содержать не менее 8 символов.',
+    'admin.users.flash.courier_created'        => 'Аккаунт курьера {username} создан.',
+    'admin.users.flash.username_taken'         => 'Это имя пользователя уже занято.',
+    'admin.users.flash.create_failed'          => 'Не удалось создать аккаунт.',
+    'admin.users.flash.not_courier'            => 'Аккаунт не существует или не является аккаунтом курьера.',
+    'admin.users.flash.courier_deleted'        => 'Аккаунт курьера {username} удалён.',
+    'admin.users.flash.delete_failed'          => 'Не удалось удалить аккаунт.',
+    'admin.users.flash.new_password_min8'      => 'Новый пароль должен содержать не менее 8 символов.',
+    'admin.users.flash.password_changed'       => 'Пароль изменён.',
+    'admin.users.flash.password_change_failed' => 'Не удалось изменить пароль.',
+    'admin.users.flash.twofa_reset'            => 'Двухфакторная аутентификация отключена для этого аккаунта.',
+    'admin.users.flash.twofa_reset_failed'     => 'Не удалось сбросить 2FA.',
+
+    'admin.orders.flash.invalid_data'         => 'Неверные данные.',
+    'admin.orders.flash.extended'             => 'Срок продлён на {hours} ч.',
+    'admin.orders.flash.extend_failed'        => 'Не удалось продлить срок.',
+    'admin.orders.flash.marked_delivered'     => 'Статус изменён на: доставлено.',
+    'admin.orders.flash.already_delivered'    => 'Заказ уже отмечен как доставленный.',
+    'admin.orders.flash.status_change_failed' => 'Не удалось изменить статус.',
+
+    'admin.new_order.flash.missing_location' => 'Укажите описание места или установите метку на карте.',
+    'admin.new_order.flash.password_short'   => 'Пароль получения должен содержать не менее 4 символов.',
+    'admin.new_order.flash.created'          => 'Заказ создан. Токен: {token}',
+    'admin.new_order.flash.created_with_pw'  => 'Заказ создан. Токен: {token} | Пароль: {password}',
+    'admin.new_order.flash.upload_errors'    => 'Не удалось загрузить фото: {files}',
+    'admin.new_order.flash.create_failed'    => 'Не удалось создать заказ. Проверьте журнал ошибок.',
 ];
