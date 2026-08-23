@@ -131,14 +131,26 @@ function osm_fetch(string $url): string|false {
 
 // ── Discovery ────────────────────────────────────────────────────────────────
 
+// Sources of candidate proxies. Proxifly ships structured JSON with
+// anonymity ratings; monosans publishes hourly pre-checked lists (plain
+// ip:port). Both are free and community-maintained.
 const PROXY_DISCOVERY_SOURCES = [
-    'proxifly' => 'https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/all/data.json',
+    'proxifly'      => 'https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/all/data.json',
+    'monosans_http' => 'https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt',
+    'monosans_s5'   => 'https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt',
 ];
 
-// Pull anonymity-focused candidates (anonymous/elite HTTP(S)) from public
-// sources, then probe them in parallel against a real OSM tile URL. Returns
-// [['url' => ..., 'latency_ms' => ...], ...] for proxies that answered.
-function proxy_discover(int $max_test = 100, int $timeout_s = 4): array {
+// Pull candidates from public sources, then probe them in parallel against a
+// real OSM tile URL. Returns [['url' => ..., 'latency_ms' => ...], ...] for
+// proxies that actually answered.
+//
+// Why probe against HTTPS: our real targets (tiles, Nominatim) are
+// HTTPS-only, which requires HTTP proxies to support CONNECT tunneling —
+// most free plain-HTTP proxies don't, so a proxy that only speaks plain
+// HTTP is useless here no matter how alive it looks. SOCKS proxies tunnel
+// arbitrary TCP natively and never inject HTTP headers (anonymity by
+// design), so they are probed the same way.
+function proxy_discover(int $max_test = 300, int $timeout_s = 4): array {
     $candidates = [];
 
     foreach (PROXY_DISCOVERY_SOURCES as $srcUrl) {
@@ -147,21 +159,37 @@ function proxy_discover(int $max_test = 100, int $timeout_s = 4): array {
         ]));
         if ($raw === false) continue;
 
-        $list = json_decode($raw, true);
-        if (!is_array($list)) continue;
-
-        foreach ($list as $entry) {
-            if (!is_array($entry)) continue;
-            $proto = strtolower((string)($entry['protocol'] ?? ''));
-            if (!in_array($proto, ['http', 'https'], true)) continue;
-            // Anonymity-focused: drop transparent proxies outright.
-            $anon = strtolower((string)($entry['anonymity'] ?? ''));
-            if (!in_array($anon, ['anonymous', 'elite'], true)) continue;
-            $ip   = (string)($entry['ip'] ?? '');
-            $port = (string)($entry['port'] ?? '');
-            if ($ip === '' || $port === '') continue;
-            $norm = osm_proxy_normalize("$proto://$ip:$port");
-            if ($norm !== null) $candidates[$norm] = true;
+        if (str_contains($srcUrl, 'data.json')) {
+            // Proxifly JSON — anonymity-rated
+            $list = json_decode($raw, true);
+            if (!is_array($list)) continue;
+            foreach ($list as $entry) {
+                if (!is_array($entry)) continue;
+                $proto = strtolower((string)($entry['protocol'] ?? ''));
+                if ($proto === '') continue;
+                $anon = strtolower((string)($entry['anonymity'] ?? ''));
+                // HTTP proxies must be anonymity-rated (no transparent ones);
+                // SOCKS is header-anonymous by protocol, so rating is moot.
+                if (str_starts_with($proto, 'socks')) {
+                    // keep
+                } elseif (!in_array($anon, ['anonymous', 'elite'], true)) {
+                    continue;
+                }
+                $ip   = (string)($entry['ip'] ?? '');
+                $port = (string)($entry['port'] ?? '');
+                if ($ip === '' || $port === '') continue;
+                $norm = osm_proxy_normalize("$proto://$ip:$port");
+                if ($norm !== null) $candidates[$norm] = true;
+            }
+        } else {
+            // monosans plain lists — one ip:port per line
+            foreach (preg_split('/\r?\n/', trim($raw)) ?: [] as $line) {
+                $line = trim(explode(';', trim($line))[0]);
+                if ($line === '' || !str_contains($line, ':')) continue;
+                $scheme = str_contains($srcUrl, 'socks5') ? 'socks5' : 'http';
+                $norm   = osm_proxy_normalize("$scheme://$line");
+                if ($norm !== null) $candidates[$norm] = true;
+            }
         }
     }
 

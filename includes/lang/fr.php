@@ -159,7 +159,7 @@ return [
     'admin.settings.label.osm_proxy_enabled' => 'Router le trafic OSM via les proxys',
 
     'admin.proxies.section'       => 'Pool de proxys pour OpenStreetMap',
-    'admin.proxies.hint'          => "Lorsque l'interrupteur ci-dessus est activé, les demandes de tuiles et d'adresses de ce panneau passent par l'un de ces proxys au lieu d'être envoyées directement depuis ce serveur - OSM ne voit jamais votre vraie IP. Mode fail-closed : si tous les proxys tombent, les fonctions de carte cessent de fonctionner plutôt que de fuiter l'IP. La découverte automatique teste des listes publiques orientées anonymat (anonymous/elite uniquement) et garde celles qui répondent réellement.",
+    'admin.proxies.hint'          => "Lorsque l'interrupteur ci-dessus est activé, les demandes de tuiles et d'adresses de ce panneau passent par l'un de ces proxys au lieu d'être envoyées directement depuis ce serveur - OSM ne voit jamais votre vraie IP. Mode fail-closed : si tous les proxys tombent, les fonctions de carte cessent de fonctionner plutôt que de fuiter l'IP. La découverte automatique teste des listes publiques orientées anonymat (HTTP notés pour l\'anonymat et SOCKS anonymes par conception) et garde celles qui répondent réellement.",
     'admin.proxies.empty'         => 'Aucun proxy configuré.',
     'admin.proxies.th.proxy'      => 'Proxy',
     'admin.proxies.th.source'     => 'Source',

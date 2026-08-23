@@ -159,7 +159,7 @@ return [
     'admin.settings.label.osm_proxy_enabled' => 'Enrutar el tráfico de OSM mediante proxies',
 
     'admin.proxies.section'       => 'Grupo de proxies para OpenStreetMap',
-    'admin.proxies.hint'          => 'Cuando el interruptor de arriba está activado, las peticiones de teselas y direcciones de este panel se envían a través de uno de estos proxies en lugar de directamente desde este servidor: OSM nunca verá su IP real. Fail-closed: si todos los proxies fallan, las funciones del mapa dejan de funcionar en lugar de filtrar la IP. El descubrimiento automático sondea listas públicas centradas en el anonimato (solo anonymous/elite) y conserva las que realmente responden.',
+    'admin.proxies.hint'          => 'Cuando el interruptor de arriba está activado, las peticiones de teselas y direcciones de este panel se envían a través de uno de estos proxies en lugar de directamente desde este servidor: OSM nunca verá su IP real. Fail-closed: si todos los proxies fallan, las funciones del mapa dejan de funcionar en lugar de filtrar la IP. El descubrimiento automático sondea listas públicas centradas en el anonimato (HTTP con clasificación de anonimato y SOCKS anónimos por diseño) y conserva las que realmente responden.',
     'admin.proxies.empty'         => 'No hay proxies configurados.',
     'admin.proxies.th.proxy'      => 'Proxy',
     'admin.proxies.th.source'     => 'Origen',
