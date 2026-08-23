@@ -41,7 +41,7 @@ The author provides this software **"as is," without warranty of any kind**, and
 
 ### Public (recipient) flow
 - Token-based order lookup — no account needed
-- Password-protected location reveal (AES-256-CBC, decrypted server-side, never sent to client unencrypted)
+- Password-protected location reveal (AES-256-GCM, decrypted server-side, never sent to client unencrypted)
 - Live expiry countdown with redirect timer
 - Photo gallery for reference images
 - One-click links to Google Maps / Apple Maps
@@ -74,7 +74,7 @@ The author provides this software **"as is," without warranty of any kind**, and
 |---|---|
 | Backend | PHP 8.0+ (strict types, procedural, no Composer) |
 | Database | MySQL / MariaDB |
-| Encryption | OpenSSL — AES-256-CBC, random IV per record |
+| Encryption | OpenSSL — AES-256-GCM (authenticated), random nonce per record |
 | Auth | bcrypt cost=12, TOTP 2FA, CSRF tokens, session hardening |
 | Frontend | Vanilla JS (ES5+), CSS Grid/Flexbox |
 | Maps | Leaflet + OpenStreetMap |
@@ -89,7 +89,7 @@ The author provides this software **"as is," without warranty of any kind**, and
 | SQL injection | PDO prepared statements throughout — zero string interpolation in SQL |
 | Password storage | bcrypt cost=12 via `password_hash()` / `password_verify()` |
 | Account takeover | TOTP 2FA (RFC 6238) — self-service per account, encrypted secret at rest |
-| Location data at rest | AES-256-CBC, random IV per record, key lives only in `config.php` (never in DB) |
+| Location data at rest | AES-256-GCM (authenticated), random nonce per record, key lives only in `config.php` (never in DB) |
 | Session fixation | `session_regenerate_id(true)` on login |
 | CSRF | 64-byte random token in session, `hash_equals()` comparison on every POST |
 | Brute-force | IP-based rate limiter, configurable and togglable — pickup guessing, admin login, 2FA codes |
@@ -205,7 +205,7 @@ DeadDropMGMT/
 ├── includes/                 Blocked from web via .htaccess
 │   ├── db.php                PDO singleton
 │   ├── auth.php              Session, CSRF, rate limiting, security headers
-│   ├── crypto.php            AES-256-CBC encrypt/decrypt, bcrypt, passphrase generator
+│   ├── crypto.php            AES-256-GCM encrypt/decrypt, bcrypt, passphrase generator
 │   ├── totp.php              TOTP (RFC 6238) — base32, otpauth:// URI
 │   ├── audit.php             Write-action audit logger
 │   ├── settings.php          Settings cache (one DB query per page load)

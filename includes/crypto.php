@@ -11,28 +11,51 @@ function _aes_key(): string {
 }
 
 // ── Raw encrypt / decrypt ─────────────────────────────────────────────────────
+// AES-256-GCM (authenticated). Storage format: ciphertext column holds
+// ciphertext||tag (base64), iv column holds the 12-byte nonce in hex.
+// Legacy AES-256-CBC rows are detected by IV length (32 hex chars vs 24)
+// and still decrypt — they re-encrypt to GCM on next edit.
 
 function encrypt_location(string $plaintext): array {
-    $key = _aes_key();
-    $iv  = random_bytes(16);
-    $ct  = openssl_encrypt($plaintext, 'AES-256-CBC', $key, OPENSSL_RAW_DATA, $iv);
+    $key   = _aes_key();
+    $nonce = random_bytes(12);
+    $tag   = '';
+    $ct    = openssl_encrypt($plaintext, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $nonce, $tag);
     if ($ct === false) {
         throw new RuntimeException('Encryption failed.');
     }
     return [
-        'ciphertext' => base64_encode($ct),
-        'iv'         => bin2hex($iv),
+        'ciphertext' => base64_encode($ct . $tag),
+        'iv'         => bin2hex($nonce),
     ];
 }
 
 function decrypt_location(string $ciphertext_b64, string $iv_hex): string|false {
     $key = _aes_key();
-    $iv  = hex2bin($iv_hex);
-    $ct  = base64_decode($ciphertext_b64, true);
-    if ($ct === false || strlen($iv) !== 16) {
+    $raw = base64_decode($ciphertext_b64, true);
+    if ($raw === false || strlen($iv_hex) % 2 !== 0) {
         return false;
     }
-    return openssl_decrypt($ct, 'AES-256-CBC', $key, OPENSSL_RAW_DATA, $iv);
+
+    if (strlen($iv_hex) === 24) { // GCM: 12-byte nonce, tag appended to ciphertext
+        if (strlen($raw) < 16) {
+            return false;
+        }
+        $nonce = hex2bin($iv_hex);
+        $ct    = substr($raw, 0, -16);
+        $tag   = substr($raw, -16);
+        return openssl_decrypt($ct, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $nonce, $tag);
+    }
+
+    // Legacy CBC fallback (16-byte IV)
+    if (strlen($iv_hex) !== 32) {
+        return false;
+    }
+    $iv = hex2bin($iv_hex);
+    if (strlen($iv) !== 16) {
+        return false;
+    }
+    return openssl_decrypt($raw, 'aes-256-cbc', $key, OPENSSL_RAW_DATA, $iv);
 }
 
 // ── Structured location data (JSON inside AES) ────────────────────────────────
