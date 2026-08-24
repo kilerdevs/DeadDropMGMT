@@ -43,7 +43,7 @@ try {
     $photo = $stmt->fetch();
 
     if ($photo && preg_match('#^\d+/[0-9a-f]+\.(jpg|jpeg|png|webp|gif)$#i', $photo['filename'])) {
-        secure_unlink(dirname(__DIR__) . '/uploads/' . $photo['filename']);
+        overwrite_and_unlink(dirname(__DIR__) . '/uploads/' . $photo['filename']);
         $db->prepare('DELETE FROM order_photos WHERE id = ?')->execute([$photo_id]);
         audit('photo_delete', $order_id);
     }

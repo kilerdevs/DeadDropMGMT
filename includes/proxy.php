@@ -341,14 +341,10 @@ function proxy_discover(int $max_test = 400, int $timeout_s = 4): array {
     // Round 2: live anonymity verification for unrated HTTP proxies.
     $unrated = array_values(array_filter($working, fn($p) => $candidates[$p['url']]['rated'] === false
         && str_starts_with($p['url'], 'http://')));
+    $judged = [];
     if ($unrated) {
         $ourIp = proxy_public_ip();
-        if ($ourIp === null) {
-            // Cannot verify anonymity — maximum security means drop them all.
-            $working = array_values(array_filter($working, fn($p) => $candidates[$p['url']]['rated'] !== false
-                || !str_starts_with($p['url'], 'http://')));
-        } else {
-            $judged = [];
+        if ($ourIp !== null) {
             foreach (array_chunk($unrated, 50) as $chunk) {
                 $urls     = array_column($chunk, 'url');
                 $judgeRes = proxy_multi_probe($urls, PROXY_ANONYMITY_JUDGES[0], $timeout_s, $timeout_s, false);
@@ -357,15 +353,29 @@ function proxy_discover(int $max_test = 400, int $timeout_s = 4): array {
                     $judged[$pxUrl] = $code >= 200 && $code < 300 && proxy_judge_anonymous($pxUrl, $ourIp);
                 }
             }
-            $working = array_values(array_filter($working, fn($p) =>
-                $candidates[$p['url']]['rated'] !== false
-                || !str_starts_with($p['url'], 'http://')
-                || ($judged[$p['url']] ?? false)));
         }
     }
+    $working = proxy_filter_anonymity($working, $candidates, $ourIp ?? null, $judged);
 
     usort($working, fn($a, $b) => $a['latency_ms'] <=> $b['latency_ms']);
     return $working;
+}
+
+// ── Anonymity gate (pure — see ProxyTest) ─────────────────────────────────────
+// The single decision point for which working proxies may serve OSM traffic:
+//   rated proxies (from a curated list)        → keep
+//   HTTPS proxies (content opaque to filters)  → keep
+//   unrated HTTP proxies, judge reachable      → keep only if judged anonymous
+//   unrated HTTP proxies, judge unreachable    → DROP ALL (fail closed — when
+//     we cannot learn our own IP we cannot prove a proxy hides it)
+// This function is where the "array === false" bug lived: the entire anonymity
+// round silently never ran. ProxyTest pins the decision table.
+function proxy_filter_anonymity(array $working, array $candidates, ?string $our_ip, array $judged): array {
+    return array_values(array_filter($working, static fn(array $p): bool =>
+        $candidates[$p['url']]['rated'] !== false
+        || !str_starts_with($p['url'], 'http://')
+        || ($our_ip !== null && ($judged[$p['url']] ?? false))
+    ));
 }
 
 // Run a batch of GETs through different proxies in parallel.

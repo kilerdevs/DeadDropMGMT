@@ -164,7 +164,7 @@ function cleanup_expired_orders(): int {
 function _unlink_order_files(int $order_id, array $files): void {
     foreach ($files as $fn) {
         if (is_string($fn) && preg_match('#^\d+/[0-9a-f]+\.(jpg|jpeg|png|webp|gif)$#i', $fn)) {
-            secure_unlink(dirname(__DIR__) . '/uploads/' . $fn);
+            overwrite_and_unlink(dirname(__DIR__) . '/uploads/' . $fn);
         }
     }
     $dir = dirname(__DIR__) . '/uploads/' . $order_id . '/';

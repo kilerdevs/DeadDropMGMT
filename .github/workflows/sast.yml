@@ -26,6 +26,12 @@ jobs:
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
+      # A custom rule that fails to compile is a silent no-op: the scan
+      # succeeds, the gate guards nothing. Validate the rule file FIRST so a
+      # broken pattern fails the build loudly.
+      - name: Validate custom rules
+        run: semgrep scan --validate --config .semgrep/php-request-echo.yml --metrics=off
+
       - name: Scan
         run: |
           semgrep scan \

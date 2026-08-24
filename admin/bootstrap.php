@@ -33,7 +33,8 @@ if ($rl['blocked']) {
 }
 
 $username   = trim($_POST['username'] ?? '');
-$enrollment = ''; // set inside the lock; keeps analysis honest about the flash below
+$enrollment   = ''; // set inside the lock; keeps analysis honest about the flash below
+$new_user_id  = 0;
 
 try {
     $db = get_db();
@@ -64,6 +65,9 @@ try {
         $db->prepare('INSERT INTO users (username, password_hash, role, enrollment_hash, enrollment_expires)
                       VALUES (?, "", "owner", ?, NOW() + INTERVAL 24 HOUR)')
                ->execute([$username, enrollment_secret_hash($enrollment)]);
+        // Capture the id NOW: audit() below inserts into audit_log and would
+        // clobber lastInsertId, pointing the setup step at the wrong row.
+        $new_user_id = (int)$db->lastInsertId();
     } finally {
         $db->exec("DO RELEASE_LOCK('deaddrop_owner_bootstrap')");
     }
@@ -81,7 +85,7 @@ audit('owner_bootstrap', null, null, $username);
 $_SESSION['enrollment_flash'] = t('admin.bootstrap.enrollment_note', ['secret' => $enrollment]);
 
 session_regenerate_id(true);
-$_SESSION['pending_setup_user_id'] = (int)get_db()->lastInsertId();
+$_SESSION['pending_setup_user_id'] = $new_user_id;
 $_SESSION['pending_setup_time']    = time();
 unset($_SESSION['csrf_token']);
 rl_reset('admin_login');

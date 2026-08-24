@@ -67,7 +67,7 @@ function _log_rotate_if_needed(string $path): void {
     if (is_file($path) && filesize($path) >= APP_LOG_MAX_BYTES) {
         $old = $path . '.1';
         if (is_file($old)) {
-            secure_unlink($old);
+            overwrite_and_unlink($old);
         }
         @rename($path, $old);
     }

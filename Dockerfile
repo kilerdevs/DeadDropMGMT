@@ -37,6 +37,6 @@ WORKDIR /var/www/html
 # HTTP GET of the public page must return something HTML-shaped. curl/wget
 # are not in the image; PHP itself does the probing.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD php -r 'exit(str_contains((string)@file_get_contents("http://127.0.0.1/"), "<!DOCTYPE") ? 0 : 1);'
+    CMD php -r 'exit(str_contains((string)@file_get_contents("http://127.0.0.1/healthz.php"), "ok") ? 0 : 1);'
 ENTRYPOINT ["entrypoint.sh"]
 CMD ["apache2-foreground"]

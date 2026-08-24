@@ -50,14 +50,14 @@ You'll get a response, and credit in the fix's changelog/commit if you'd like it
 
 ## Development Setup
 
-1. Follow the [Setup](README.md#setup) section in the README to get a local instance running (PHP 8.0+, MySQL/MariaDB, Apache with `mod_rewrite`/`mod_headers`).
+1. Follow the [Setup](README.md#setup) section in the README to get a local instance running (PHP 8.2+, MySQL/MariaDB, Apache with `mod_rewrite`/`mod_headers`).
 2. For quick iteration you can skip Apache and use PHP's built-in server instead — it doesn't enforce `.htaccess` rules, so don't use it as your final check before opening a PR:
    ```bash
    php -S localhost:8000
    ```
 3. Fork the repo, create a branch off `master`, make your change, and open a PR against `master`.
 
-There **is** an automated test suite now, and CI runs it on every push and PR (PHP 8.0–8.4 matrix, coverage floors, Docker smoke tests, CodeQL). Before opening a PR:
+There **is** an automated test suite now, and CI runs it on every push and PR (PHP 8.2–8.4 + MySQL matrix, coverage floors, PHPStan, Docker smoke tests, Semgrep). Before opening a PR:
 
 - Run the suite against an isolated test database — it never touches your real one (`tests/bootstrap.php` forces `deaddrops_test`):
   ```bash

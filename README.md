@@ -7,7 +7,7 @@
 
 Recipients look up an order by token, unlock an encrypted location with a password, and confirm receipt — all without ever exposing the underlying data. Built with zero external PHP dependencies; every security concern is addressed at the application layer, not bolted on with a framework.
 
-![PHP](https://img.shields.io/badge/PHP-8.0%2B-777bb4?logo=php&logoColor=white)
+![PHP](https://img.shields.io/badge/PHP-8.2%2B-777bb4?logo=php&logoColor=white)
 ![Database](https://img.shields.io/badge/DB-MySQL%20%2F%20MariaDB-4479A1?logo=mysql&logoColor=white)
 ![Dependencies](https://img.shields.io/badge/dependencies-zero%20(no%20Composer)-brightgreen)
 ![2FA](https://img.shields.io/badge/2FA-TOTP%20(RFC%206238)-blue)
@@ -80,7 +80,7 @@ The author provides this software **"as is," without warranty of any kind**, and
 
 | Layer | Technology |
 |---|---|
-| Backend | PHP 8.0+ (strict types, procedural, no Composer) |
+| Backend | PHP 8.2+ (strict types, procedural, no Composer; 8.0/8.1 are EOL and unsupported) |
 | Database | MySQL / MariaDB |
 | Encryption | OpenSSL — AES-256-GCM (authenticated), random nonce per record |
 | Auth | bcrypt cost=12, TOTP 2FA, CSRF tokens, session hardening |
@@ -245,7 +245,7 @@ photo-file shredding (`CleanupTest`), and an end-to-end public-flow suite
 unlock, PRG reveal, receipt confirmation, rate limiting and the per-session
 failure bucket. Runs automatically in GitHub Actions
 (`.github/workflows/ci.yml`, MariaDB 11 service container) across PHP
-8.0–8.4, with smoke tests of all three Docker stacks.
+8.2–8.4 plus MySQL 8, with smoke tests, CVE gates and SBOMs for all three Docker stacks.
 
 **Coverage.** A separate CI job runs the suite under `pcov` and reports line
 coverage over `includes/` — the security-critical library code (crypto,
@@ -520,7 +520,7 @@ No server setup needed — log in, open **2FA** in the sidebar, scan the QR code
 
 ## Requirements
 
-- PHP 8.0+ with `pdo_mysql`, `openssl`, `gd` extensions
+- PHP 8.2+ with `pdo_mysql`, `openssl`, `gd` extensions
 - MySQL 5.7+ or MariaDB 10.3+
 - Apache 2.4+ with `mod_rewrite`, `mod_headers`
 

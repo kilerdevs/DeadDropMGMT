@@ -87,10 +87,10 @@ function _panic_unlink(string $path, array &$report): void {
     if (!is_file($path)) {
         return; // already gone — retry runs stay quiet about it
     }
-    secure_unlink($path);
+    overwrite_and_unlink($path);
     // file_exists (not is_file): the earlier is_file() call would otherwise be
     // assumed by static analysis to hold for the whole function body — the
-    // unlink inside secure_unlink() is best-effort and may genuinely fail.
+    // unlink inside overwrite_and_unlink() is best-effort and may genuinely fail.
     if (@file_exists($path)) {
         $report['files_failed']++;
     } else {
