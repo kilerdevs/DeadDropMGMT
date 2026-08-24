@@ -216,7 +216,7 @@ jobs:
       # nginx and Caddy stacks actually run): HIGH/CRITICAL findings with a
       # fix available fail the build — bumping the base image is the fix.
       - name: Scan Apache image (Trivy)
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: deaddrop:apache
           format: table
@@ -226,7 +226,7 @@ jobs:
           vuln-type: os,library
 
       - name: Scan FPM image (Trivy)
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: deaddrop:fpm
           format: table
@@ -238,7 +238,7 @@ jobs:
       # SBOM (CycloneDX) for both images — the inventory that makes the CVE
       # scans auditable and gives downstream deployers something to diff.
       - name: Generate SBOMs (CycloneDX)
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: deaddrop:apache
           format: cyclonedx
@@ -246,7 +246,7 @@ jobs:
           scan-type: image
 
       - name: Generate FPM SBOM (CycloneDX)
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: deaddrop:fpm
           format: cyclonedx
