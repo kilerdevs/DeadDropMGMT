@@ -53,19 +53,23 @@ randomness means uniqueness is probabilistic, not guaranteed (−); acceptable
 at this volume, would need counter-based nonces at millions of records under
 one key.
 
-## ADR-003 · Legacy CBC rows decrypt transparently
+## ADR-003 · Legacy CBC rows: migrate, then refuse
 
-**Context.** Pre-GCM rows exist in deployed databases; forcing migration
-would break running installs on upgrade.
+**Context.** Pre-GCM rows existed in deployed databases; runtime used to
+decrypt them transparently via IV-length sniffing.
 
-**Decision.** IV-length detection (24 hex = GCM nonce, 32 hex = legacy CBC
-IV) with transparent CBC fallback; every record edited through the admin
-panel re-encrypts to GCM automatically. An explicit one-shot rotation tool
-(`tools/rotate_aes_key.php`) converts everything eagerly.
+**Decision.** The CBC fallback is REMOVED from runtime code —
+`decrypt_location()` accepts AES-256-GCM only (24-hex-char nonce). Migration
+is explicit and eager: `tools/migrate_cbc_to_gcm.php` converts every
+remaining CBC row inside one transaction (any undecryptable row aborts the
+run), with a `--dry-run` mode. Legacy CBC decryption exists solely inside
+that tool, unreachable from any HTTP path.
 
-**Consequences.** Upgrades are drop-in (+). Two code paths in the crypto core
-(−), mitigated by tests pinning both formats. CBC rows linger until touched
-or migrated (−) — documented in Residual Risk.
+**Consequences.** One crypto path in the runtime core (+). Unauthenticated
+encryption can never silently guard new data (+). Upgrading without running
+the tool makes legacy rows unreadable until it runs (− documented in README
+upgrade notes); the tool's all-or-nothing transaction makes that failure mode
+loud, not partial.
 
 ## ADR-004 · bcrypt with cost 12
 
@@ -80,7 +84,7 @@ shared-hosting-class CPUs.
 1 s on weak shared CPUs, degrading UX for legitimate recipients and making
 the login endpoint a trivial CPU-exhaustion DoS vector.
 
-**Why not lower.** Pickup passphrases are machine-generated ~40-bit strings;
+**Why not lower.** Pickup passphrases are machine-generated ≥64-bit strings;
 cost 12 stretches offline cracking of a stolen hash table from hours into
 geological time even before rate limiting enters the picture.
 
@@ -140,13 +144,44 @@ chains — documented in the rotation procedure: archive logs before rotating.
 not be reachable via back-button/replay, nor live in URLs.
 
 **Decision.** Unlock POST stores the reveal payload in the server-side
-session, redirects (303-style GET) to `/`, the next GET consumes and clears
-it. Fresh sessions see nothing.
+session **sealed with the AES key** (`seal_payload()`/`open_payload()`),
+redirects to `/`, the next GET consumes, decrypts and clears it. Fresh
+sessions see nothing.
 
-**Consequences.** Location never appears in history/referrer/logs (+).
-Reveal survives exactly one page load — refresh loses it by design
-(communicated in UI copy). Session file briefly holds plaintext location
-(+ accepted: same trust domain as the decryption code itself).
+**Consequences.** Location never appears in history/referrer/logs (+). The
+session store holds only ciphertext — someone dumping session files learns
+exactly as much as from the encrypted database rows (+). Reveal survives
+exactly one page load — refresh loses it by design (communicated in UI
+copy). The capability is additionally short-lived (180 s from unlock,
+`REVEAL_MAX_AGE`) and scoped: token, photos and notes travel inside the same
+sealed blob, so a tampered payload is rejected wholesale — never partially
+used. Decryption runs a second time per reveal (negligible cost).
+
+## ADR-013 · Enrollment secrets for passwordless accounts
+
+**Context.** Passwordless account creation originally made *the username*
+the claim credential: whoever knew an unclaimed courier's username could
+complete setup first. For admin/courier accounts that was the largest
+product-security blemish in the design.
+
+**Decision.** Creating an account without a password issues a single-use,
+24-hour enrollment secret (256-bit random, stored SHA-256-hashed, shown to
+the owner exactly once). The login form swaps the password field for an
+enrollment-code field for unclaimed usernames; `admin_login()` requires a
+valid, unexpired secret before arming the set-password step; claiming burns
+the secret. Owner bootstrap follows the same rule — its secret doubles as a
+recovery code shown once on the setup screen.
+
+**Alternatives rejected:** preset passwords (owner knows every credential —
+the original problem); magic links over email (no e-mail infrastructure in
+scope, and it would leak claim capability to a mail provider).
+
+**Consequences.** Username knowledge alone is worthless without the secret
+(+). The secret transits through the owner's hands exactly once and is
+never again present in the system un-hashed (+). Lost secrets require the
+owner to reset the password directly (− accepted, existing flow covers it).
+Accounts created passwordless before this change cannot be claimed until
+the owner resets them (− documented).
 
 ## ADR-009 · All third-party map traffic proxied server-side
 
@@ -201,3 +236,47 @@ every `.htaccess` protection.
 **Consequences.** Whatever the web server, protections are equivalent and
 CI smoke-tests each stack end-to-end (+). Three compose files to keep in
 sync (−), mitigated by the shared FPM image doing all app-level work.
+
+## ADR-014 · Pickup passwords: ≥64-bit, hash-only, shown once
+
+**Context.** Generated pickup passphrases carried ~40 bits of entropy —
+fine only while the rate limiter held. Worse, the database also stored an
+AES-encrypted copy of every password for admin display, so DB + key
+compromise recovered all plaintext pickup credentials at once.
+
+**Decision.** Two changes shipped together. (1) Entropy: the generator now
+draws 6 words from a 256-word list plus a 4-digit number and one symbol —
+6·log₂(256) + log₂(10000) + log₂(10) ≈ 64.61 bits; CryptoTest pins the word
+list at exactly 256 unique words and recomputes the entropy budget.
+(2) Recoverability removed entirely: only `pickup_password_hash` (bcrypt) is
+written; generated credentials are shown ONCE in the creation flash message;
+the edit form replaces passwords instead of revealing them;
+`tools/purge_pickup_password_recovery.php` clears legacy encrypted copies,
+and editing an order also purges them opportunistically.
+
+**Consequences.** DB + AES-key compromise no longer yields any pickup
+password (+). Lost credentials are replaced, not recovered — the admin flow
+says so explicitly (− accepted). Custom passwords have an 8-character floor
+(− none: generated ones are the default and far stronger).
+
+## ADR-015 · Panic wipe destroys everything, evidence included
+
+**Context.** Panic mode's purpose is "make this installation's data stop
+existing, now". Preserving audit evidence would preserve exactly what panic
+is meant to destroy.
+
+**Decision.** Explicit product decision: panic destroys EVERYTHING it can
+reach — orders, photos, event log, **audit_log included**, rate-limit rows
+and on-disk logs. The record of the wipe itself does not survive; whoever
+needs proof must rely on external monitoring. What survives deliberately:
+the schema, user accounts and settings, so the install keeps working. The
+DB side runs in one transaction (DELETE, not TRUNCATE); files are swept
+after commit with per-file failure counting; partial filesystem failures are
+reported honestly (`files_failed`) instead of claiming a complete wipe, and
+re-running is always safe.
+
+**Consequences.** No forensic trail after a panic (+ by definition, − for
+incident response — accepted consciously). A failed run can never look
+successful (+). Concurrent cleanup/receive/reveal cannot corrupt the wipe
+(row locks, idempotent sweeps) (+).
+

@@ -1,11 +1,11 @@
 Options -Indexes
 
 <FilesMatch "\.php$">
-    Order Allow,Deny
-    Allow from all
+    # Apache 2.4 authz (Order/Allow/Deny is deprecated mod_access_compat syntax)
+    Require all granted
 </FilesMatch>
 
 <FilesMatch "\.htaccess$">
-    Order Allow,Deny
-    Deny from all
+    # Apache 2.4 authz (Order/Allow/Deny is deprecated mod_access_compat syntax)
+    Require all denied
 </FilesMatch>

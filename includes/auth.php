@@ -9,7 +9,7 @@ function start_secure_session(): void {
     session_set_cookie_params([
         'lifetime' => 0,
         'path'     => '/',
-        'secure'   => isset($_SERVER['HTTPS']),
+        'secure'   => request_is_https(),
         'httponly' => true,
         'samesite' => 'Strict',
     ]);
@@ -101,24 +101,17 @@ function admin_finish_login(int $user_id, string $role, string $username, bool $
     $_SESSION['totp_enabled'] = $totp_enabled;
     $_SESSION['user_lang']    = $lang;
     $_SESSION['login_time']   = time();
-    unset($_SESSION['csrf_token'], $_SESSION['pending_2fa_user_id'], $_SESSION['pending_2fa_time']);
+    unset($_SESSION['csrf_token'], $_SESSION['pending_2fa_user_id'], $_SESSION['pending_2fa_time'],
+          $_SESSION['pending_setup_user_id'], $_SESSION['pending_setup_time']);
 }
 
 // Returns 'ok' (fully logged in), 'need_2fa' (password ok, TOTP code required
-// next), or 'fail' (bad credentials).
+// next), 'need_setup' (account exists but has no password yet — first login;
+// the pending-setup session state is armed), or 'fail' (bad credentials).
 function admin_login(string $username, string $password): string {
     require_once dirname(__DIR__) . '/includes/db.php';
     try {
-        $db = get_db();
-
-        // Auto-seed owner from config constants if the users table is empty
-        $count = (int)$db->query('SELECT COUNT(*) FROM users')->fetchColumn();
-        if ($count === 0 && defined('ADMIN_USERNAME') && defined('ADMIN_PASSWORD_HASH')) {
-            $db->prepare('INSERT INTO users (username, password_hash, role) VALUES (?, ?, "owner")')
-               ->execute([ADMIN_USERNAME, ADMIN_PASSWORD_HASH]);
-        }
-
-        $stmt = $db->prepare('SELECT * FROM users WHERE username = ? LIMIT 1');
+        $stmt = get_db()->prepare('SELECT * FROM users WHERE username = ? LIMIT 1');
         $stmt->execute([$username]);
         $user = $stmt->fetch();
     } catch (Exception $e) {
@@ -132,7 +125,32 @@ function admin_login(string $username, string $password): string {
         return 'fail';
     }
 
-    if (!$user || !password_verify($password, $user['password_hash'])) {
+    if (!$user) {
+        // Burn the same bcrypt cost a real account would: unknown username
+        // and wrong password become indistinguishable by timing. No sleeps —
+        // the hash itself IS the constant-time answer.
+        password_verify($password, DUMMY_AUTH_HASH);
+        return 'fail';
+    }
+
+    $hash = (string)$user['password_hash'];
+
+    // Accounts awaiting first login carry no password: the enrollment secret
+    // issued at account creation is the claim credential — knowing only the
+    // username must never reach the setup step. Anything else just fails.
+    if ($hash === '') {
+        $enrollment = trim((string)($_POST['enrollment'] ?? ''));
+        if ($password !== '' || $enrollment === '' || !enrollment_secret_valid((int)$user['id'], $enrollment)) {
+            return 'fail';
+        }
+        session_regenerate_id(true);
+        $_SESSION['pending_setup_user_id'] = (int)$user['id'];
+        $_SESSION['pending_setup_time']    = time();
+        unset($_SESSION['csrf_token']);
+        return 'need_setup';
+    }
+
+    if (!password_verify($password, $hash)) {
         return 'fail';
     }
 
@@ -189,7 +207,7 @@ function set_security_headers(bool $admin = false): string {
     header('Cache-Control: no-store, no-cache, must-revalidate, private');
     header('Pragma: no-cache');
 
-    if (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') {
+    if (request_is_https()) {
         header('Strict-Transport-Security: max-age=31536000; includeSubDomains');
     }
 
@@ -203,7 +221,8 @@ function set_security_headers(bool $admin = false): string {
             "font-src 'self'; " .
             "script-src 'self' 'nonce-{$nonce}'; " .
             "img-src 'self' data: blob:; " .
-            "connect-src 'self';"
+            "connect-src 'self'; " .
+            "object-src 'none'; base-uri 'self'; frame-ancestors 'none';"
         );
         return $nonce;
     }
@@ -217,7 +236,8 @@ function set_security_headers(bool $admin = false): string {
         "font-src 'self'; " .
         "script-src 'self' 'nonce-{$nonce}'; " .
         "img-src 'self'; " .
-        "frame-src https://www.openstreetmap.org;"
+        "frame-src https://www.openstreetmap.org; " .
+        "object-src 'none'; base-uri 'self'; frame-ancestors 'none';"
     );
     return $nonce;
 }
@@ -243,7 +263,11 @@ function rl_status(string $scope = 'public'): array {
         $stmt->execute([get_client_ip(), $scope]);
         $row = $stmt->fetch();
     } catch (Exception $e) {
-        return ['blocked' => false, 'remaining' => 0, 'count' => 0];
+        // Fail CLOSED: this limiter guards pickup-password guessing and admin
+        // login. If the counter is unreadable the caller must treat the
+        // request as blocked (temporary outage), never as unblocked traffic.
+        log_err('Rate limit status failed (fail closed): ' . $e->getMessage());
+        return ['blocked' => true, 'remaining' => $window, 'count' => 0];
     }
     if (!$row || (time() - strtotime($row['window_start'])) >= $window) {
         return ['blocked' => false, 'remaining' => $window, 'count' => 0];
@@ -255,28 +279,66 @@ function rl_status(string $scope = 'public'): array {
     ];
 }
 
-function rl_increment(string $scope = 'public'): void {
-    if (!rl_enabled()) return;
+// Spend one attempt from the IP budget AND decide, atomically. The whole
+// read-decide-write runs inside one transaction on a row lock (SELECT ...
+// FOR UPDATE): concurrent requests from the same IP are serialized, so no
+// increment can be lost and two simultaneous visitors can never both see
+// "one attempt left". The returned 'blocked' verdict comes from the
+// post-increment count of that single state transition.
+function rl_hit(string $scope = 'public'): array {
+    if (!rl_enabled()) {
+        return ['blocked' => false, 'remaining' => 0, 'count' => 0];
+    }
     require_once dirname(__DIR__) . '/includes/settings.php';
     $ip     = get_client_ip();
+    $max    = rl_max();
     $window = rl_window_seconds();
+    $db     = get_db();
     try {
-        $db   = get_db();
-        $stmt = $db->prepare('SELECT window_start FROM rate_limits WHERE ip_address = ? AND scope = ? LIMIT 1');
+        $db->beginTransaction();
+        $stmt = $db->prepare(
+            'SELECT count, window_start FROM rate_limits WHERE ip_address = ? AND scope = ? LIMIT 1 FOR UPDATE'
+        );
         $stmt->execute([$ip, $scope]);
         $row = $stmt->fetch();
-        if (!$row || (time() - strtotime($row['window_start'])) >= $window) {
+
+        $stale = !$row || (time() - strtotime($row['window_start'])) >= $window;
+        if ($stale) {
             $db->prepare(
                 'INSERT INTO rate_limits (ip_address, scope, count, window_start) VALUES (?, ?, 1, UTC_TIMESTAMP())
                  ON DUPLICATE KEY UPDATE count = 1, window_start = UTC_TIMESTAMP()'
             )->execute([$ip, $scope]);
+            $count = 1;
+            $window_start = time();
         } else {
+            $count = (int)$row['count'] + 1;
+            $window_start = (int)strtotime($row['window_start']);
             $db->prepare('UPDATE rate_limits SET count = count + 1 WHERE ip_address = ? AND scope = ?')
                ->execute([$ip, $scope]);
         }
+        $db->commit();
     } catch (Exception $e) {
-        log_err('Rate limit increment failed: ' . $e->getMessage());
+        if ($db->inTransaction()) {
+            $db->rollBack();
+        }
+        // Fail CLOSED: an uncountable limiter must deny, never wave through.
+        log_err('Rate limit increment failed (fail closed): ' . $e->getMessage());
+        return ['blocked' => true, 'remaining' => $window, 'count' => 0];
     }
+    return [
+        // count > max (not >=): the max-th attempt still executes, matching
+        // rl_status's "blocked when the stored count reached max" semantics —
+        // the budget buys max real attempts, the max+1-th is denied.
+        'blocked'   => $count > $max,
+        'remaining' => max(0, $window - (time() - $window_start)),
+        'count'     => $count,
+    ];
+}
+
+// Legacy shape for callers that only spend budget without reading the
+// verdict — every decision-making path should use rl_hit() instead.
+function rl_increment(string $scope = 'public'): void {
+    rl_hit($scope);
 }
 
 // Reset a scope's counter for the current IP (called on a successful attempt).
@@ -321,4 +383,33 @@ function bucket_remaining(string $scope = 'public'): int {
 
 function bucket_clear(string $scope = 'public'): void {
     unset($_SESSION['pw_fail'][$scope]);
+}
+
+// ── Enrollment secrets (single-use claim credentials) ────────────────────────
+// Issued when an account is created passwordless; the recipient must present
+// it once at first login to reach the choose-password step. 256-bit random,
+// stored SHA-256-hashed, expires, cleared on successful claim.
+
+function enrollment_secret_generate(): string {
+    return bin2hex(random_bytes(32)); // 256 bits → 64 hex chars
+}
+
+function enrollment_secret_hash(string $secret): string {
+    return hash('sha256', trim($secret));
+}
+
+function enrollment_secret_valid(int $user_id, string $secret): bool {
+    try {
+        $stmt = get_db()->prepare(
+            'SELECT enrollment_hash FROM users
+             WHERE id = ? AND enrollment_hash IS NOT NULL
+               AND (enrollment_expires IS NULL OR enrollment_expires > NOW())
+             LIMIT 1'
+        );
+        $stmt->execute([$user_id]);
+        $row = $stmt->fetch();
+        return $row && hash_equals((string)$row['enrollment_hash'], enrollment_secret_hash($secret));
+    } catch (Exception $e) {
+        return false;
+    }
 }

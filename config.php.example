@@ -19,6 +19,16 @@ define('DB_USER',    _secret('DDMGMT_DB_USER', 'root'));
 define('DB_PASS',    _secret('DDMGMT_DB_PASS', ''));
 define('DB_CHARSET', 'utf8mb4');
 
+// ── Database TLS (distributed deployments) ───────────────────────────────────
+// Same-host installs need none of these. For app and DB on different hosts,
+// point DDMGMT_DB_SSL_CA at the CA bundle that signed the server certificate;
+// client certificates are optional. Verification can only be disabled
+// explicitly (never do it over untrusted networks).
+define('DB_SSL_CA',     _secret('DDMGMT_DB_SSL_CA', ''));
+define('DB_SSL_CERT',   _secret('DDMGMT_DB_SSL_CERT', ''));
+define('DB_SSL_KEY',    _secret('DDMGMT_DB_SSL_KEY', ''));
+define('DB_SSL_VERIFY', _secret('DDMGMT_DB_SSL_VERIFY_CERT', '1') === '1');
+
 // ── AES-256-GCM key (32 bytes stored as 64-char hex) ─────────────────────────
 // Generate:  php -r "echo bin2hex(random_bytes(32)) . PHP_EOL;"
 define('AES_KEY_HEX', _secret('DDMGMT_AES_KEY_HEX', 'REPLACE_WITH_64_HEX_CHARS_FROM_PHP_R_ABOVE__________'));
@@ -42,6 +52,17 @@ define('SESSION_LIFETIME', 3600); // seconds
 define('RATE_LIMIT_MAX',    10);
 define('RATE_LIMIT_WINDOW', 900); // 15 minutes
 
+// Fixed bcrypt hash of an unknown random secret. Verifying submitted
+// credentials against it when the account/token does not exist equalizes CPU
+// cost between "unknown identifier" and "wrong password" — enumeration
+// resistance without sleeps or other timing hacks. The plaintext it hashes
+// was never stored anywhere.
+define('DUMMY_AUTH_HASH', '$2y$12$' . 'JOfiPnfCGcrXUxs5MiJ81.' . 'vMz8Qs6n2qJpelljzdwVQJ8TVatrxTC');
+
+// Fixed base32 TOTP secret for the same purpose on the 2FA step: a missing
+// account or undecryptable secret still burns one full verification.
+define('DUMMY_TOTP_SECRET', 'KRZGS5DQNZQXG2DDNZUW453FOV2GKY3O');
+
 // ── Timezone (UTC everywhere so PHP + MySQL agree regardless of server clock) ─
 date_default_timezone_set('UTC');
 
@@ -51,26 +72,68 @@ ini_set('log_errors',     '1');
 ini_set('error_log',       ERROR_LOG_PATH);
 
 // ── Client IP resolution (used by rate limiting, audit log) ────────────────
+// Proxy headers (CF-Connecting-IP, X-Forwarded-For, X-Real-IP) are trusted
+// ONLY when the deployment says so: set DDMGMT_TRUST_PROXY=1 when the app
+// runs behind a reverse proxy or CDN that OVERWRITES these headers. Without
+// it, any client could spoof its address and sidestep IP rate limiting or
+// poison the audit log. Values are always validated as literal IPs; without
+// proxy trust the TCP peer address (REMOTE_ADDR) is the only truth.
 function get_client_ip(): string {
-    $candidates = [
-        'HTTP_CF_CONNECTING_IP',
-        'HTTP_X_FORWARDED_FOR',
-        'HTTP_X_REAL_IP',
-        'REMOTE_ADDR',
-    ];
-    foreach ($candidates as $key) {
-        if (!empty($_SERVER[$key])) {
-            $ip = trim(explode(',', $_SERVER[$key])[0]);
-            if (filter_var($ip, FILTER_VALIDATE_IP)) {
-                return $ip;
+    if (_secret('DDMGMT_TRUST_PROXY', '0') === '1') {
+        $candidates = [
+            'HTTP_CF_CONNECTING_IP',
+            'HTTP_X_FORWARDED_FOR',
+            'HTTP_X_REAL_IP',
+        ];
+        foreach ($candidates as $key) {
+            if (!empty($_SERVER[$key])) {
+                $raw = trim((string)$_SERVER[$key]);
+                // Multi-hop XFF: a proxy that APPENDS leaves earlier entries
+                // client-controlled, so "first entry" is then attacker-chosen.
+                // This deployment contract expects an OVERWRITING proxy — say
+                // so loudly when the header looks multi-hop. The static flag
+                // breaks the get_client_ip() <-> app_log() call cycle (the
+                // logger asks this very function for the request IP).
+                if ($key === 'HTTP_X_FORWARDED_FOR' && str_contains($raw, ',')) {
+                    static $multihop_warned = false;
+                    if (!$multihop_warned) {
+                        $multihop_warned = true;
+                        log_warn('xff_multihop', ['msg' => 'X-Forwarded-For carries multiple hops; first entry used — verify the proxy overwrites (not appends) this header']);
+                    }
+                }
+                $ip = trim(explode(',', $raw)[0]);
+                if (filter_var($ip, FILTER_VALIDATE_IP)) {
+                    return $ip;
+                }
             }
         }
     }
-    return '0.0.0.0';
+    return (string)($_SERVER['REMOTE_ADDR'] ?? '0.0.0.0');
 }
 
-// Overwrite file contents with null bytes before unlinking (best-effort)
-function secure_unlink(string $path): void {
+// ── Request scheme detection (session cookie "secure" flag, HSTS) ────────────
+// Behind a TLS-terminating reverse proxy PHP sees plain HTTP, so $_SERVER
+//['HTTPS'] lies about the browser-side security context. With
+// DDMGMT_TRUST_PROXY=1 the X-Forwarded-Proto header decides (only the literal
+// "https" counts, first hop of a comma list). Without proxy trust PHP's own
+// view wins — never set the cookie "secure"-less on a proxy you trust.
+function request_is_https(): bool {
+    if (_secret('DDMGMT_TRUST_PROXY', '0') === '1') {
+        $proto = strtolower(trim(explode(',', (string)($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? ''))[0]));
+        if ($proto !== '') {
+            return $proto === 'https';
+        }
+    }
+    return !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off';
+}
+
+// Best-effort destructive unlink: null bytes are written over the file
+// contents before removal. This is NOT a guarantee of secure deletion —
+// copy-on-write filesystems, SSD wear-leveling and journaling may retain
+// the original blocks elsewhere. Treat it as raising the effort bar for
+// casual recovery, not as cryptographic erasure; full-disk encryption is
+// the only real answer on modern storage.
+function overwrite_and_unlink(string $path): void {
     if (!is_file($path)) return;
     try {
         $size = @filesize($path);

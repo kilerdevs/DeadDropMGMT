@@ -30,7 +30,7 @@ services:
     build: .
     restart: unless-stopped
     ports:
-      - "${APP_PORT:-8080}:80"
+      - "${APP_PORT:-2137}:80"
     environment:
       DDMGMT_DB_HOST: db
       DDMGMT_DB_PORT: "3306"

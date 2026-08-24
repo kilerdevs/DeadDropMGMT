@@ -5,15 +5,21 @@ on:
     branches: [master, dev]
   pull_request:
 
+# Jobs here need no write access — read-only by default, so a compromised
+# workflow or action cannot touch the repo.
+permissions:
+  contents: read
+
 jobs:
   tests:
     runs-on: ubuntu-latest
-    # README promises PHP 8.0+ — test the whole supported range.
-    # fail-fast so one broken version doesn't hide results from the others.
+    # README promises PHP 8.2+ (8.0/8.1 are EOL — testing them would bless
+    # unpatched runtimes). fail-fast so one broken version doesn't hide
+    # results from the others.
     strategy:
       fail-fast: false
       matrix:
-        php: ['8.0', '8.1', '8.2', '8.3', '8.4']
+        php: ['8.2', '8.3', '8.4']
     name: tests (PHP ${{ matrix.php }})
     services:
       # setup.sql uses MariaDB syntax (ALTER TABLE ... ADD COLUMN IF NOT EXISTS)
@@ -35,10 +41,12 @@ jobs:
       DDMGMT_DB_PASS: root
       DDMGMT_TEST_DB: deaddrops_test
     steps:
-      - uses: actions/checkout@v4
+      # Third-party actions are pinned to commit SHAs, not moving tags: a
+      # hijacked tag must not be able to run code in this repo.
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
       - name: Setup PHP
-        uses: shivammathur/setup-php@v2
+        uses: shivammathur/setup-php@bf6b4fbd49ca58e4608c9c89fba0b8d90bd2a39f # 2.35.5
         with:
           php-version: ${{ matrix.php }}
           extensions: pdo_mysql, openssl, gd, fileinfo
@@ -57,9 +65,78 @@ jobs:
       - name: Run tests
         run: php tests/run_all.php
 
+  # Same suite against MySQL 8 — the app claims MySQL/MariaDB support, and
+  # setup.sql must stay portable (guarded ALTERs, no engine-only syntax).
+  tests-mysql:
+    runs-on: ubuntu-latest
+    name: tests (MySQL 8)
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -proot"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      DDMGMT_DB_HOST: 127.0.0.1
+      DDMGMT_DB_PORT: '3306'
+      DDMGMT_DB_USER: root
+      DDMGMT_DB_PASS: root
+      DDMGMT_TEST_DB: deaddrops_test
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@bf6b4fbd49ca58e4608c9c89fba0b8d90bd2a39f # 2.35.5
+        with:
+          php-version: '8.3'
+          extensions: pdo_mysql, openssl, gd, fileinfo
+
+      - name: Prepare config
+        run: cp config.php.example config.php
+
+      - name: Load schema into test database
+        run: php tests/schema_loader.php
+
+      - name: Run tests
+        run: php tests/run_all.php
+
+  # Static analysis (PHPStan level 5) over the runtime code. The phar is
+  # version- AND hash-pinned: a compromised release must not analyse — or
+  # worse, pass — this repo's code.
+  phpstan:
+    runs-on: ubuntu-latest
+    name: PHPStan
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@bf6b4fbd49ca58e4608c9c89fba0b8d90bd2a39f # 2.35.5
+        with:
+          php-version: '8.3'
+          extensions: pdo_mysql, openssl, gd, fileinfo
+
+      - name: Prepare config
+        run: cp config.php.example config.php
+
+      - name: Run PHPStan
+        run: |
+          curl -fsSL -o phpstan.phar \
+            https://github.com/phpstan/phpstan/releases/download/2.2.9/phpstan.phar
+          echo "42af2954326f2f6f0c39e12eb0e1229b9e037297e2caec9a5db11d44e4f6cce1  phpstan.phar" | sha256sum -c -
+          php phpstan.phar analyse --no-progress
+
   # Line coverage over includes/ (the security-critical library code).
   # Separate job: needs pcov + the dev-only Composer dependency (ADR-001 keeps
   # runtime dependency-free; composer.json is tooling, never shipped).
+  # The job also ENFORCES coverage floors: overall includes/ >= 80% and every
+  # security-critical file >= 90% — a regression is a failed build, not a
+  # quieter number on a report nobody reads.
   coverage:
     runs-on: ubuntu-latest
     services:
@@ -81,10 +158,10 @@ jobs:
       DDMGMT_DB_PASS: root
       DDMGMT_TEST_DB: deaddrops_test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
       - name: Setup PHP
-        uses: shivammathur/setup-php@v2
+        uses: shivammathur/setup-php@bf6b4fbd49ca58e4608c9c89fba0b8d90bd2a39f # 2.35.5
         with:
           php-version: '8.3'
           extensions: pdo_mysql, openssl, gd, fileinfo
@@ -96,18 +173,22 @@ jobs:
       - name: Install dev tooling
         run: composer install --no-interaction --no-progress
 
+      # Dev dependencies are still dependencies: audit them on every build.
+      - name: Audit dev dependencies
+        run: composer audit
+
       - name: Load schema
         run: php tests/schema_loader.php
 
       - name: Run tests with coverage
         run: |
-          php tests/coverage_runner.php | tee coverage.txt
-          grep -E "^\s*(Lines|Lines):" coverage.txt | head -1 >> $GITHUB_STEP_SUMMARY || true
+          php tests/coverage_runner.php --html=coverage-html \
+               --min-overall=80 --min-critical=90 | tee coverage.txt
           grep -oP "Lines:\s+\K[\d.]+" coverage.txt | head -1 | \
             { read pct; echo "### Line coverage: ${pct}%" >> $GITHUB_STEP_SUMMARY; } || true
 
       - name: Upload HTML report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: coverage-html
           path: coverage-html
@@ -123,13 +204,61 @@ jobs:
       DDMGMT_DB_USER: deaddrop
       DDMGMT_DB_PASS: deaddrop-db
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
       - name: Build Apache image
         run: docker build -t deaddrop:apache .
 
       - name: Build PHP-FPM image
         run: docker build -f Dockerfile.fpm -t deaddrop:fpm .
+
+      # Vulnerability scans of BOTH shipped images (the FPM image is what the
+      # nginx and Caddy stacks actually run): HIGH/CRITICAL findings with a
+      # fix available fail the build — bumping the base image is the fix.
+      - name: Scan Apache image (Trivy)
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: deaddrop:apache
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          vuln-type: os,library
+
+      - name: Scan FPM image (Trivy)
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: deaddrop:fpm
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          vuln-type: os,library
+
+      # SBOM (CycloneDX) for both images — the inventory that makes the CVE
+      # scans auditable and gives downstream deployers something to diff.
+      - name: Generate SBOMs (CycloneDX)
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: deaddrop:apache
+          format: cyclonedx
+          output: sbom-apache.cdx.json
+          scan-type: image
+
+      - name: Generate FPM SBOM (CycloneDX)
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: deaddrop:fpm
+          format: cyclonedx
+          output: sbom-fpm.cdx.json
+          scan-type: image
+
+      - name: Upload SBOMs
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: sbom
+          path: sbom-*.cdx.json
+          retention-days: 30
 
       - name: Validate compose files
         run: |
@@ -139,28 +268,59 @@ jobs:
 
       # Smoke test = boot the full stack, wait for the public page to render.
       # On failure dump container state + logs, or the failure stays a mystery.
-      - name: Smoke test (Apache)
+      # Then the full-lifecycle journey runs INSIDE the container: first-run
+      # owner creation → login → create → deliver → lookup → unlock →
+      # receipt → assert wiped (docker/e2e_journey.php).
+      - name: Smoke test + lifecycle journey (Apache)
         run: |
           trap 'docker compose ps -a; echo "--- APP LOGS ---"; docker compose logs --no-color app' ERR
           docker compose up -d --build --quiet-pull
-          timeout 90 bash -c 'until curl -fs http://127.0.0.1:8080/ >/dev/null; do sleep 2; done'
-          curl -fs http://127.0.0.1:8080/ | grep -qi "<title>"
+          timeout 90 bash -c 'until curl -fs http://127.0.0.1:2137/ >/dev/null; do sleep 2; done'
+          curl -fs http://127.0.0.1:2137/ | grep -qi "<title>"
+          [ "$(curl -s http://127.0.0.1:2137/healthz.php)" = "ok" ]
+          docker compose exec -T app php docker/e2e_journey.php
           docker compose down -v
 
       - name: Smoke test (nginx + fpm)
         run: |
           docker compose -f docker-compose.nginx.yml up -d --build --quiet-pull
-          timeout 90 bash -c 'until curl -fs http://127.0.0.1:8080/ >/dev/null; do sleep 2; done'
-          curl -fs http://127.0.0.1:8080/ | grep -qi "<title>"
-          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/includes/db.php)" = 403 ]
-          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/config.php)" = 403 ]
+          timeout 90 bash -c 'until curl -fs http://127.0.0.1:2137/ >/dev/null; do sleep 2; done'
+          curl -fs http://127.0.0.1:2137/ | grep -qi "<title>"
+          [ "$(curl -s http://127.0.0.1:2137/healthz.php)" = "ok" ]
+          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:2137/includes/db.php)" = 403 ]
+          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:2137/config.php)" = 403 ]
           docker compose -f docker-compose.nginx.yml down -v
 
       - name: Smoke test (Caddy + fpm)
         run: |
           docker compose -f docker-compose.caddy.yml up -d --build --quiet-pull
-          timeout 90 bash -c 'until curl -fs http://127.0.0.1:8080/ >/dev/null; do sleep 2; done'
-          curl -fs http://127.0.0.1:8080/ | grep -qi "<title>"
-          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/includes/db.php)" = 403 ]
-          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/config.php)" = 403 ]
+          timeout 90 bash -c 'until curl -fs http://127.0.0.1:2137/ >/dev/null; do sleep 2; done'
+          curl -fs http://127.0.0.1:2137/ | grep -qi "<title>"
+          [ "$(curl -s http://127.0.0.1:2137/healthz.php)" = "ok" ]
+          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:2137/includes/db.php)" = 403 ]
+          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:2137/config.php)" = 403 ]
           docker compose -f docker-compose.caddy.yml down -v
+
+      # DAST: OWASP ZAP baseline (spider + passive analysis) against a live
+      # Apache stack — public surface plus the admin login form it links to.
+      # The stack is booted here because the smoke tests above tear theirs
+      # down; ZAP runs with --network=host, so 127.0.0.1:2137 must be alive.
+      # Report-only for now: baseline rules flag intentional things (no CSP
+      # on the JSON endpoints, missing HSTS on plain-HTTP CI traffic) that
+      # need per-rule triage before the gate can fail builds honestly.
+      - name: Boot stack for DAST
+        run: |
+          docker compose up -d --build --quiet-pull
+          timeout 90 bash -c 'until curl -fs http://127.0.0.1:2137/healthz.php >/dev/null; do sleep 2; done'
+
+      - name: ZAP baseline scan (report)
+        uses: zaproxy/action-baseline@6c5a007541891231cd9e0ddec25d4f25c59c9874 # v0.15.0
+        continue-on-error: true
+        with:
+          target: 'http://127.0.0.1:2137/'
+          cmd_options: '-I -a'
+          allow_issue_writing: false
+
+      - name: Tear down DAST stack
+        if: always()
+        run: docker compose down -v

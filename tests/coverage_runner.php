@@ -73,4 +73,69 @@ if ($htmlDir = getopt('', ['html:'])['html'] ?? null) {
     echo "HTML report written to {$htmlDir}/\n";
 }
 
+// ── Coverage floors: an explicit answer to "did security quality regress?" ───
+// The job fails when overall includes/ coverage drops below --min-overall,
+// or when any security-critical file drops below --min-critical. Floors are
+// printed even on success so drift stays visible.
+$opts        = getopt('', ['html:', 'min-overall:', 'min-critical:']);
+$minOverall  = isset($opts['min-overall'])  ? (float)$opts['min-overall']  : 0.0;
+$minCritical = isset($opts['min-critical']) ? (float)$opts['min-critical'] : 0.0;
+
+if ($minOverall > 0 || $minCritical > 0) {
+    // Files where a coverage regression is a security event, not a stats blip.
+    $critical = ['auth.php', 'crypto.php', 'db.php', 'order_state.php', 'totp.php', 'wipe.php'];
+
+    $perFile = [];
+    $sumExe  = 0;
+    $sumRun  = 0;
+    $walk = static function ($node) use (&$walk, &$perFile, &$sumExe, &$sumRun): void {
+        foreach ($node->filesAndDirectories() as $child) {
+            if ($child instanceof \SebastianBergmann\CodeCoverage\Node\Directory) {
+                $walk($child);
+                continue;
+            }
+            $exe = $child->numberOfExecutableLines();
+            $run = $child->numberOfExecutedLines();
+            $sumExe += $exe;
+            $sumRun += $run;
+            $perFile[basename($child->pathAsString())] = $exe > 0 ? ($run / $exe) * 100 : 100.0;
+        }
+    };
+    $walk($merged->getReport());
+
+    $overall = $sumExe > 0 ? ($sumRun / $sumExe) * 100 : 100.0;
+    $fail    = false;
+
+    if ($minOverall > 0) {
+        printf("\nFloor check — overall includes/: %.2f%% (floor %.2f%%)\n", $overall, $minOverall);
+        if ($overall < $minOverall) {
+            fwrite(STDERR, sprintf(
+                "COVERAGE FLOOR VIOLATION: overall %.2f%% is below the %.2f%% floor.\n" .
+                "Add tests or lower the floor deliberately (and document why).\n",
+                $overall, $minOverall
+            ));
+            $fail = true;
+        }
+    }
+
+    if ($minCritical > 0) {
+        echo "Floor check — security-critical files:\n";
+        foreach ($critical as $f) {
+            $pct = $perFile[$f] ?? 0.0;
+            printf("  %-20s %6.2f%% (floor %.2f%%)\n", $f, $pct, $minCritical);
+            if ($pct < $minCritical) {
+                fwrite(STDERR, sprintf(
+                    "COVERAGE FLOOR VIOLATION: %s at %.2f%% is below the %.2f%% floor.\n",
+                    $f, $pct, $minCritical
+                ));
+                $fail = true;
+            }
+        }
+    }
+
+    if ($fail) {
+        exit(2);
+    }
+}
+
 exit($totalFail > 0 ? 1 : 0);

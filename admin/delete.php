@@ -44,7 +44,7 @@ try {
     $photos = $db->prepare('SELECT filename FROM order_photos WHERE order_id = ?');
     $photos->execute([$id]);
     foreach ($photos->fetchAll() as $ph) {
-        secure_unlink(dirname(__DIR__) . '/uploads/' . $ph['filename']);
+        overwrite_and_unlink(dirname(__DIR__) . '/uploads/' . $ph['filename']);
     }
 
     // Wipe sensitive columns before row removal

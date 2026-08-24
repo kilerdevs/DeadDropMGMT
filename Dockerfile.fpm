@@ -6,16 +6,21 @@
 FROM php:8.3-fpm
 
 RUN apt-get update \
+ && apt-get upgrade -y \
  && apt-get install -y --no-install-recommends \
         libfreetype6-dev \
         libjpeg62-turbo-dev \
         libpng-dev \
- && docker-php-ext-configure gd --with-freetype --with-jpeg \
+        libwebp-dev \
+ && docker-php-ext-configure gd --with-freetype --with-jpeg --with-webp \
  && docker-php-ext-install -j"$(nproc)" gd pdo_mysql \
  && rm -rf /var/lib/apt/lists/*
 
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY . /var/www/html
+# The lifecycle journey (CI) re-runs the schema loader inside the container;
+# tests/ as a whole is dockerignored, but this one file ships deliberately.
+COPY tests/schema_loader.php /var/www/html/tests/schema_loader.php
 
 RUN chmod +x /usr/local/bin/entrypoint.sh \
  # pristine config template outside the docroot for first-boot rendering
@@ -24,5 +29,13 @@ RUN chmod +x /usr/local/bin/entrypoint.sh \
  && chown -R www-data:www-data /var/www/html/logs /var/www/html/uploads /var/www/html/cache /config
 
 WORKDIR /var/www/html
+# php-fpm speaks FastCGI, not HTTP — there is no in-container way to ask it to
+# serve /healthz.php, so the container-level check is honest process liveness
+# (the FPM master is alive). The REAL end-to-end health signal lives one layer
+# up: nginx/Caddy smoke tests in CI and any external load balancer should
+# target /healthz.php through the front server, which exercises FPM workers,
+# the docroot and config rendering together.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD kill -0 1
 ENTRYPOINT ["entrypoint.sh"]
 CMD ["php-fpm"]

@@ -6,6 +6,7 @@ require_once dirname(__DIR__) . '/includes/auth.php';
 require_once dirname(__DIR__) . '/includes/crypto.php';
 require_once dirname(__DIR__) . '/includes/settings.php';
 require_once dirname(__DIR__) . '/includes/audit.php';
+require_once dirname(__DIR__) . '/includes/order_state.php';
 require_once dirname(__DIR__) . '/includes/i18n.php';
 
 start_secure_session();
@@ -17,28 +18,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delet
     if (verify_csrf($_POST['csrf_token'] ?? '')) {
         $del_id = (int)($_POST['id'] ?? 0);
         if ($del_id > 0 && courier_owns_order($del_id)) {
-            try {
-                $del_db = get_db();
-                $tq = $del_db->prepare('SELECT order_token FROM orders WHERE id = ? LIMIT 1');
-                $tq->execute([$del_id]);
-                $del_token = $tq->fetchColumn() ?: null;
-
-                $pq = $del_db->prepare('SELECT filename FROM order_photos WHERE order_id = ?');
-                $pq->execute([$del_id]);
-                foreach ($pq->fetchAll() as $ph) {
-                    secure_unlink(dirname(__DIR__) . '/uploads/' . $ph['filename']);
-                }
-                $dq = $del_db->prepare('DELETE FROM orders WHERE id = ?');
-                $dq->execute([$del_id]);
-                $affected = $dq->rowCount();
-                if ($affected > 0) {
-                    audit('order_delete', $del_id, $del_token);
-                }
-                $_SESSION['flash']    = $affected > 0 ? t('admin.orders.flash.deleted') : t('admin.orders.flash.not_found');
-                $_SESSION['flash_ok'] = $affected > 0;
-            } catch (Throwable $e) {
-                log_err('Order delete: ' . $e->getMessage());
-                $_SESSION['flash']    = t('admin.orders.flash.delete_failed');
+            // Same atomic delete-under-lock core as order_close/order_remove.
+            $res = order_delete_atomic($del_id);
+            if ($res !== null) {
+                audit('order_delete', $del_id, $res['token']);
+                $_SESSION['flash']    = t('admin.orders.flash.deleted');
+                $_SESSION['flash_ok'] = true;
+            } else {
+                $_SESSION['flash']    = t('admin.orders.flash.not_found');
                 $_SESSION['flash_ok'] = false;
             }
         } else {
@@ -82,7 +69,6 @@ try {
 
     $stmt = $db->prepare(
         "SELECT o.id, o.order_token, o.status, o.created_at, o.delivered_at, o.expires_at,
-                o.pickup_password_enc, o.pickup_password_iv,
                 o.created_by,
                 u.username AS courier_name,
                 COUNT(p.id) AS photo_count
@@ -96,16 +82,9 @@ try {
     $stmt->execute($where_args);
     $rows = $stmt->fetchAll();
 
-    $orders = [];
-    foreach ($rows as $o) {
-        $pw = null;
-        if (!empty($o['pickup_password_enc']) && !empty($o['pickup_password_iv'])) {
-            $dec = decrypt_location($o['pickup_password_enc'], $o['pickup_password_iv']);
-            $pw  = ($dec !== false) ? $dec : null;
-        }
-        $o['pw_plain'] = $pw;
-        $orders[]      = $o;
-    }
+    // Pickup passwords are hash-only since the recovery copy was removed:
+    // they exist once at creation and are otherwise replaced, not displayed.
+    $orders = $rows;
 } catch (Throwable $e) {
     log_err('Admin fetch: ' . $e->getMessage());
     $orders   = [];
@@ -219,8 +198,7 @@ $_active = 'orders';
 
                                 <button class="action-btn"
                                         data-copy
-                                        data-token="<?= htmlspecialchars($o['order_token'], ENT_QUOTES, 'UTF-8') ?>"
-                                        data-code="<?= htmlspecialchars($o['pw_plain'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
+                                        data-token="<?= htmlspecialchars($o['order_token'], ENT_QUOTES, 'UTF-8') ?>">
                                     <?= t('admin.orders.copy_button') ?>
                                 </button>
 

@@ -49,7 +49,7 @@ services:
     image: caddy:2-alpine
     restart: unless-stopped
     ports:
-      - "${APP_PORT:-8080}:80"
+      - "${APP_PORT:-2137}:80"
       # - "443:443"                  # enable when terminating TLS here
     volumes:
       - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro

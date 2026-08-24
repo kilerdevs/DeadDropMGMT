@@ -6,8 +6,12 @@
 :80 {
 	root * /var/www/html
 
-	@blocked path /includes/* /logs/* /cron/* /config.php /.htaccess /.ht*
+	@blocked path /includes/* /logs/* /cron/* /tools/* /config.php /.htaccess /.ht*
 	respond @blocked 403
+
+	# Uploaded images must never reach PHP-FPM, whatever their name is.
+	@upload_php path /uploads/*.php /uploads/*.phtml /uploads/*.phar
+	respond @upload_php 403
 
 	request_body {
 		max_size 32MB

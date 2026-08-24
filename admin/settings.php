@@ -352,8 +352,6 @@ function s_label(array $s, string $key): string {
         'px_none_working'   => t('admin.proxies.js.none_working'),
         'log_verify_ok'     => t('admin.settings.log_verify_ok'),
         'log_verify_fail'   => t('admin.settings.log_verify_fail'),
-        'save_error'        => t('admin.edit.js.save_error'),
-        'connection_error'  => t('admin.edit.js.connection_error'),
     ]) ?>;
 
     // Confirm destructive form submissions

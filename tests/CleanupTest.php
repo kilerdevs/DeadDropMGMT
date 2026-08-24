@@ -8,11 +8,13 @@ $db  = get_db();
 $up  = dirname(__DIR__) . '/uploads';
 if (!is_dir($up)) { mkdir($up, 0770, true); }
 
-// Seed: expired order (with photo file), active order, never-expiring order
+// Seed: expired order (with photo file), active order, never-expiring order.
+// Delivered rows carry delivered_at — the schema's state-machine CHECK
+// requires it, exactly like production code sets it.
 $mk = static function (string $token, ?string $expires) use ($db): int {
     $db->prepare('DELETE FROM orders WHERE order_token = ?')->execute([$token]);
-    $db->prepare('INSERT INTO orders (order_token, pickup_password_hash, location_encrypted, location_iv, status, expires_at)
-                  VALUES (?, "x", "e", "00", "delivered", ' . ($expires ?? 'NULL') . ')')
+    $db->prepare('INSERT INTO orders (order_token, pickup_password_hash, location_encrypted, location_iv, status, delivered_at, expires_at)
+                  VALUES (?, "x", "e", "abab", "delivered", NOW(), ' . ($expires ?? 'NULL') . ')')
        ->execute([$token]);
     return (int)$db->lastInsertId();
 };
@@ -41,13 +43,13 @@ T::ok('never-expiring order kept', (bool)$db->query('SELECT 1 FROM orders WHERE 
 T::ok('photo file unlinked from disk', !is_file("$dir$hex.jpg"));
 T::ok('order directory removed', !is_dir($dir));
 
-// secure_unlink zeroes content before unlinking (best-effort overwrite)
+// overwrite_and_unlink zeroes content before unlinking (best-effort overwrite)
 $tmp = tempnam(sys_get_temp_dir(), 'ddl');
 file_put_contents($tmp, 'topsecret');
-secure_unlink($tmp);
-T::ok('secure_unlink removes the file', !is_file($tmp));
-T::ok('secure_unlink tolerates missing path', true);
-secure_unlink($tmp . '-does-not-exist');
+overwrite_and_unlink($tmp);
+T::ok('overwrite_and_unlink removes the file', !is_file($tmp));
+T::ok('overwrite_and_unlink tolerates missing path', true);
+overwrite_and_unlink($tmp . '-does-not-exist');
 
 // Cleanup
 $db->prepare('DELETE FROM orders WHERE order_token LIKE "clstoken%"')->execute();

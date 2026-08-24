@@ -39,8 +39,9 @@ if (!$order) {
     exit;
 }
 
-// Couriers may only edit their own orders
-if (is_courier() && (int)($order['created_by'] ?? 0) !== current_user_id()) {
+// Couriers may only edit their own orders — the same central check every
+// other mutating endpoint uses.
+if (!courier_owns_order($id)) {
     $_SESSION['flash']    = t('admin.orders.flash.no_access');
     $_SESSION['flash_ok'] = false;
     header('Location: /admin/orders.php');
@@ -66,9 +67,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $lat_raw          = $_POST['lat'] ?? '';
         $lng_raw          = $_POST['lng'] ?? '';
 
+        // State machine: preparing -> delivered only. A delivered order can
+        // never regress to preparing (the recipient may already have seen it);
+        // the UI no longer offers it and the server refuses it outright.
+        if ($order['status'] === 'delivered' && $new_status === 'preparing') {
+            $error = t('admin.edit.error.invalid_transition');
+        }
+
         // Decode current location data for coordinate fallback
-        $cur = decrypt_location_data($order['location_encrypted'], $order['location_iv'])
-            ?: ['text' => '', 'lat' => null, 'lng' => null, 'instructions' => ''];
+        if ($error === '') {
+            $cur = decrypt_location_data($order['location_encrypted'], $order['location_iv'])
+                ?: ['text' => '', 'lat' => null, 'lng' => null, 'instructions' => ''];
+        } else {
+            $cur = ['text' => '', 'lat' => null, 'lng' => null, 'instructions' => ''];
+        }
 
         $final_text  = $new_location;
         $final_instr = $new_instructions;
@@ -84,32 +96,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
 
-        // delivered_at + expires_at resolved in PHP
-        if ($new_status === 'delivered' && $order['status'] !== 'delivered') {
-            $delivered_at = date('Y-m-d H:i:s');
-            $expires_at   = date('Y-m-d H:i:s', strtotime('+' . order_ttl_hours() . ' hours'));
-        } elseif ($new_status === 'preparing') {
-            $delivered_at = null;
-            $expires_at   = null;
-        } else {
-            $delivered_at = $order['delivered_at'];
-            $expires_at   = $order['expires_at'];
-        }
-
-        // Password — keep current if not changing
+        // Password — hash-only: keep current hash if not changing, otherwise
+        // replace it. The old recoverable AES copy is purged on every save.
+        $pw_hash = (string)$order['pickup_password_hash']; // kept unless replaced below
         if ($new_password !== '') {
-            if (strlen($new_password) < 4) {
+            if (strlen($new_password) < 8) {
                 $error = t('admin.edit.error.pw_too_short');
             } else {
-                $pw_hash    = hash_password($new_password);
-                $pw_enc_raw = encrypt_location($new_password);
-                $pw_enc     = $pw_enc_raw['ciphertext'];
-                $pw_iv      = $pw_enc_raw['iv'];
+                $pw_hash = hash_password($new_password);
             }
-        } else {
-            $pw_hash = $order['pickup_password_hash'];
-            $pw_enc  = $order['pickup_password_enc'];
-            $pw_iv   = $order['pickup_password_iv'];
         }
 
         if ($error === '') {
@@ -121,30 +116,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'instructions' => $final_instr,
                 ]);
 
-                get_db()->prepare(
-                    'UPDATE orders SET
-                        status                = ?,
-                        delivered_at          = ?,
-                        expires_at            = ?,
-                        notes                 = ?,
-                        location_encrypted    = ?,
-                        location_iv           = ?,
-                        pickup_password_hash  = ?,
-                        pickup_password_enc   = ?,
-                        pickup_password_iv    = ?
-                     WHERE id = ?'
-                )->execute([
-                    $new_status,
-                    $delivered_at,
-                    $expires_at,
-                    $new_notes !== '' ? $new_notes : null,
-                    $enc['ciphertext'],
-                    $enc['iv'],
-                    $pw_hash,
-                    $pw_enc,
-                    $pw_iv,
-                    $id,
-                ]);
+                // delivered_at/expires_at are set by the SAME conditional
+                // update that flips the status — no read-decide-write window.
+                if ($order['status'] === 'preparing' && $new_status === 'delivered') {
+                    get_db()->prepare(
+                        'UPDATE orders SET
+                            status                = "delivered",
+                            delivered_at          = NOW(),
+                            expires_at            = DATE_ADD(NOW(), INTERVAL ? HOUR),
+                            notes                 = ?,
+                            location_encrypted    = ?,
+                            location_iv           = ?,
+                            pickup_password_hash  = ?,
+                            pickup_password_enc   = NULL,
+                            pickup_password_iv    = NULL
+                         WHERE id = ? AND status = "preparing"'
+                    )->execute([
+                        order_ttl_hours(),
+                        $new_notes !== '' ? $new_notes : null,
+                        $enc['ciphertext'],
+                        $enc['iv'],
+                        $pw_hash,
+                        $id,
+                    ]);
+                } else {
+                    get_db()->prepare(
+                        'UPDATE orders SET
+                            notes                 = ?,
+                            location_encrypted    = ?,
+                            location_iv           = ?,
+                            pickup_password_hash  = ?,
+                            pickup_password_enc   = NULL,
+                            pickup_password_iv    = NULL
+                         WHERE id = ? AND status = ?'
+                    )->execute([
+                        $new_notes !== '' ? $new_notes : null,
+                        $enc['ciphertext'],
+                        $enc['iv'],
+                        $pw_hash,
+                        $id,
+                        $order['status'],
+                    ]);
+                }
 
                 // Handle new photo uploads
                 if (!empty($_FILES['photos']['name'][0])) {
@@ -189,11 +202,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $loc = decrypt_location_data($order['location_encrypted'], $order['location_iv'])
     ?: ['text' => t('admin.edit.decrypt_error'), 'lat' => null, 'lng' => null, 'instructions' => ''];
 
-// Decrypt pickup password for display
+// Pickup passwords are hash-only: nothing is decrypted for display. The
+// credential was shown once at creation and can be replaced, not recovered.
 $pw_display = null;
-if (!empty($order['pickup_password_enc']) && !empty($order['pickup_password_iv'])) {
-    $pw_display = decrypt_location($order['pickup_password_enc'], $order['pickup_password_iv']);
-}
 
 // Load photos
 try {
@@ -242,7 +253,7 @@ $init_zoom = $has_pin ? 17 : 12;
         <?php if ($order['status'] === 'preparing'): ?>
         <form method="POST" action="/admin/mark_delivered.php" class="form-deliver">
             <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
-            <input type="hidden" name="id" value="<?= $id ?>">
+            <input type="hidden" name="id" value="<?= htmlspecialchars((string)$id, ENT_QUOTES, 'UTF-8') ?>">
             <button type="submit" class="btn btn-deliver">
                 ✓ <?= t('admin.edit.mark_delivered_button') ?>
             </button>
@@ -256,10 +267,10 @@ $init_zoom = $has_pin ? 17 : 12;
         <div class="form-panel centered-panel">
 
             <!-- ── Main edit form ──────────────────────────────────────────── -->
-            <form method="POST" action="/admin/edit.php?id=<?= $id ?>"
+            <form method="POST" action="/admin/edit.php?id=<?= htmlspecialchars((string)$id, ENT_QUOTES, 'UTF-8') ?>"
                   enctype="multipart/form-data" autocomplete="off">
                 <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
-                <input type="hidden" name="id"  value="<?= $id ?>">
+                <input type="hidden" name="id"  value="<?= htmlspecialchars((string)$id, ENT_QUOTES, 'UTF-8') ?>">
                 <input type="hidden" name="lat" id="lat" value="<?= $has_pin ? htmlspecialchars((string)$loc['lat'], ENT_QUOTES, 'UTF-8') : '' ?>">
                 <input type="hidden" name="lng" id="lng" value="<?= $has_pin ? htmlspecialchars((string)$loc['lng'], ENT_QUOTES, 'UTF-8') : '' ?>">
 
@@ -267,21 +278,20 @@ $init_zoom = $has_pin ? 17 : 12;
                 <div class="form-group">
                     <label for="status"><?= t('admin.orders.th.status') ?></label>
                     <select id="status" name="status">
-                        <option value="preparing" <?= $order['status'] === 'preparing' ? 'selected' : '' ?>><?= t('admin.edit.status.preparing_option') ?></option>
-                        <option value="delivered" <?= $order['status'] === 'delivered' ? 'selected' : '' ?>><?= t('admin.edit.status.delivered_option') ?></option>
+                        <?php if ($order['status'] === 'preparing'): ?>
+                        <option value="preparing" selected><?= t('admin.edit.status.preparing_option') ?></option>
+                        <option value="delivered"><?= t('admin.edit.status.delivered_option') ?></option>
+                        <?php else: ?>
+                        <!-- delivered is terminal: no regression option offered -->
+                        <option value="delivered" selected><?= t('admin.edit.status.delivered_option') ?></option>
+                        <?php endif; ?>
                     </select>
                 </div>
 
                 <!-- Current pickup password -->
                 <div class="form-group">
                     <div class="field-label"><?= t('public.index.pw_label') ?></div>
-                    <?php if ($pw_display !== null && $pw_display !== false): ?>
-                    <div class="location-display location-display-pw">
-                        <?= htmlspecialchars($pw_display, ENT_QUOTES, 'UTF-8') ?>
-                    </div>
-                    <?php else: ?>
                     <div class="location-note"><?= t('admin.edit.pw_hashed_note') ?></div>
-                    <?php endif; ?>
                 </div>
 
                 <!-- New password -->
@@ -316,9 +326,13 @@ $init_zoom = $has_pin ? 17 : 12;
                     </div>
                     <div id="map-picker"></div>
                     <div class="map-coords" id="coords-display">
-                        <?= $has_pin
-                            ? t('admin.edit.current_pin', ['lat' => number_format((float)$loc['lat'], 6), 'lng' => number_format((float)$loc['lng'], 6)])
-                            : t('admin.new_order.no_pin') ?>
+                        <?= htmlspecialchars(
+                            $has_pin
+                                ? t('admin.edit.current_pin', ['lat' => number_format((float)$loc['lat'], 6), 'lng' => number_format((float)$loc['lng'], 6)])
+                                : t('admin.new_order.no_pin'),
+                            ENT_QUOTES,
+                            'UTF-8'
+                        ) ?>
                     </div>
                 </div>
 
@@ -354,7 +368,7 @@ $init_zoom = $has_pin ? 17 : 12;
                                href="/uploads/<?= htmlspecialchars($ph['filename'], ENT_QUOTES, 'UTF-8') ?>"
                                data-caption="<?= htmlspecialchars($ph['caption'] ?? '', ENT_QUOTES, 'UTF-8') ?>"
                                data-photo-id="<?= (int)$ph['id'] ?>"
-                               data-order-id="<?= $id ?>">
+                               data-order-id="<?= htmlspecialchars((string)$id, ENT_QUOTES, 'UTF-8') ?>">
                                 <img src="/uploads/<?= htmlspecialchars($ph['filename'], ENT_QUOTES, 'UTF-8') ?>"
                                      alt="<?= htmlspecialchars($ph['caption'] ?? '', ENT_QUOTES, 'UTF-8') ?>"
                                      loading="lazy">
@@ -391,7 +405,7 @@ $init_zoom = $has_pin ? 17 : 12;
                         <?= t('admin.edit.expires_label') ?> <?= $exp_ts > 0 ? htmlspecialchars($order['expires_at'], ENT_QUOTES, 'UTF-8') : '—' ?>
                         <?php if ($exp_ts > 0): ?>
                         (<span class="expiry-timer <?= $exp_cls ?>"
-                               data-expires="<?= $exp_ts ?>"><?= htmlspecialchars(format_countdown($exp_rem), ENT_QUOTES, 'UTF-8') ?></span>)
+                               data-expires="<?= htmlspecialchars((string)$exp_ts, ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars(format_countdown($exp_rem), ENT_QUOTES, 'UTF-8') ?></span>)
                         <?php endif; endif; ?>
                     </div>
                 </div>
@@ -408,7 +422,7 @@ $init_zoom = $has_pin ? 17 : 12;
                                 f.method = 'POST';
                                 f.action = '/admin/extend.php';
                                 f.innerHTML = '<input name=csrf_token value=\'<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>\'>' +
-                                              '<input name=id value=\'<?= $id ?>\'>' +
+                                              '<input name=id value=\'<?= htmlspecialchars((string)$id, ENT_QUOTES, 'UTF-8') ?>\'>' +
                                               '<input name=hours value=\'<?= (int)$h ?>\'>' +
                                               '<input name=ref value=edit>';
                                 document.body.appendChild(f);
@@ -427,8 +441,7 @@ $init_zoom = $has_pin ? 17 : 12;
                 <div class="edit-extra-actions">
                     <button class="action-btn"
                             data-copy
-                            data-token="<?= htmlspecialchars($order['order_token'], ENT_QUOTES, 'UTF-8') ?>"
-                            data-code="<?= htmlspecialchars($pw_display ?: '', ENT_QUOTES, 'UTF-8') ?>">
+                            data-token="<?= htmlspecialchars($order['order_token'], ENT_QUOTES, 'UTF-8') ?>">
                         <?= t('admin.edit.copy_data_button') ?>
                     </button>
                 </div>
@@ -441,7 +454,7 @@ $init_zoom = $has_pin ? 17 : 12;
                       data-confirm="<?= htmlspecialchars(t('admin.edit.delete_confirm', ['token' => $order['order_token']]), ENT_QUOTES, 'UTF-8') ?>">
                     <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
                     <input type="hidden" name="action" value="delete">
-                    <input type="hidden" name="id" value="<?= $id ?>">
+                    <input type="hidden" name="id" value="<?= htmlspecialchars((string)$id, ENT_QUOTES, 'UTF-8') ?>">
                     <button class="action-btn action-btn--danger"><?= t('admin.edit.delete_button') ?></button>
                 </form>
             </div>
@@ -531,10 +544,12 @@ $init_zoom = $has_pin ? 17 : 12;
         shadowUrl:     '/admin/vendor/leaflet/images/marker-shadow.png',
     });
 
-    const initLat  = <?= json_encode($init_lat) ?>;
-    const initLng  = <?= json_encode($init_lng) ?>;
-    const initZoom = <?= json_encode($init_zoom) ?>;
-    const hasPin   = <?= json_encode($has_pin) ?>;
+    // json_encode emits JS literals; for these non-string values htmlspecialchars
+    // is an identity transform — it satisfies the XSS gate without touching output.
+    const initLat  = <?= htmlspecialchars(json_encode($init_lat), ENT_QUOTES, 'UTF-8') ?>;
+    const initLng  = <?= htmlspecialchars(json_encode($init_lng), ENT_QUOTES, 'UTF-8') ?>;
+    const initZoom = <?= htmlspecialchars(json_encode($init_zoom), ENT_QUOTES, 'UTF-8') ?>;
+    const hasPin   = <?= htmlspecialchars(json_encode($has_pin), ENT_QUOTES, 'UTF-8') ?>;
 
     const map = L.map('map-picker').setView([initLat, initLng], initZoom);
     L.tileLayer('/admin/tile_proxy.php?z={z}&x={x}&y={y}', {

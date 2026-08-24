@@ -2,8 +2,10 @@
 -- One file, safe to run on ANY starting state: a brand-new empty database,
 -- an existing install from any earlier version, or even a fully up-to-date
 -- database (running it again is a harmless no-op). Every statement is
--- idempotent (IF NOT EXISTS / ON DUPLICATE KEY / a guarded check for the
--- one foreign key MariaDB doesn't support IF NOT EXISTS on).
+-- idempotent, and every ALTER is guarded through information_schema +
+-- PREPARE — a portable pattern that works identically on MySQL 8.0+ and
+-- MariaDB (neither engine supports IF NOT EXISTS on ADD COLUMN reliably,
+-- MySQL not at all).
 --
 --   mysql -u root -p < setup.sql
 
@@ -23,20 +25,45 @@ CREATE TABLE IF NOT EXISTS users (
     totp_secret_enc  TEXT                   DEFAULT NULL,
     totp_secret_iv   CHAR(32)               DEFAULT NULL,
     totp_enabled     TINYINT(1)    NOT NULL DEFAULT 0,
+    enrollment_hash  CHAR(64)               DEFAULT NULL,
+    enrollment_expires DATETIME             DEFAULT NULL,
     lang             CHAR(2)       NOT NULL DEFAULT 'en',
     created_at       DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_username (username)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Installs from before 2FA existed won't have these columns yet.
-ALTER TABLE users
-    ADD COLUMN IF NOT EXISTS totp_secret_enc TEXT       DEFAULT NULL,
-    ADD COLUMN IF NOT EXISTS totp_secret_iv  CHAR(32)   DEFAULT NULL,
-    ADD COLUMN IF NOT EXISTS totp_enabled    TINYINT(1) NOT NULL DEFAULT 0;
+-- Installs from before 2FA / per-account language / enrollment secrets
+-- existed won't have these columns yet. One guarded ALTER per column —
+-- MySQL has no ADD COLUMN IF NOT EXISTS, so existence is checked by hand.
+SET @c = (SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'totp_secret_enc');
+SET @s = IF(@c = 0, 'ALTER TABLE users ADD COLUMN totp_secret_enc TEXT DEFAULT NULL', 'SELECT 1');
+PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 
--- Installs from before per-account language existed won't have this column.
-ALTER TABLE users
-    ADD COLUMN IF NOT EXISTS lang CHAR(2) NOT NULL DEFAULT 'en';
+SET @c = (SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'totp_secret_iv');
+SET @s = IF(@c = 0, 'ALTER TABLE users ADD COLUMN totp_secret_iv CHAR(32) DEFAULT NULL', 'SELECT 1');
+PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
+
+SET @c = (SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'totp_enabled');
+SET @s = IF(@c = 0, 'ALTER TABLE users ADD COLUMN totp_enabled TINYINT(1) NOT NULL DEFAULT 0', 'SELECT 1');
+PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
+
+SET @c = (SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'lang');
+SET @s = IF(@c = 0, 'ALTER TABLE users ADD COLUMN lang CHAR(2) NOT NULL DEFAULT ''en''', 'SELECT 1');
+PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
+
+SET @c = (SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'enrollment_hash');
+SET @s = IF(@c = 0, 'ALTER TABLE users ADD COLUMN enrollment_hash CHAR(64) DEFAULT NULL', 'SELECT 1');
+PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
+
+SET @c = (SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'enrollment_expires');
+SET @s = IF(@c = 0, 'ALTER TABLE users ADD COLUMN enrollment_expires DATETIME DEFAULT NULL', 'SELECT 1');
+PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 
 -- ── Orders ────────────────────────────────────────────────────────────────────
 
@@ -45,6 +72,9 @@ CREATE TABLE IF NOT EXISTS orders (
     created_by           INT                    DEFAULT NULL,
     order_token          CHAR(16)      NOT NULL UNIQUE,
     pickup_password_hash VARCHAR(255)  NOT NULL,
+    -- Deprecated: legacy installs may still carry the recoverable AES copy
+    -- of the pickup password. New code never writes it — run
+    -- tools/purge_pickup_password_recovery.php to clear leftover values.
     pickup_password_enc  TEXT                   DEFAULT NULL,
     pickup_password_iv   CHAR(32)               DEFAULT NULL,
     location_encrypted   TEXT          NOT NULL,
@@ -64,12 +94,18 @@ CREATE TABLE IF NOT EXISTS orders (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Installs from before the multi-user system won't have created_by yet.
-ALTER TABLE orders
-    ADD COLUMN IF NOT EXISTS created_by INT DEFAULT NULL AFTER id,
-    ADD INDEX  IF NOT EXISTS idx_created_by (created_by);
+SET @c = (SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'orders' AND COLUMN_NAME = 'created_by');
+SET @s = IF(@c = 0, 'ALTER TABLE orders ADD COLUMN created_by INT DEFAULT NULL AFTER id', 'SELECT 1');
+PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 
--- MariaDB has no "ADD CONSTRAINT IF NOT EXISTS" for foreign keys, so guard
--- it by hand — only add fk_orders_created_by if it isn't already there.
+SET @c = (SELECT COUNT(*) FROM information_schema.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'orders' AND INDEX_NAME = 'idx_created_by');
+SET @s = IF(@c = 0, 'ALTER TABLE orders ADD INDEX idx_created_by (created_by)', 'SELECT 1');
+PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
+
+-- Neither engine has "ADD CONSTRAINT IF NOT EXISTS" for foreign keys, so
+-- guard it by hand — only add fk_orders_created_by if it isn't already there.
 SET @fk_exists = (
     SELECT COUNT(*) FROM information_schema.TABLE_CONSTRAINTS
     WHERE CONSTRAINT_SCHEMA = DATABASE()
@@ -83,6 +119,38 @@ SET @fk_sql = IF(@fk_exists = 0,
 PREPARE fk_stmt FROM @fk_sql;
 EXECUTE fk_stmt;
 DEALLOCATE PREPARE fk_stmt;
+
+-- ── Orders: DB-enforced state machine ─────────────────────────────────────────
+-- preparing = nothing delivered yet (no timestamps), delivered = both
+-- timestamps present. Application code uses conditional UPDATE/DELETE plus
+-- affected-row checks — this CHECK is the last line of defense against
+-- impossible states from any path.
+--
+-- Legacy rows that violate the invariant are normalized first so the ALTER
+-- never fails mid-upgrade:
+UPDATE orders
+   SET delivered_at = COALESCE(delivered_at, created_at)
+ WHERE status = 'delivered' AND delivered_at IS NULL;
+UPDATE orders
+   SET expires_at = COALESCE(expires_at, DATE_ADD(COALESCE(delivered_at, created_at), INTERVAL 24 HOUR))
+ WHERE status = 'delivered' AND expires_at IS NULL;
+
+SET @chk_exists = (
+    SELECT COUNT(*) FROM information_schema.TABLE_CONSTRAINTS
+    WHERE CONSTRAINT_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'orders'
+      AND CONSTRAINT_TYPE = 'CHECK'
+      AND CONSTRAINT_NAME = 'chk_orders_state'
+);
+SET @chk_sql = IF(@chk_exists = 0,
+    'ALTER TABLE orders ADD CONSTRAINT chk_orders_state CHECK (
+        (status = ''preparing'' AND delivered_at IS NULL)
+     OR (status = ''delivered'' AND delivered_at IS NOT NULL))',
+    'SELECT 1'
+);
+PREPARE chk_stmt FROM @chk_sql;
+EXECUTE chk_stmt;
+DEALLOCATE PREPARE chk_stmt;
 
 -- ── Order photos ──────────────────────────────────────────────────────────────
 

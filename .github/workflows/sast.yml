@@ -1,0 +1,52 @@
+name: SAST
+
+# Static security analysis over the PHP codebase. CodeQL dropped PHP
+# language support (its v4 action rejects the language outright), so the
+# same job is done with Semgrep: taint/security rulesets for PHP, secrets
+# detection, and a weekly sweep so new rules catch old code.
+
+on:
+  push:
+    branches: [master, dev]
+  pull_request:
+    branches: [master, dev]
+  schedule:
+    - cron: '23 4 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  semgrep:
+    name: Semgrep (php security)
+    runs-on: ubuntu-latest
+    container:
+      # Digest-pinned: a moving tag must not change what scans this repo.
+      image: semgrep/semgrep@sha256:67319956da3dcb58baf5b322899c15458e3963e7018a86aeeb5cd224e69cb77a
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      # A custom rule that fails to compile is a silent no-op: the scan
+      # succeeds, the gate guards nothing. Validate the rule file FIRST so a
+      # broken pattern fails the build loudly.
+      - name: Validate custom rules
+        run: semgrep scan --validate --config .semgrep/php-request-echo.yml --metrics=off
+
+      - name: Scan
+        run: |
+          semgrep scan \
+            --config p/php \
+            --config p/security-audit \
+            --config p/secrets \
+            --config .semgrep/php-request-echo.yml \
+            --exclude-rule php.lang.security.injection.echoed-request.echoed-request \
+            --error \
+            --metrics=off
+
+      # The upstream echoed-request rule stays excluded, but its job is done
+      # by .semgrep/php-request-echo.yml: a taint rule with OUR sanitizer
+      # model (htmlspecialchars / t() / json_encode). Raw echo of request
+      # data fails the build; escaped code passes without suppressions. The
+      # upstream rule itself cannot be re-enabled because it flags
+      # (int)-cast values and JSON endpoints and ignores nosemgrep
+      # annotations in PHP templates.

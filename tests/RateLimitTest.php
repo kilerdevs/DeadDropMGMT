@@ -63,16 +63,35 @@ $s = $probe('1');
 T::ok('re-enabled limiter sees existing count', ($s['count'] ?? -1) === 2);
 set_setting('rate_limit_enabled', '1');
 
-// Client IP resolution precedence (config.php)
+// Client IP resolution (config.php): proxy headers are ignored unless the
+// deployment opts in via DDMGMT_TRUST_PROXY=1 — a client must never be able
+// to spoof its way past the limiter by default.
 $_SERVER['HTTP_CF_CONNECTING_IP'] = '203.0.113.1';
 $_SERVER['HTTP_X_FORWARDED_FOR']  = '203.0.113.2';
-T::eq('CF header wins when present', '203.0.113.1', get_client_ip());
+T::eq('proxy headers ignored without DDMGMT_TRUST_PROXY', $ip, get_client_ip());
+putenv('DDMGMT_TRUST_PROXY=1');
+T::eq('CF header wins when trusted', '203.0.113.1', get_client_ip());
 unset($_SERVER['HTTP_CF_CONNECTING_IP']);
 T::eq('XFF first entry wins next', '203.0.113.2', get_client_ip());
 unset($_SERVER['HTTP_X_FORWARDED_FOR']);
 T::eq('REMOTE_ADDR is final fallback', $ip, get_client_ip());
 $_SERVER['HTTP_X_FORWARDED_FOR'] = 'not-an-ip, 203.0.113.9';
 T::eq('invalid header skipped, REMOTE_ADDR used', $ip, get_client_ip());
+unset($_SERVER['HTTP_X_FORWARDED_FOR']);
+putenv('DDMGMT_TRUST_PROXY');
+
+// Fail-closed: if the limiter subsystem breaks (table gone), pickup/login
+// must be DENIED, never silently unblocked (child process = fresh settings
+// cache, exactly like the next request). stderr is silenced portably:
+// /dev/null on Unix, NUL on Windows.
+$devnull = PHP_OS_FAMILY === 'Windows' ? 'NUL' : '/dev/null';
+$fc = json_decode(shell_exec(
+    escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(__DIR__ . '/_rl_failclosed.php') . " 2>$devnull"
+) ?: '{}', true) ?: [];
+T::ok('broken limiter blocks (fail closed)', ($fc['blocked'] ?? false) === true);
+T::ok('fail-closed block carries a cooldown', (int)($fc['remaining'] ?? 0) > 0);
+$s = rl_status($scope);
+T::eq('rate_limits table restored after probe (data intact)', 2, rl_status($scope)['count']);
 
 // Cleanup
 $db->prepare('DELETE FROM rate_limits WHERE ip_address = ?')->execute([$ip]);

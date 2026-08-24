@@ -5,6 +5,7 @@ require_once dirname(__DIR__) . '/includes/db.php';
 require_once dirname(__DIR__) . '/includes/auth.php';
 require_once dirname(__DIR__) . '/includes/settings.php';
 require_once dirname(__DIR__) . '/includes/audit.php';
+require_once dirname(__DIR__) . '/includes/wipe.php';
 require_once dirname(__DIR__) . '/includes/i18n.php';
 
 start_secure_session();
@@ -22,40 +23,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $step === 3) {
         $step  = 0;
     } else {
         try {
-            $db = get_db();
-            $counts['orders'] = (int)$db->query('SELECT COUNT(*) FROM orders')->fetchColumn();
-            $counts['photos'] = (int)$db->query('SELECT COUNT(*) FROM order_photos')->fetchColumn();
-            $counts['events'] = (int)$db->query('SELECT COUNT(*) FROM order_events')->fetchColumn();
-
-            $all_photos = $db->query('SELECT filename FROM order_photos')->fetchAll();
-            $files_deleted = 0;
-            foreach ($all_photos as $ph) {
-                $path = dirname(__DIR__) . '/uploads/' . $ph['filename'];
-                if (is_file($path)) {
-                    secure_unlink($path);
-                    $files_deleted++;
-                }
-            }
-            foreach (glob(dirname(__DIR__) . '/uploads/*', GLOB_ONLYDIR) as $dir) {
-                foreach (glob($dir . '/*') ?: [] as $f) { secure_unlink($f); }
-                @rmdir($dir);
-            }
-
-            audit('panic_wipe', null, null, "orders={$counts['orders']} photos={$counts['photos']}");
-
-            $db->exec('SET FOREIGN_KEY_CHECKS = 0');
-            $db->exec('TRUNCATE TABLE order_photos');
-            $db->exec('TRUNCATE TABLE order_events');
-            $db->exec('TRUNCATE TABLE orders');
-            $db->exec('SET FOREIGN_KEY_CHECKS = 1');
-
-            // Wipe error log
-            if (is_file(ERROR_LOG_PATH)) {
-                file_put_contents(ERROR_LOG_PATH, '');
-            }
-
-            $counts['files'] = $files_deleted;
-            $done = true;
+            $counts = do_panic_wipe();
+            $done   = true;
             admin_logout();
         } catch (Exception $e) {
             log_err('PANIC: ' . $e->getMessage());
@@ -106,10 +75,16 @@ $csrf = generate_csrf();
         <div class="panic-step"><?= t('admin.panic.done.step_label') ?></div>
         <div class="panic-heading"><?= t('admin.panic.done.heading') ?></div>
         <div class="panic-report">
-            <div class="panic-report-row"><?= t('admin.orders.title') ?><strong><?= $counts['orders'] ?></strong></div>
-            <div class="panic-report-row"><?= t('admin.panic.report.photos_db') ?><strong><?= $counts['photos'] ?></strong></div>
-            <div class="panic-report-row"><?= t('admin.panic.report.files') ?><strong><?= $counts['files'] ?></strong></div>
-            <div class="panic-report-row"><?= t('admin.panic.report.logs') ?><strong><?= $counts['events'] ?></strong></div>
+            <div class="panic-report-row"><?= t('admin.orders.title') ?><strong><?= (int)($counts['orders'] ?? 0) ?></strong></div>
+            <div class="panic-report-row"><?= t('admin.panic.report.photos_db') ?><strong><?= (int)($counts['photos'] ?? 0) ?></strong></div>
+            <div class="panic-report-row"><?= t('admin.panic.report.files') ?><strong><?= (int)($counts['files'] ?? 0) ?></strong></div>
+            <div class="panic-report-row"><?= t('admin.panic.report.logs') ?><strong><?= max(0, (int)($counts['events'] ?? 0)) ?></strong></div>
+            <div class="panic-report-row"><?= t('admin.panic.report.audit') ?><strong><?= max(0, (int)($counts['audit'] ?? 0)) ?></strong></div>
+            <?php if (!empty($counts['files_failed'])): ?>
+            <div class="panic-report-row panic-report-failed">
+                <?= t('admin.panic.report.failed_files', ['n' => (int)$counts['files_failed']]) ?>
+            </div>
+            <?php endif; ?>
         </div>
         <div class="panic-body"><?= t('admin.panic.done.body') ?></div>
         <a href="/admin/index.php" class="btn btn-neutral"><?= t('admin.panic.relogin_button') ?></a>

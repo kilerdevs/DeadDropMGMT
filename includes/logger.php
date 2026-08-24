@@ -17,7 +17,16 @@ if (!defined('APP_LOG_PATH')) {
 const APP_LOG_MAX_BYTES   = 5 * 1024 * 1024;
 const APP_LOG_GENESIS     = '0000000000000000000000000000000000000000000000000000000000000000';
 
+// Log-integrity subkey: HKDF-derived from the master key with the same public
+// salt includes/crypto.php uses (ADR-016 key separation) — a leaked log-chain
+// key neither helps decrypt locations nor vice versa. Legacy entries written
+// before key separation used HMAC keyed with the raw hex string; verification
+// still accepts them until the log rotates out (see verify_log_chain).
 function _log_key(): string {
+    return hash_hkdf('sha256', hex2bin(AES_KEY_HEX), 32, 'deaddrop:log-hmac-v1', 'deaddrop-mgmt-hkdf-salt-v1');
+}
+
+function _log_key_legacy(): string {
     return hash_hmac('sha256', 'deaddrop-log-integrity-v1', AES_KEY_HEX, true);
 }
 
@@ -58,7 +67,7 @@ function _log_rotate_if_needed(string $path): void {
     if (is_file($path) && filesize($path) >= APP_LOG_MAX_BYTES) {
         $old = $path . '.1';
         if (is_file($old)) {
-            secure_unlink($old);
+            overwrite_and_unlink($old);
         }
         @rename($path, $old);
     }
@@ -176,7 +185,12 @@ function verify_log_chain(?string $path = null): array {
         $expected = $rec['hash'];
         unset($rec['hash']);
         $payload = json_encode($rec, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        $calc    = hash_hmac('sha256', (string)$payload, _log_key());
+        // Entries may predate key separation (legacy raw-key HMAC) — accept
+        // either subkey so history stays verifiable across the transition.
+        $calc = hash_hmac('sha256', (string)$payload, _log_key());
+        if (!hash_equals($expected, $calc)) {
+            $calc = hash_hmac('sha256', (string)$payload, _log_key_legacy());
+        }
         if (!hash_equals($expected, $calc)) {
             fclose($fh);
             return [false, $n, $n, 'hash mismatch (entry modified or forged)'];

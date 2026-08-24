@@ -18,11 +18,13 @@ try {
     $db = get_db();
     $owner = $db->query('SELECT id, username, created_at, totp_enabled FROM users WHERE role = "owner" LIMIT 1')->fetch();
     $couriers = $db->query(
-        'SELECT u.id, u.username, u.created_at, u.totp_enabled, COUNT(o.id) AS order_count
+        "SELECT u.id, u.username, u.created_at, u.totp_enabled,
+                (COALESCE(u.password_hash, '') = '') AS needs_setup,
+                COUNT(o.id) AS order_count
          FROM users u
          LEFT JOIN orders o ON o.created_by = u.id
-         WHERE u.role = "courier"
-         GROUP BY u.id ORDER BY u.username'
+         WHERE u.role = 'courier'
+         GROUP BY u.id ORDER BY u.username"
     )->fetchAll();
 } catch (Exception $e) {
     log_err('Users page: ' . $e->getMessage());
@@ -123,6 +125,9 @@ $_active = 'users';
                         <span class="role-badge <?= $c['totp_enabled'] ? 'role-owner' : 'role-courier' ?>">
                             <?= $c['totp_enabled'] ? t('admin.users.2fa_on') : t('admin.users.2fa_off') ?>
                         </span>
+                        <?php if (!empty($c['needs_setup'])): ?>
+                        <span class="role-badge role-courier"><?= t('admin.users.badge.awaiting_setup') ?></span>
+                        <?php endif; ?>
                     </td>
                     <td class="td-muted"><?= (int)$c['order_count'] ?></td>
                     <td class="meta td-muted"><?= htmlspecialchars($c['created_at'], ENT_QUOTES, 'UTF-8') ?></td>
@@ -176,7 +181,7 @@ $_active = 'users';
                     <input type="text" id="new_username" name="username" autocomplete="off" spellcheck="false">
                 </div>
                 <div class="form-group">
-                    <label for="new_pw"><?= t('admin.login.password_label') ?> <span class="hint"><?= t('admin.users.password_hint') ?></span></label>
+                    <label for="new_pw"><?= t('admin.login.password_label') ?> <span class="hint"><?= t('admin.users.password_hint_optional') ?></span></label>
                     <input type="password" id="new_pw" name="password" autocomplete="new-password">
                 </div>
                 <div class="form-actions">

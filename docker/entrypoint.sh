@@ -30,6 +30,10 @@ if [ ! -f "$CONFIG" ]; then
     fi
 fi
 
+# ZAP 10037: PHP must not advertise itself in X-Powered-By. expose_php is
+# PHP_INI_SYSTEM - it can only be set here, never at runtime.
+printf 'expose_php = Off\n' > /usr/local/etc/php/conf.d/zz-ddmgmt-hardening.ini
+
 mkdir -p "$DOCROOT/logs" "$DOCROOT/uploads" "$DOCROOT/cache/osm_tiles"
 chown -R www-data:www-data "$DOCROOT/logs" "$DOCROOT/uploads" "$DOCROOT/cache" /config
 

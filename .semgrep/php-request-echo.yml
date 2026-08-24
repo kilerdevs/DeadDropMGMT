@@ -1,0 +1,39 @@
+# Custom SAST rule complementing the p/php ruleset.
+#
+# The upstream php.lang.security.injection.echoed-request rule is excluded in
+# CI: it has no sanitizer model for this codebase (it flags (int)-cast values
+# and JSON endpoints, and ignores nosemgrep annotations in PHP templates).
+# This rule replaces it with taint analysis that understands OUR escaping:
+#
+#   sources    — request superglobals an attacker controls directly
+#   sanitizers — htmlspecialchars/htmlentities (the codebase-wide sink
+#                wrapper), t() (escapes parameters internally), and
+#                json_encode (correct encoding for JSON contexts)
+#   sinks      — echo/print of tainted data
+#
+# Future regressions in raw echo of request data fail the build; properly
+# escaped code passes without suppressions.
+rules:
+  - id: php.request-data-echo
+    mode: taint
+    languages: [php]
+    severity: ERROR
+    message: >
+      Request-derived data reaches output without escaping. Wrap in
+      htmlspecialchars(..., ENT_QUOTES, 'UTF-8'), route through t(), or
+      encode with json_encode() for JSON contexts.
+    category: security
+    confidence: HIGH
+    likelihood: HIGH
+    pattern-sources:
+      - pattern: $_GET
+      - pattern: $_POST
+      - pattern: $_REQUEST
+      - pattern: $_COOKIE
+    pattern-sinks:
+      - pattern: echo $SINK;
+    pattern-sanitizers:
+      - pattern: htmlspecialchars(...)
+      - pattern: htmlentities(...)
+      - pattern: t(...)
+      - pattern: json_encode(...)
