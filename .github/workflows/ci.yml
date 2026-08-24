@@ -314,7 +314,7 @@ jobs:
           timeout 90 bash -c 'until curl -fs http://127.0.0.1:2137/healthz.php >/dev/null; do sleep 2; done'
 
       - name: ZAP baseline scan (report)
-        uses: zaproxy/action-baseline@6c5a007541891231cd9e0ddec25d4f25c59c9874 # v0.15.0
+        uses: zaproxy/action-baseline@de8ad967d3548d44ef623df22cf95c3b0baf8b25 # v0.15.0
         continue-on-error: true
         with:
           target: 'http://127.0.0.1:2137/'
