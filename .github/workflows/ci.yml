@@ -301,11 +301,18 @@ jobs:
           [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:2137/config.php)" = 403 ]
           docker compose -f docker-compose.caddy.yml down -v
 
-      # DAST: OWASP ZAP baseline (spider + passive analysis) against the live
+      # DAST: OWASP ZAP baseline (spider + passive analysis) against a live
       # Apache stack — public surface plus the admin login form it links to.
+      # The stack is booted here because the smoke tests above tear theirs
+      # down; ZAP runs with --network=host, so 127.0.0.1:2137 must be alive.
       # Report-only for now: baseline rules flag intentional things (no CSP
       # on the JSON endpoints, missing HSTS on plain-HTTP CI traffic) that
       # need per-rule triage before the gate can fail builds honestly.
+      - name: Boot stack for DAST
+        run: |
+          docker compose up -d --build --quiet-pull
+          timeout 90 bash -c 'until curl -fs http://127.0.0.1:2137/healthz.php >/dev/null; do sleep 2; done'
+
       - name: ZAP baseline scan (report)
         uses: zaproxy/action-baseline@6c5a007541891231cd9e0ddec25d4f25c59c9874 # v0.15.0
         continue-on-error: true
@@ -313,3 +320,7 @@ jobs:
           target: 'http://127.0.0.1:2137/'
           cmd_options: '-I -a'
           allow_issue_writing: false
+
+      - name: Tear down DAST stack
+        if: always()
+        run: docker compose down -v
