@@ -40,6 +40,17 @@ foreach (array_filter(array_map('trim', explode(';', $sql))) as $stmt) {
     if ($body === '') {
         continue;
     }
+    // A least-privilege app user (e.g. the Docker stack's deaddrop) cannot run
+    // CREATE DATABASE even with IF NOT EXISTS — skip it when the target
+    // already exists; as root (fresh installs) it still runs normally.
+    if (str_starts_with($body, 'CREATE DATABASE')) {
+        $exists = $pdo->query(
+            "SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = " . $pdo->quote($name)
+        )->fetchColumn();
+        if ((int)$exists > 0) {
+            continue;
+        }
+    }
     try {
         // query() + full result-set draining, because setup.sql's
         // PREPARE/EXECUTE guard blocks leave live unbuffered results behind
