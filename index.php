@@ -110,7 +110,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         // real order would and answer exactly like a wrong
                         // password — unknown token vs bad secret is then
                         // indistinguishable by timing or by response body.
-                        verify_password($password, DUMMY_PICKUP_HASH);
+                        verify_password($password, DUMMY_AUTH_HASH);
                         $error = t('public.index.error.invalid_credentials');
                     } else {
                         $error = t('public.index.error.not_found');

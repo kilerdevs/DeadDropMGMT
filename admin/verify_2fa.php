@@ -53,8 +53,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 header('Location: /admin/orders.php');
                 exit;
             }
+            if (!$user || $secret === false) {
+                // No real secret to verify against — burn one full TOTP
+                // verification anyway so failure timing does not leak
+                // whether the account exists or its secret decrypts.
+                totp_verify(DUMMY_TOTP_SECRET, $code);
+            }
             rl_increment('admin_2fa');
-            usleep(random_int(50000, 150000));
             $error = t('admin.verify2fa.error.invalid_code');
         }
     }

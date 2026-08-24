@@ -44,8 +44,6 @@ switch (admin_login($username, $password)) {
         exit;
 }
 
-usleep(random_int(50000, 150000));
-
 rl_increment('admin_login');
 $_SESSION['login_error'] = t('admin.login.error.bad_credentials');
 header('Location: /admin/index.php');

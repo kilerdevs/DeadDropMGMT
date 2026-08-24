@@ -63,16 +63,22 @@ $s = $probe('1');
 T::ok('re-enabled limiter sees existing count', ($s['count'] ?? -1) === 2);
 set_setting('rate_limit_enabled', '1');
 
-// Client IP resolution precedence (config.php)
+// Client IP resolution (config.php): proxy headers are ignored unless the
+// deployment opts in via DDMGMT_TRUST_PROXY=1 — a client must never be able
+// to spoof its way past the limiter by default.
 $_SERVER['HTTP_CF_CONNECTING_IP'] = '203.0.113.1';
 $_SERVER['HTTP_X_FORWARDED_FOR']  = '203.0.113.2';
-T::eq('CF header wins when present', '203.0.113.1', get_client_ip());
+T::eq('proxy headers ignored without DDMGMT_TRUST_PROXY', $ip, get_client_ip());
+putenv('DDMGMT_TRUST_PROXY=1');
+T::eq('CF header wins when trusted', '203.0.113.1', get_client_ip());
 unset($_SERVER['HTTP_CF_CONNECTING_IP']);
 T::eq('XFF first entry wins next', '203.0.113.2', get_client_ip());
 unset($_SERVER['HTTP_X_FORWARDED_FOR']);
 T::eq('REMOTE_ADDR is final fallback', $ip, get_client_ip());
 $_SERVER['HTTP_X_FORWARDED_FOR'] = 'not-an-ip, 203.0.113.9';
 T::eq('invalid header skipped, REMOTE_ADDR used', $ip, get_client_ip());
+unset($_SERVER['HTTP_X_FORWARDED_FOR']);
+putenv('DDMGMT_TRUST_PROXY');
 
 // Fail-closed: if the limiter subsystem breaks (table gone), pickup/login
 // must be DENIED, never silently unblocked (child process = fresh settings

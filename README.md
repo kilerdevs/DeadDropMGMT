@@ -148,6 +148,7 @@ Browser ──[TLS, external]── Web server / PHP
 | Account takeover | TOTP 2FA (RFC 6238) — self-service per account, secret GCM-encrypted at rest. Passwordless accounts are claimed only with a single-use enrollment secret, never by username alone | S5 | A1, A2 |
 | Location data at rest | AES-256-GCM (authenticated), random nonce per record; legacy CBC rows are rejected at runtime — migrate with `tools/migrate_cbc_to_gcm.php`. Key lives only in `config.php` or env (`DDMGMT_AES_KEY_HEX`), never in DB | S1, S4 | A4 |
 | Pickup password guessing | Dual budget enforced together: IP-based limiter (**fail-closed**: if the limiter DB is down, pickup and login are denied, not waved through) **and** a per-session failure bucket — whoever trips either is blocked; ≥64-bit generated passphrases (6 words + 4-digit + symbol), hash-only at rest, equalized-cost responses for unknown tokens | S2 | A1 |
+| Rate-limit bypass via spoofed `X-Forwarded-For` | Proxy headers are honored only when `DDMGMT_TRUST_PROXY=1` (opt-in for reverse-proxy/CDN installs); header values are validated as literal IPs and `REMOTE_ADDR` is the default source of truth | S2 | A1 |
 | Token enumeration | 16-char alphanumeric random tokens (~95 bits); unknown-token answers burn the same bcrypt cost and return the same body as wrong passwords when a credential was submitted; receipt requires the delivered state atomically | S3 | A1 |
 | Session fixation / theft | `session_regenerate_id(true)` on login; `httponly`, `samesite=Strict`, `secure` when HTTPS | S5 | A1, A2 |
 | CSRF | 64-byte random token in session, `hash_equals()` on every POST | S5, S7 | A2 |
@@ -396,6 +397,22 @@ variable (`DDMGMT_AES_KEY_HEX`); `config.php` reads the environment first and
 falls back to the literal value. DB credentials work the same way via
 `DDMGMT_DB_USER` / `DDMGMT_DB_PASS`.
 **Back this up.** Losing it means losing all encrypted location data.
+
+#### Database TLS and proxy trust (distributed deployments)
+
+Same-host installs (app and MySQL on one machine) need nothing here — the DB
+port never leaves the box. When the database lives on another host, encrypt the
+connection by pointing `DDMGMT_DB_SSL_CA` at the CA bundle that signed the
+server certificate (optional client cert/key: `DDMGMT_DB_SSL_CERT`,
+`DDMGMT_DB_SSL_KEY`; certificate verification is on by default and only
+explicitly disableable via `DDMGMT_DB_SSL_VERIFY_CERT=0` — don't, outside
+throwaway labs).
+
+Behind a reverse proxy or CDN, set `DDMGMT_TRUST_PROXY=1` so rate limiting and
+the audit log see the real client address from `CF-Connecting-IP` /
+`X-Forwarded-For` / `X-Real-IP`. Without that flag the headers are ignored —
+otherwise any client could spoof its IP and sidestep the limiter. Only enable
+it when the proxy overwrites (not appends to) these headers.
 
 #### Rotating the AES key
 

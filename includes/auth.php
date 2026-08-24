@@ -126,6 +126,10 @@ function admin_login(string $username, string $password): string {
     }
 
     if (!$user) {
+        // Burn the same bcrypt cost a real account would: unknown username
+        // and wrong password become indistinguishable by timing. No sleeps —
+        // the hash itself IS the constant-time answer.
+        password_verify($password, DUMMY_AUTH_HASH);
         return 'fail';
     }
 
