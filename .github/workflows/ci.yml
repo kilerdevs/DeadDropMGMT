@@ -286,7 +286,7 @@ jobs:
           docker compose -f docker-compose.nginx.yml up -d --build --quiet-pull
           timeout 90 bash -c 'until curl -fs http://127.0.0.1:2137/ >/dev/null; do sleep 2; done'
           curl -fs http://127.0.0.1:2137/ | grep -qi "<title>"
-          [ "`$(curl -s http://127.0.0.1:2137/healthz.php)" = "ok" ]
+          [ "$(curl -s http://127.0.0.1:2137/healthz.php)" = "ok" ]
           [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:2137/includes/db.php)" = 403 ]
           [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:2137/config.php)" = 403 ]
           docker compose -f docker-compose.nginx.yml down -v
