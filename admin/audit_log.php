@@ -74,7 +74,7 @@ $pages = max(1, (int)ceil($total / $per_page));
 
         <?php if ($pages > 1): ?>
         <div class="log-toolbar">
-            <span class="td-muted"><?= t('admin.audit.page_summary', ['page' => $page, 'pages' => $pages, 'total' => number_format($total)]) // nosemgrep: int params, escaped inside t() ?></span>
+            <span class="td-muted"><?= htmlspecialchars(t('admin.audit.page_summary', ['page' => $page, 'pages' => $pages, 'total' => number_format($total)]), ENT_QUOTES, 'UTF-8') ?></span>
             <div class="log-toolbar-actions">
                 <?php if ($page > 1): ?><a class="action-btn" href="?page=<?= htmlspecialchars((string)($page - 1), ENT_QUOTES, 'UTF-8') ?>">&larr; <?= t('admin.analytics.prev_page') ?></a><?php endif; ?>
                 <?php if ($page < $pages): ?><a class="action-btn" href="?page=<?= htmlspecialchars((string)($page + 1), ENT_QUOTES, 'UTF-8') ?>"><?= t('admin.analytics.next_page') ?> &rarr;</a><?php endif; ?>

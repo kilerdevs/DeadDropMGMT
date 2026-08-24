@@ -51,7 +51,8 @@ if (in_array($key, $booleans, true)) {
     [$min, $max] = $limits[$key];
     if ($n < $min || $n > $max) {
         http_response_code(422);
-        echo json_encode(['error' => t('admin.settings.js.range_error', ['min' => (string)$min, 'max' => (string)$max])]); // nosemgrep: JSON response, int params escaped inside t()
+        // nosemgrep: JSON response; params are numeric strings escaped inside t()
+        echo json_encode(['error' => t('admin.settings.js.range_error', ['min' => (string)$min, 'max' => (string)$max])]);
         exit;
     }
     $value = (string)$n;

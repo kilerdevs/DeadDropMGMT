@@ -321,7 +321,7 @@ $csrf = generate_csrf();
         <div class="divider"></div>
         <div class="section-label">
             <?= t('admin.analytics.recent_section') ?>
-            <span class="td-muted"><?= t('admin.analytics.recent_meta', ['total' => number_format($total_events), 'page' => $page, 'pages' => $total_pages]) // nosemgrep: int params, escaped inside t() ?></span>
+            <span class="td-muted"><?= htmlspecialchars(t('admin.analytics.recent_meta', ['total' => number_format($total_events), 'page' => $page, 'pages' => $total_pages]), ENT_QUOTES, 'UTF-8') ?></span>
         </div>
         <div class="table-wrap">
             <table>
@@ -360,7 +360,7 @@ $csrf = generate_csrf();
             <?php if ($page > 1): ?>
             <a class="page-btn" href="<?= htmlspecialchars(period_url($period, $page - 1), ENT_QUOTES, 'UTF-8') ?>">&#8592; <?= t('admin.analytics.prev_page') ?></a>
             <?php endif; ?>
-            <span class="page-info"><?= t('admin.analytics.page_info', ['page' => $page, 'pages' => $total_pages]) // nosemgrep: int params, escaped inside t() ?></span>
+            <span class="page-info"><?= htmlspecialchars(t('admin.analytics.page_info', ['page' => $page, 'pages' => $total_pages]), ENT_QUOTES, 'UTF-8') ?></span>
             <?php if ($page < $total_pages): ?>
             <a class="page-btn" href="<?= htmlspecialchars(period_url($period, $page + 1), ENT_QUOTES, 'UTF-8') ?>"><?= t('admin.analytics.next_page') ?> &#8594;</a>
             <?php endif; ?>
