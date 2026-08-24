@@ -37,7 +37,11 @@ function t(string $key, array $params = []): string {
     $lang = current_lang();
     $str  = i18n_load($lang)[$key] ?? i18n_load('en')[$key] ?? $key;
     foreach ($params as $k => $v) {
-        $str = str_replace('{' . $k . '}', (string)$v, $str);
+        // Substitutions are HTML-escaped at the sink: translation strings
+        // render into HTML, so a request-derived parameter must never be
+        // able to carry markup through t(). Static message text (including
+        // intentional <br> in some strings) is untouched — only params.
+        $str = str_replace('{' . $k . '}', htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8'), $str);
     }
     return $str;
 }

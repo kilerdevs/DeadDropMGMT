@@ -57,7 +57,7 @@ define('RATE_LIMIT_WINDOW', 900); // 15 minutes
 // cost between "unknown identifier" and "wrong password" — enumeration
 // resistance without sleeps or other timing hacks. The plaintext it hashes
 // was never stored anywhere.
-define('DUMMY_AUTH_HASH', '$2y$12$JOfiPnfCGcrXUxs5MiJ81.vMz8Qs6n2qJpelljzdwVQJ8TVatrxTC');
+define('DUMMY_AUTH_HASH', '$2y$12$JOfiPnfCGcrXUxs5MiJ81.vMz8Qs6n2qJpelljzdwVQJ8TVatrxTC'); // nosemgrep: deliberately public constant hash of a secret nobody knows
 
 // Fixed base32 TOTP secret for the same purpose on the 2FA step: a missing
 // account or undecryptable secret still burns one full verification.

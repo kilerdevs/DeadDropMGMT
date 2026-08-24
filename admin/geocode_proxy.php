@@ -24,4 +24,4 @@ if ($data === false) {
 }
 
 header('Content-Type: application/json');
-echo $data;
+echo $data; // nosemgrep: JSON passthrough from OSM with an explicit JSON content type — HTML-escaping would corrupt it

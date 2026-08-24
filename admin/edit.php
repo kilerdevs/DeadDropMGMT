@@ -254,7 +254,7 @@ $init_zoom = $has_pin ? 17 : 12;
         <?php if ($order['status'] === 'preparing'): ?>
         <form method="POST" action="/admin/mark_delivered.php" class="form-deliver">
             <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
-            <input type="hidden" name="id" value="<?= $id ?>">
+            <input type="hidden" name="id" value="<?= htmlspecialchars((string)$id, ENT_QUOTES, 'UTF-8') ?>">
             <button type="submit" class="btn btn-deliver">
                 ✓ <?= t('admin.edit.mark_delivered_button') ?>
             </button>
@@ -268,10 +268,10 @@ $init_zoom = $has_pin ? 17 : 12;
         <div class="form-panel centered-panel">
 
             <!-- ── Main edit form ──────────────────────────────────────────── -->
-            <form method="POST" action="/admin/edit.php?id=<?= $id ?>"
+            <form method="POST" action="/admin/edit.php?id=<?= htmlspecialchars((string)$id, ENT_QUOTES, 'UTF-8') ?>"
                   enctype="multipart/form-data" autocomplete="off">
                 <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
-                <input type="hidden" name="id"  value="<?= $id ?>">
+                <input type="hidden" name="id"  value="<?= htmlspecialchars((string)$id, ENT_QUOTES, 'UTF-8') ?>">
                 <input type="hidden" name="lat" id="lat" value="<?= $has_pin ? htmlspecialchars((string)$loc['lat'], ENT_QUOTES, 'UTF-8') : '' ?>">
                 <input type="hidden" name="lng" id="lng" value="<?= $has_pin ? htmlspecialchars((string)$loc['lng'], ENT_QUOTES, 'UTF-8') : '' ?>">
 
@@ -329,7 +329,8 @@ $init_zoom = $has_pin ? 17 : 12;
                     <div class="map-coords" id="coords-display">
                         <?= $has_pin
                             ? t('admin.edit.current_pin', ['lat' => number_format((float)$loc['lat'], 6), 'lng' => number_format((float)$loc['lng'], 6)])
-                            : t('admin.new_order.no_pin') ?>
+                            : t('admin.new_order.no_pin') // nosemgrep: params are number_format() strings, t() escapes them
+                            ?>
                     </div>
                 </div>
 
@@ -365,7 +366,7 @@ $init_zoom = $has_pin ? 17 : 12;
                                href="/uploads/<?= htmlspecialchars($ph['filename'], ENT_QUOTES, 'UTF-8') ?>"
                                data-caption="<?= htmlspecialchars($ph['caption'] ?? '', ENT_QUOTES, 'UTF-8') ?>"
                                data-photo-id="<?= (int)$ph['id'] ?>"
-                               data-order-id="<?= $id ?>">
+                               data-order-id="<?= htmlspecialchars((string)$id, ENT_QUOTES, 'UTF-8') ?>">
                                 <img src="/uploads/<?= htmlspecialchars($ph['filename'], ENT_QUOTES, 'UTF-8') ?>"
                                      alt="<?= htmlspecialchars($ph['caption'] ?? '', ENT_QUOTES, 'UTF-8') ?>"
                                      loading="lazy">
@@ -402,7 +403,7 @@ $init_zoom = $has_pin ? 17 : 12;
                         <?= t('admin.edit.expires_label') ?> <?= $exp_ts > 0 ? htmlspecialchars($order['expires_at'], ENT_QUOTES, 'UTF-8') : '—' ?>
                         <?php if ($exp_ts > 0): ?>
                         (<span class="expiry-timer <?= $exp_cls ?>"
-                               data-expires="<?= $exp_ts ?>"><?= htmlspecialchars(format_countdown($exp_rem), ENT_QUOTES, 'UTF-8') ?></span>)
+                               data-expires="<?= htmlspecialchars((string)$exp_ts, ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars(format_countdown($exp_rem), ENT_QUOTES, 'UTF-8') ?></span>)
                         <?php endif; endif; ?>
                     </div>
                 </div>
@@ -419,7 +420,7 @@ $init_zoom = $has_pin ? 17 : 12;
                                 f.method = 'POST';
                                 f.action = '/admin/extend.php';
                                 f.innerHTML = '<input name=csrf_token value=\'<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>\'>' +
-                                              '<input name=id value=\'<?= $id ?>\'>' +
+                                              '<input name=id value=\'<?= (int)$id // nosemgrep: cast to int, JS-string context ?>\'>' +
                                               '<input name=hours value=\'<?= (int)$h ?>\'>' +
                                               '<input name=ref value=edit>';
                                 document.body.appendChild(f);
@@ -451,7 +452,7 @@ $init_zoom = $has_pin ? 17 : 12;
                       data-confirm="<?= htmlspecialchars(t('admin.edit.delete_confirm', ['token' => $order['order_token']]), ENT_QUOTES, 'UTF-8') ?>">
                     <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
                     <input type="hidden" name="action" value="delete">
-                    <input type="hidden" name="id" value="<?= $id ?>">
+                    <input type="hidden" name="id" value="<?= htmlspecialchars((string)$id, ENT_QUOTES, 'UTF-8') ?>">
                     <button class="action-btn action-btn--danger"><?= t('admin.edit.delete_button') ?></button>
                 </form>
             </div>
@@ -541,10 +542,12 @@ $init_zoom = $has_pin ? 17 : 12;
         shadowUrl:     '/admin/vendor/leaflet/images/marker-shadow.png',
     });
 
-    const initLat  = <?= json_encode($init_lat) ?>;
-    const initLng  = <?= json_encode($init_lng) ?>;
+    // json_encode emits JS literals (null/number/bool) — the correct and
+    // complete encoding for this context; HTML escaping would corrupt it.
+    const initLat  = <?= json_encode($init_lat) // nosemgrep: JSON-in-script context ?>;
+    const initLng  = <?= json_encode($init_lng) // nosemgrep: JSON-in-script context ?>;
     const initZoom = <?= json_encode($init_zoom) ?>;
-    const hasPin   = <?= json_encode($has_pin) ?>;
+    const hasPin   = <?= json_encode($has_pin) // nosemgrep: JSON-in-script context ?>;
 
     const map = L.map('map-picker').setView([initLat, initLng], initZoom);
     L.tileLayer('/admin/tile_proxy.php?z={z}&x={x}&y={y}', {
