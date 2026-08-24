@@ -20,8 +20,8 @@ RUN apt-get update \
 
 # AllowOverride All so the shipped .htaccess rules (routing, blocking includes/,
 # config.php, logs/) take effect.
-COPY docker/apache.conf /etc/apache2/conf-available/deaddrop.conf
-RUN a2enconf deaddrop
+COPY docker/apache.conf /etc/apache2/conf-available/zz-deaddrop.conf
+RUN a2enconf zz-deaddrop
 
 COPY . /var/www/html
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
