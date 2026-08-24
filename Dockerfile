@@ -2,7 +2,7 @@
 # Config is rendered from config.php.example at first boot (see docker/entrypoint.sh);
 # secrets arrive via DDMGMT_* environment variables, never baked into the image.
 
-FROM php:8.3-apache
+FROM php:8.5-apache
 
 # gd needs freetype/jpeg/png/webp system libs; everything else (openssl,
 # fileinfo, session, json) ships enabled in the base image already.
