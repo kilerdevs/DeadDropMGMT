@@ -25,6 +25,9 @@ RUN a2enconf deaddrop
 
 COPY . /var/www/html
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+# The lifecycle journey (CI) re-runs the schema loader inside the container;
+# tests/ as a whole is dockerignored, but this one file ships deliberately.
+COPY tests/schema_loader.php /var/www/html/tests/schema_loader.php
 RUN chmod +x /usr/local/bin/entrypoint.sh \
  # pristine config template outside the docroot for first-boot rendering
  && cp /var/www/html/config.php.example /usr/local/share/config.php.template \

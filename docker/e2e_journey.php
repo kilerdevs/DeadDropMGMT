@@ -72,7 +72,8 @@ exec(
     escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(dirname(__DIR__) . '/tests/schema_loader.php') . ' 2>&1',
     $migOut, $migrated
 );
-T($migrated === 0, 'schema re-run (migration) is idempotent here');
+T($migrated === 0, 'schema re-run (migration) is idempotent here'
+    . ($migrated === 0 ? '' : ' [' . implode(' | ', array_slice($migOut, -3)) . ']'));
 
 // ── 2. first-run owner creation ───────────────────────────────────────────────
 [$st, $html, $ck] = _j_get("$base/admin/index.php");
