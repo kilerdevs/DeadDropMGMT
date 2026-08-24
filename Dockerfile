@@ -7,6 +7,7 @@ FROM php:8.3-apache
 # gd needs freetype/jpeg/png/webp system libs; everything else (openssl,
 # fileinfo, session, json) ships enabled in the base image already.
 RUN apt-get update \
+ && apt-get upgrade -y \
  && apt-get install -y --no-install-recommends \
         libfreetype6-dev \
         libjpeg62-turbo-dev \
