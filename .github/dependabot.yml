@@ -1,0 +1,15 @@
+version: 2
+updates:
+  # CI actions drift too — a compromised or outdated action version is a
+  # supply-chain risk like any other dependency.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  # Dev-only tooling (php-code-coverage). Runtime is dependency-free by
+  # design (ADR-001) — this keeps the tooling honest anyway.
+  - package-ecosystem: composer
+    directory: /
+    schedule:
+      interval: weekly

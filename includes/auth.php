@@ -324,7 +324,10 @@ function rl_hit(string $scope = 'public'): array {
         return ['blocked' => true, 'remaining' => $window, 'count' => 0];
     }
     return [
-        'blocked'   => $count >= $max,
+        // count > max (not >=): the max-th attempt still executes, matching
+        // rl_status's "blocked when the stored count reached max" semantics —
+        // the budget buys max real attempts, the max+1-th is denied.
+        'blocked'   => $count > $max,
         'remaining' => max(0, $window - (time() - $window_start)),
         'count'     => $count,
     ];

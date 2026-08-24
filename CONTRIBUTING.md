@@ -57,10 +57,17 @@ You'll get a response, and credit in the fix's changelog/commit if you'd like it
    ```
 3. Fork the repo, create a branch off `master`, make your change, and open a PR against `master`.
 
-There's no automated test suite. Before opening a PR:
-- Run `php -l` on every file you touched.
+There **is** an automated test suite now, and CI runs it on every push and PR (PHP 8.0–8.4 matrix, coverage floors, Docker smoke tests, CodeQL). Before opening a PR:
+
+- Run the suite against an isolated test database — it never touches your real one (`tests/bootstrap.php` forces `deaddrops_test`):
+  ```bash
+  php tests/schema_loader.php   # once, and after any setup.sql change
+  php tests/run_all.php         # must exit 0
+  ```
+- Run `php -l` on every file you touched (CI lints too, but fail faster locally).
 - Actually exercise the change against a real MySQL/MariaDB instance — click through the affected flow in a browser, not just a syntax check.
-- If you touched `setup.sql`, verify it stays idempotent: run it against a database that already has the schema and confirm it doesn't error.
+- If you touched `setup.sql`, the suite's schema re-run (StateTransitionTest) already checks idempotence — but confirm locally as well: run the loader against a database that already has the schema.
+- If your change touches `includes/`, watch the coverage job: overall `includes/` coverage must stay ≥ 80% and every security-critical file ≥ 90% (`tests/coverage_runner.php --min-overall=80 --min-critical=90`).
 
 ---
 
