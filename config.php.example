@@ -87,7 +87,21 @@ function get_client_ip(): string {
         ];
         foreach ($candidates as $key) {
             if (!empty($_SERVER[$key])) {
-                $ip = trim(explode(',', $_SERVER[$key])[0]);
+                $raw = trim((string)$_SERVER[$key]);
+                // Multi-hop XFF: a proxy that APPENDS leaves earlier entries
+                // client-controlled, so "first entry" is then attacker-chosen.
+                // This deployment contract expects an OVERWRITING proxy — say
+                // so loudly when the header looks multi-hop. The static flag
+                // breaks the get_client_ip() <-> app_log() call cycle (the
+                // logger asks this very function for the request IP).
+                if ($key === 'HTTP_X_FORWARDED_FOR' && str_contains($raw, ',')) {
+                    static $multihop_warned = false;
+                    if (!$multihop_warned) {
+                        $multihop_warned = true;
+                        log_warn('xff_multihop', ['msg' => 'X-Forwarded-For carries multiple hops; first entry used — verify the proxy overwrites (not appends) this header']);
+                    }
+                }
+                $ip = trim(explode(',', $raw)[0]);
                 if (filter_var($ip, FILTER_VALIDATE_IP)) {
                     return $ip;
                 }

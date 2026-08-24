@@ -98,14 +98,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         // Password — hash-only: keep current hash if not changing, otherwise
         // replace it. The old recoverable AES copy is purged on every save.
+        $pw_hash = (string)$order['pickup_password_hash']; // kept unless replaced below
         if ($new_password !== '') {
             if (strlen($new_password) < 8) {
                 $error = t('admin.edit.error.pw_too_short');
             } else {
                 $pw_hash = hash_password($new_password);
             }
-        } else {
-            $pw_hash = $order['pickup_password_hash'];
         }
 
         if ($error === '') {

@@ -9,8 +9,8 @@ ErrorDocument 503 /error/503.php
 
 # Explicitly serve static assets (required on byethost — server-level config denies by default)
 <FilesMatch "\.(css|js|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$">
-    Order Allow,Deny
-    Allow from all
+    # Apache 2.4 authz (Order/Allow/Deny is deprecated mod_access_compat syntax)
+    Require all granted
 </FilesMatch>
 
 # Ensure correct MIME types so nosniff doesn't block them
@@ -27,8 +27,8 @@ ErrorDocument 503 /error/503.php
 
 # Protect sensitive files from direct access
 <FilesMatch "^(config\.php)$">
-    Order Allow,Deny
-    Deny from all
+    # Apache 2.4 authz (Order/Allow/Deny is deprecated mod_access_compat syntax)
+    Require all denied
 </FilesMatch>
 
 # Protect directories that should never be web-accessible
@@ -44,8 +44,8 @@ ErrorDocument 503 /error/503.php
 
 # Protect this file
 <Files ".htaccess">
-    Order Allow,Deny
-    Deny from all
+    # Apache 2.4 authz (Order/Allow/Deny is deprecated mod_access_compat syntax)
+    Require all denied
 </Files>
 
 # Security headers (supplement PHP-set headers)

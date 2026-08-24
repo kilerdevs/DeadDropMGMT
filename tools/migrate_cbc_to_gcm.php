@@ -30,7 +30,13 @@ function legacy_cbc_decrypt(string $key, string $ciphertext_b64, string $iv_hex)
     return openssl_decrypt($raw, 'aes-256-cbc', $key, OPENSSL_RAW_DATA, hex2bin($iv_hex));
 }
 
-function gcm_encrypt_with(string $key, string $plaintext): array {
+function gcm_encrypt_with(string $key, string $plaintext, ?string $info = null): array {
+    // ADR-016: the runtime derives purpose subkeys from the master — write
+    // rows under the same subkey the app will decrypt with. null info keeps
+    // raw keying for callers outside the app's key-separation scheme.
+    if ($info !== null) {
+        $key = hash_hkdf('sha256', $key, 32, $info, 'deaddrop-mgmt-hkdf-salt-v1');
+    }
     $nonce = random_bytes(12);
     $tag   = '';
     $ct    = openssl_encrypt($plaintext, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $nonce, $tag);
@@ -51,13 +57,13 @@ $db->beginTransaction();
 $total   = 0;
 $failed  = 0;
 
-// [table, pk, enc column, iv column]
+// [table, pk, enc column, iv column, HKDF purpose info]
 $targets = [
-    ['orders', 'id', 'location_encrypted', 'location_iv'],
-    ['users',  'id', 'totp_secret_enc',    'totp_secret_iv'],
+    ['orders', 'id', 'location_encrypted', 'location_iv', 'deaddrop:location-v1'],
+    ['users',  'id', 'totp_secret_enc',    'totp_secret_iv',    'deaddrop:totp-v1'],
 ];
 
-foreach ($targets as [$table, $pk, $encCol, $ivCol]) {
+foreach ($targets as [$table, $pk, $encCol, $ivCol, $info]) {
     // A 32-hex-char IV marks pre-GCM CBC rows (GCM nonces are 24 hex chars).
     $stmt = $db->query(
         "SELECT $pk AS id, $encCol AS enc, $ivCol AS iv
@@ -75,7 +81,7 @@ foreach ($targets as [$table, $pk, $encCol, $ivCol]) {
             continue;
         }
         if (!$dry) {
-            $e = gcm_encrypt_with($key, $plain);
+            $e = gcm_encrypt_with($key, $plain, $info);
             $upd->execute([$e['ciphertext'], $e['iv'], $row['id']]);
         }
         $n++;

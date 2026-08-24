@@ -44,7 +44,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
 
             $secret = ($user && $user['totp_enabled'] && $user['totp_secret_enc'] && $user['totp_secret_iv'])
-                ? decrypt_location($user['totp_secret_enc'], $user['totp_secret_iv'])
+                ? decrypt_secret($user['totp_secret_enc'], $user['totp_secret_iv'])
                 : false;
 
             $code = trim($_POST['code'] ?? '');

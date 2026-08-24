@@ -2,7 +2,24 @@
 declare(strict_types=1);
 require_once dirname(__DIR__) . '/config.php';
 
-function _aes_key(): string {
+// ── Key separation (HKDF, ADR-016) ────────────────────────────────────────────
+// AES_KEY_HEX is a MASTER key and is never used for encryption directly.
+// Every purpose derives its own 32-byte subkey via HKDF-SHA256 with a fixed
+// public salt and a purpose-bound info string:
+//
+//   master ─┬─ location-v1    orders.location_encrypted
+//           ├─ totp-v1        users.totp_secret_enc
+//           ├─ reveal-v1      sealed session payloads
+//           ├─ capability-v1  reveal capability MAC
+//           └─ log-hmac-v1    app.log integrity chain
+//
+// Compromise or rotation of one subsystem's key no longer couples the others.
+// The salt is public by design (RFC 5869): all secret material flows from the
+// master key alone.
+
+const HKDF_SALT = 'deaddrop-mgmt-hkdf-salt-v1';
+
+function _master_key(): string {
     $key = hex2bin(AES_KEY_HEX);
     if (strlen($key) !== 32) {
         throw new RuntimeException('AES key must be 32 bytes (64 hex chars).');
@@ -10,24 +27,38 @@ function _aes_key(): string {
     return $key;
 }
 
+function _derived_key(string $info): string {
+    static $cache = [];
+    if (!isset($cache[$info])) {
+        $cache[$info] = hash_hkdf('sha256', _master_key(), 32, $info, HKDF_SALT);
+    }
+    return $cache[$info];
+}
+
+function _location_key(): string    { return _derived_key('deaddrop:location-v1'); }
+function _totp_key(): string        { return _derived_key('deaddrop:totp-v1'); }
+function _reveal_key(): string      { return _derived_key('deaddrop:reveal-v1'); }
+function _capability_key(): string  { return _derived_key('deaddrop:capability-v1'); }
+
 // Proof that THIS session completed the pickup-password check for an order.
 // The post-unlock redirect keeps only token + this MAC in the session and the
 // reveal page re-decrypts from the DB — plaintext location data never rests
 // in the session store. Derived subkey keeps it separate from the AES key.
 function reveal_capability(string $token, int $order_id): string {
-    $mac_key = hash_hmac('sha256', 'ddmgmt-reveal-capability', _aes_key(), true);
-    return hash_hmac('sha256', $token . '|' . $order_id, $mac_key);
+    return hash_hmac('sha256', $token . '|' . $order_id, _capability_key());
 }
 
 // ── Raw encrypt / decrypt ─────────────────────────────────────────────────────
 // AES-256-GCM only (authenticated). Storage format: ciphertext column holds
 // ciphertext||tag (base64), iv column holds the 12-byte nonce in hex.
 // Legacy AES-256-CBC rows are NOT accepted at runtime — migrate them with
-// tools/migrate_cbc_to_gcm.php before deploying this version. Unauthenticated
-// encryption is never used for new data.
+// tools/migrate_cbc_to_gcm.php before deploying this version. Rows encrypted
+// under the raw master key (pre-key-separation) are likewise refused — run
+// tools/separate_keys.php. Unauthenticated or legacy-keyed data is never used
+// for new writes.
 
 function encrypt_location(string $plaintext): array {
-    $key   = _aes_key();
+    $key   = _location_key();
     $nonce = random_bytes(12);
     $tag   = '';
     $ct    = openssl_encrypt($plaintext, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $nonce, $tag);
@@ -41,7 +72,7 @@ function encrypt_location(string $plaintext): array {
 }
 
 function decrypt_location(string $ciphertext_b64, string $iv_hex): string|false {
-    $key = _aes_key();
+    $key = _location_key();
     $raw = base64_decode($ciphertext_b64, true);
     if ($raw === false || strlen($iv_hex) !== 24) { // GCM nonce is exactly 12 bytes
         return false;
@@ -53,6 +84,29 @@ function decrypt_location(string $ciphertext_b64, string $iv_hex): string|false 
     $ct    = substr($raw, 0, -16);
     $tag   = substr($raw, -16);
     return openssl_decrypt($ct, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $nonce, $tag);
+}
+
+// ── TOTP secrets (own subkey — a 2FA secret leak must not expose locations) ───
+
+function encrypt_secret(string $plaintext): array {
+    $nonce = random_bytes(12);
+    $tag   = '';
+    $ct    = openssl_encrypt($plaintext, 'aes-256-gcm', _totp_key(), OPENSSL_RAW_DATA, $nonce, $tag);
+    if ($ct === false) {
+        throw new RuntimeException('Encryption failed.');
+    }
+    return ['ciphertext' => base64_encode($ct . $tag), 'iv' => bin2hex($nonce)];
+}
+
+function decrypt_secret(string $ciphertext_b64, string $iv_hex): string|false {
+    $raw = base64_decode($ciphertext_b64, true);
+    if ($raw === false || strlen($iv_hex) !== 24 || strlen($raw) < 16) {
+        return false;
+    }
+    return openssl_decrypt(
+        substr($raw, 0, -16), 'aes-256-gcm', _totp_key(),
+        OPENSSL_RAW_DATA, hex2bin($iv_hex), substr($raw, -16)
+    );
 }
 
 // ── Structured location data (JSON inside AES) ────────────────────────────────
@@ -88,7 +142,7 @@ function seal_payload(array $data): array {
     $tag   = '';
     $ct    = openssl_encrypt(
         json_encode($data, JSON_UNESCAPED_UNICODE),
-        'aes-256-gcm', _aes_key(), OPENSSL_RAW_DATA, $nonce, $tag
+        'aes-256-gcm', _reveal_key(), OPENSSL_RAW_DATA, $nonce, $tag
     );
     if ($ct === false) {
         throw new RuntimeException('Sealing failed.');
@@ -105,7 +159,7 @@ function open_payload(array $sealed): array|false {
         return false;
     }
     $plain = openssl_decrypt(
-        substr($raw, 0, -16), 'aes-256-gcm', _aes_key(),
+        substr($raw, 0, -16), 'aes-256-gcm', _reveal_key(),
         OPENSSL_RAW_DATA, hex2bin($sealed['iv']), substr($raw, -16)
     );
     if ($plain === false) {

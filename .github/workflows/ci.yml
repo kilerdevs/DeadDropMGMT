@@ -64,6 +64,72 @@ jobs:
       - name: Run tests
         run: php tests/run_all.php
 
+  # Same suite against MySQL 8 — the app claims MySQL/MariaDB support, and
+  # setup.sql must stay portable (guarded ALTERs, no engine-only syntax).
+  tests-mysql:
+    runs-on: ubuntu-latest
+    name: tests (MySQL 8)
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -proot"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      DDMGMT_DB_HOST: 127.0.0.1
+      DDMGMT_DB_PORT: '3306'
+      DDMGMT_DB_USER: root
+      DDMGMT_DB_PASS: root
+      DDMGMT_TEST_DB: deaddrops_test
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@bf6b4fbd49ca58e4608c9c89fba0b8d90bd2a39f # 2.35.5
+        with:
+          php-version: '8.3'
+          extensions: pdo_mysql, openssl, gd, fileinfo
+
+      - name: Prepare config
+        run: cp config.php.example config.php
+
+      - name: Load schema into test database
+        run: php tests/schema_loader.php
+
+      - name: Run tests
+        run: php tests/run_all.php
+
+  # Static analysis (PHPStan level 5) over the runtime code. The phar is
+  # version- AND hash-pinned: a compromised release must not analyse — or
+  # worse, pass — this repo's code.
+  phpstan:
+    runs-on: ubuntu-latest
+    name: PHPStan
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@bf6b4fbd49ca58e4608c9c89fba0b8d90bd2a39f # 2.35.5
+        with:
+          php-version: '8.3'
+          extensions: pdo_mysql, openssl, gd, fileinfo
+
+      - name: Prepare config
+        run: cp config.php.example config.php
+
+      - name: Run PHPStan
+        run: |
+          curl -fsSL -o phpstan.phar \
+            https://github.com/phpstan/phpstan/releases/download/2.2.9/phpstan.phar
+          echo "42af2954326f2f6f0c39e12eb0e1229b9e037297e2caec9a5db11d44e4f6cce1  phpstan.phar" | sha256sum -c -
+          php phpstan.phar analyse --no-progress
+
   # Line coverage over includes/ (the security-critical library code).
   # Separate job: needs pcov + the dev-only Composer dependency (ADR-001 keeps
   # runtime dependency-free; composer.json is tooling, never shipped).
@@ -145,8 +211,9 @@ jobs:
       - name: Build PHP-FPM image
         run: docker build -f Dockerfile.fpm -t deaddrop:fpm .
 
-      # Vulnerability scan of the shipped image: HIGH/CRITICAL findings with
-      # a fix available fail the build — bumping the base image is the fix.
+      # Vulnerability scans of BOTH shipped images (the FPM image is what the
+      # nginx and Caddy stacks actually run): HIGH/CRITICAL findings with a
+      # fix available fail the build — bumping the base image is the fix.
       - name: Scan Apache image (Trivy)
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
@@ -156,6 +223,41 @@ jobs:
           ignore-unfixed: true
           severity: HIGH,CRITICAL
           vuln-type: os,library
+
+      - name: Scan FPM image (Trivy)
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: deaddrop:fpm
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          vuln-type: os,library
+
+      # SBOM (CycloneDX) for both images — the inventory that makes the CVE
+      # scans auditable and gives downstream deployers something to diff.
+      - name: Generate SBOMs (CycloneDX)
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: deaddrop:apache
+          format: cyclonedx
+          output: sbom-apache.cdx.json
+          scan-type: image
+
+      - name: Generate FPM SBOM (CycloneDX)
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: deaddrop:fpm
+          format: cyclonedx
+          output: sbom-fpm.cdx.json
+          scan-type: image
+
+      - name: Upload SBOMs
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: sbom
+          path: sbom-*.cdx.json
+          retention-days: 30
 
       - name: Validate compose files
         run: |

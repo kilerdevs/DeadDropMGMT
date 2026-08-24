@@ -1,6 +1,7 @@
 # DeadDropMGMT
 
 [![CI](https://github.com/kilerdevs/DeadDropMGMT/actions/workflows/ci.yml/badge.svg)](https://github.com/kilerdevs/DeadDropMGMT/actions/workflows/ci.yml)
+[![SAST](https://github.com/kilerdevs/DeadDropMGMT/actions/workflows/sast.yml/badge.svg)](https://github.com/kilerdevs/DeadDropMGMT/actions/workflows/sast.yml)
 
 **A secure, bare-metal order management system for coordinating deliveries to dead-drop locations.**
 
@@ -146,7 +147,7 @@ Browser ──[TLS, external]── Web server / PHP
 | SQL injection | PDO prepared statements throughout — zero string interpolation in SQL | S1–S5 | A1–A2 |
 | Password storage | bcrypt cost=12 via `password_hash()` / `password_verify()` | S5 | A4 |
 | Account takeover | TOTP 2FA (RFC 6238) — self-service per account, secret GCM-encrypted at rest. Passwordless accounts are claimed only with a single-use enrollment secret, never by username alone | S5 | A1, A2 |
-| Location data at rest | AES-256-GCM (authenticated), random nonce per record; legacy CBC rows are rejected at runtime — migrate with `tools/migrate_cbc_to_gcm.php`. Key lives only in `config.php` or env (`DDMGMT_AES_KEY_HEX`), never in DB | S1, S4 | A4 |
+| Location data at rest | AES-256-GCM (authenticated), random nonce per record; keys are HKDF purpose-subkeys of the master key — locations, TOTP secrets, reveal payloads and the log chain each use their own (ADR-016). Legacy CBC rows and raw-master rows are rejected at runtime — migrate with `tools/migrate_cbc_to_gcm.php` then `tools/separate_keys.php`. Master key lives only in `config.php` or env (`DDMGMT_AES_KEY_HEX`), never in DB | S1, S4 | A4 |
 | Pickup password guessing | Dual budget enforced together: IP-based limiter (**fail-closed**: if the limiter DB is down, pickup and login are denied, not waved through) **and** a per-session failure bucket — whoever trips either is blocked; ≥64-bit generated passphrases (6 words + 4-digit + symbol), hash-only at rest, equalized-cost responses for unknown tokens | S2 | A1 |
 | Rate-limit bypass via spoofed `X-Forwarded-For` | Proxy headers are honored only when `DDMGMT_TRUST_PROXY=1` (opt-in for reverse-proxy/CDN installs); header values are validated as literal IPs and `REMOTE_ADDR` is the default source of truth | S2 | A1 |
 | Token enumeration | 16-char alphanumeric random tokens (~95 bits); unknown-token answers burn the same bcrypt cost and return the same body as wrong passwords when a credential was submitted; receipt requires the delivered state atomically | S3 | A1 |

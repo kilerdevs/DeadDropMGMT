@@ -144,4 +144,83 @@ T::ok('undecryptable row aborts migration', is_string($out3) && str_contains($ou
 
 $db->exec("DELETE FROM orders WHERE order_token LIKE 'cbcmig%'");
 
+// ── HKDF key separation (ADR-016) ─────────────────────────────────────────────
+// Every purpose derives its own subkey from the master; cross-purpose reuse
+// must be cryptographically impossible, not just unlikely.
+
+// A row encrypted under the RAW master (pre-separation legacy) is refused.
+$rawCt = openssl_encrypt($plain, 'aes-256-gcm', hex2bin(AES_KEY_HEX), OPENSSL_RAW_DATA, $nonce = random_bytes(12), $tag);
+T::ok('raw-master row REJECTED by runtime decrypt (run tools/separate_keys.php)',
+    decrypt_location(base64_encode($rawCt . $tag), bin2hex($nonce)) === false);
+
+// Purpose subkeys are mutually exclusive: a location blob is not a TOTP
+// secret, a sealed payload is not a location blob.
+$sec = encrypt_secret('TOTPSECRET123456');
+T::ok('totp secret roundtrip', decrypt_secret($sec['ciphertext'], $sec['iv']) === 'TOTPSECRET123456');
+T::ok('totp blob refused by location decrypt', decrypt_location($sec['ciphertext'], $sec['iv']) === false);
+T::ok('location blob refused by totp decrypt', decrypt_secret($enc['ciphertext'], $enc['iv']) === false);
+
+$sealed = seal_payload(['token' => 'PFTOKENDELIVER01']);
+T::ok('sealed payload roundtrip', open_payload($sealed) === ['token' => 'PFTOKENDELIVER01']);
+T::ok('sealed payload refused by location decrypt', decrypt_location($sealed['ct'], $sealed['iv']) === false);
+$bad = $sealed; $bad['ct'] = base64_encode(substr(base64_decode($sealed['ct']), 0, -1));
+T::ok('tampered sealed payload rejected wholesale', open_payload($bad) === false);
+
+// Reveal capability is stable per (token, id) and bound to its own subkey.
+T::eq('reveal capability deterministic', reveal_capability('TOK', 7), reveal_capability('TOK', 7));
+T::ok('reveal capability differs per order', reveal_capability('TOK', 7) !== reveal_capability('TOK', 8));
+
+// Log chain verifies across key generations: a legacy-keyed genesis entry
+// followed by a derived-key entry is a valid chain; tampering is still caught.
+$tmpLog = sys_get_temp_dir() . '/ddmgmt_chain_test.log';
+$mkEntry = static function (array $rec, string $key): string {
+    $payload = json_encode($rec, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    $rec['hash'] = hash_hmac('sha256', $payload, $key);
+    return json_encode($rec, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+};
+$e1 = $mkEntry(['ts' => 'x', 'level' => 'info', 'event' => 'legacy_gen', 'prev' => APP_LOG_GENESIS], _log_key_legacy());
+$e2 = $mkEntry(['ts' => 'x', 'level' => 'info', 'event' => 'derived_gen', 'prev' => hash_hmac('sha256', json_encode(['ts' => 'x', 'level' => 'info', 'event' => 'legacy_gen', 'prev' => APP_LOG_GENESIS], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), _log_key_legacy())], _log_key());
+file_put_contents($tmpLog, $e1 . "\n" . $e2 . "\n");
+[$chainOk, , , $chainWhy] = verify_log_chain($tmpLog);
+T::ok('log chain verifies across legacy + derived generations', $chainOk === true);
+file_put_contents($tmpLog, str_replace('legacy_gen', 'tampered!', $e1) . "\n" . $e2 . "\n");
+[$chainOk2, , , $chainWhy2] = verify_log_chain($tmpLog);
+T::ok('tampered legacy-generation entry still detected', $chainOk2 === false && $chainWhy2 !== null);
+unlink($tmpLog);
+
+// ── separate_keys.php tool, from a representative pre-separation state ───────
+$rawEnc = openssl_encrypt($plain, 'aes-256-gcm', hex2bin(AES_KEY_HEX), OPENSSL_RAW_DATA, $rawNonce = random_bytes(12), $rawTag);
+$db->exec("DELETE FROM orders WHERE order_token LIKE 'keysep%'");
+$db->prepare(
+    "INSERT INTO orders (order_token, pickup_password_hash, location_encrypted, location_iv,
+                         status, delivered_at, expires_at)
+     VALUES ('keysepmigrate1', 'x', ?, ?, 'delivered', NOW(), NOW() + INTERVAL 24 HOUR)"
+)->execute([base64_encode($rawEnc . $rawTag), bin2hex($rawNonce)]);
+
+$out = shell_exec(escapeshellarg(PHP_BINARY) . ' ' .
+    escapeshellarg(dirname(__DIR__) . '/tools/separate_keys.php') . ' 2>&1');
+$row = $db->prepare('SELECT location_encrypted AS enc, location_iv AS iv FROM orders WHERE order_token = ?');
+$row->execute(['keysepmigrate1']);
+$sepRow = $row->fetch();
+T::ok('separated row decrypts at runtime (purpose subkey)',
+    decrypt_location($sepRow['enc'], $sepRow['iv']) === $plain);
+T::ok('separation tool reports success', is_string($out) && str_contains($out, 'Done'));
+
+// Idempotent: re-run skips rows already under their purpose subkey.
+$out2 = shell_exec(escapeshellarg(PHP_BINARY) . ' ' .
+    escapeshellarg(dirname(__DIR__) . '/tools/separate_keys.php') . ' 2>&1');
+T::ok('re-run migrates nothing new', is_string($out2) && str_contains($out2, '0 row(s) migrated'));
+
+// A row decryptable by NEITHER key aborts transactionally.
+$db->prepare(
+    "INSERT INTO orders (order_token, pickup_password_hash, location_encrypted, location_iv,
+                         status, delivered_at, expires_at)
+     VALUES ('keysepmigrate2', 'x', ?, ?, 'delivered', NOW(), NOW() + INTERVAL 24 HOUR)"
+)->execute([base64_encode($rawEnc . $rawTag), bin2hex(random_bytes(12))]); // right ct, wrong nonce
+$out3 = shell_exec(escapeshellarg(PHP_BINARY) . ' ' .
+    escapeshellarg(dirname(__DIR__) . '/tools/separate_keys.php') . ' 2>&1; echo EXIT:$?');
+T::ok('undecryptable row aborts key separation', is_string($out3) && str_contains($out3, 'ABORTED'));
+
+$db->exec("DELETE FROM orders WHERE order_token LIKE 'keysep%'");
+
 exit(T::done());

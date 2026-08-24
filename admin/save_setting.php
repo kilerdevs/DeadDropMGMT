@@ -70,14 +70,14 @@ if (in_array($key, $booleans, true)) {
     if ($value === '') {
         $value = 'MGT'; // fall back to default when cleared
     }
-} elseif ($key === 'default_lang') {
+} else {
+    // Every other allowed key was handled above, so $key is 'default_lang'
+    // here — validate the language and keep the raw (select-provided) value.
     if (!in_array($value, i18n_supported_langs(), true)) {
         http_response_code(422);
         echo json_encode(['error' => 'Invalid language']);
         exit;
     }
-} else {
-    $value = trim($value);
 }
 
 try {

@@ -3,8 +3,8 @@ DirectoryIndex index.php
 
 # Block dotfiles (.htaccess, .env, etc.)
 <FilesMatch "^\.">
-    Order Allow,Deny
-    Deny from all
+    # Apache 2.4 authz (Order/Allow/Deny is deprecated mod_access_compat syntax)
+    Require all denied
 </FilesMatch>
 
 <IfModule mod_headers.c>

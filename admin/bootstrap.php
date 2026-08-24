@@ -32,7 +32,8 @@ if ($rl['blocked']) {
     _bootstrap_back(t('admin.login.error.rate_limited', ['min' => (int)ceil($rl['remaining'] / 60)]));
 }
 
-$username = trim($_POST['username'] ?? '');
+$username   = trim($_POST['username'] ?? '');
+$enrollment = ''; // set inside the lock; keeps analysis honest about the flash below
 
 try {
     $db = get_db();

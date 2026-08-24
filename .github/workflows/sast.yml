@@ -32,15 +32,15 @@ jobs:
             --config p/php \
             --config p/security-audit \
             --config p/secrets \
+            --config .semgrep/php-request-echo.yml \
             --exclude-rule php.lang.security.injection.echoed-request.echoed-request \
             --error \
             --metrics=off
 
-      # Why echoed-request is excluded: the rule has no sanitizer model for
-      # this codebase — it ignores nosemgrep annotations in PHP templates,
-      # flags (int)-cast values, and cannot distinguish an HTML echo (now
-      # always htmlspecialchars-wrapped; t() escapes parameters centrally)
-      # from a JSON endpoint whose whole purpose is echoing an upstream body
-      # with an explicit application/json header. Every finding it raised was
-      # triaged and closed or structurally resolved; the other php/security/
-      # secrets rules stay fully active.
+      # The upstream echoed-request rule stays excluded, but its job is done
+      # by .semgrep/php-request-echo.yml: a taint rule with OUR sanitizer
+      # model (htmlspecialchars / t() / json_encode). Raw echo of request
+      # data fails the build; escaped code passes without suppressions. The
+      # upstream rule itself cannot be re-enabled because it flags
+      # (int)-cast values and JSON endpoints and ignores nosemgrep
+      # annotations in PHP templates.

@@ -339,13 +339,13 @@ function proxy_discover(int $max_test = 400, int $timeout_s = 4): array {
     if (!$working) return [];
 
     // Round 2: live anonymity verification for unrated HTTP proxies.
-    $unrated = array_values(array_filter($working, fn($p) => $candidates[$p['url']] === false
+    $unrated = array_values(array_filter($working, fn($p) => $candidates[$p['url']]['rated'] === false
         && str_starts_with($p['url'], 'http://')));
     if ($unrated) {
         $ourIp = proxy_public_ip();
         if ($ourIp === null) {
             // Cannot verify anonymity — maximum security means drop them all.
-            $working = array_values(array_filter($working, fn($p) => $candidates[$p['url']] !== false
+            $working = array_values(array_filter($working, fn($p) => $candidates[$p['url']]['rated'] !== false
                 || !str_starts_with($p['url'], 'http://')));
         } else {
             $judged = [];
@@ -358,14 +358,14 @@ function proxy_discover(int $max_test = 400, int $timeout_s = 4): array {
                 }
             }
             $working = array_values(array_filter($working, fn($p) =>
-                $candidates[$p['url']] !== false
+                $candidates[$p['url']]['rated'] !== false
                 || !str_starts_with($p['url'], 'http://')
                 || ($judged[$p['url']] ?? false)));
         }
     }
 
     usort($working, fn($a, $b) => $a['latency_ms'] <=> $b['latency_ms']);
-    return array_values($working);
+    return $working;
 }
 
 // Run a batch of GETs through different proxies in parallel.

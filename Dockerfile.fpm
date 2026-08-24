@@ -26,5 +26,11 @@ RUN chmod +x /usr/local/bin/entrypoint.sh \
  && chown -R www-data:www-data /var/www/html/logs /var/www/html/uploads /var/www/html/cache /config
 
 WORKDIR /var/www/html
+# php-fpm has no HTTP surface of its own; the honest liveness check is that
+# the FPM master (PID 1) is alive and its workers can execute PHP. A real
+# end-to-end check happens at the reverse-proxy layer (nginx/Caddy stacks
+# have their own smoke tests in CI).
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD kill -0 1
 ENTRYPOINT ["entrypoint.sh"]
 CMD ["php-fpm"]

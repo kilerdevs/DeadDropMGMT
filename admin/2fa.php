@@ -44,7 +44,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 rl_increment('admin_2fa_setup');
                 $error = t('admin.2fa.error.invalid_code');
             } else {
-                $enc = encrypt_location($pending);
+                $enc = encrypt_secret($pending);
                 get_db()->prepare(
                     'UPDATE users SET totp_enabled = 1, totp_secret_enc = ?, totp_secret_iv = ? WHERE id = ?'
                 )->execute([$enc['ciphertext'], $enc['iv'], $uid]);
@@ -59,7 +59,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $error = t('admin.2fa.mandatory_notice');
         } elseif ($action === 'disable' && $enabled) {
             $secret = ($row['totp_secret_enc'] && $row['totp_secret_iv'])
-                ? decrypt_location($row['totp_secret_enc'], $row['totp_secret_iv'])
+                ? decrypt_secret($row['totp_secret_enc'], $row['totp_secret_iv'])
                 : false;
             if ($secret === false || !totp_verify($secret, $code)) {
                 rl_increment('admin_2fa_setup');
