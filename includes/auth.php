@@ -221,7 +221,8 @@ function set_security_headers(bool $admin = false): string {
             "font-src 'self'; " .
             "script-src 'self' 'nonce-{$nonce}'; " .
             "img-src 'self' data: blob:; " .
-            "connect-src 'self';"
+            "connect-src 'self'; " .
+            "object-src 'none'; base-uri 'self'; frame-ancestors 'none';"
         );
         return $nonce;
     }
@@ -235,7 +236,8 @@ function set_security_headers(bool $admin = false): string {
         "font-src 'self'; " .
         "script-src 'self' 'nonce-{$nonce}'; " .
         "img-src 'self'; " .
-        "frame-src https://www.openstreetmap.org;"
+        "frame-src https://www.openstreetmap.org; " .
+        "object-src 'none'; base-uri 'self'; frame-ancestors 'none';"
     );
     return $nonce;
 }

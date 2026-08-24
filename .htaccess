@@ -48,8 +48,10 @@ ErrorDocument 503 /error/503.php
     Require all denied
 </Files>
 
-# Security headers (supplement PHP-set headers)
+# Security headers — ONLY for the error pages, which don't go through PHP's
+# set_security_headers(). PHP sends X-Frame-Options itself on every app page;
+# sending it twice (PHP + Apache) is flagged by security scanners (ZAP 10020).
 <IfModule mod_headers.c>
-    Header always set X-Frame-Options "DENY"
-    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "DENY" "expr=%{REQUEST_URI} =~ m#^/error/#"
+    Header always set X-Content-Type-Options "nosniff" "expr=%{REQUEST_URI} =~ m#^/error/#"
 </IfModule>
