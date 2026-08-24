@@ -165,10 +165,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             }
                         }
                     } else {
-                        rl_increment('public');
+                        // Spend + verdict in one atomic transition; a full
+                        // budget denies the NEXT attempt right here, not on
+                        // some later request.
+                        $hit = rl_hit('public');
                         bucket_fail('public');
                         log_event('unlock_fail', (int)$order['id'], $raw_token);
-                        $error = t('public.index.error.invalid_credentials');
+                        $error = $hit['blocked']
+                            ? t('public.index.error.rate_limited', ['min' => (int)ceil($hit['remaining'] / 60)])
+                            : t('public.index.error.invalid_credentials');
                     }
                 }
             } catch (Exception $e) {

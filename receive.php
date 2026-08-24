@@ -30,11 +30,11 @@ $csrf      = generate_csrf();
 
 // Token enumeration is limited on every public surface, not just the
 // destructive one: the confirmation probe burns budget like anything else.
-$rl = rl_status('public');
+// rl_hit is one atomic state transition — spend + verdict — so concurrent
+// requests can never both slip through on a stale count.
+$rl = rl_hit('public');
 if ($rl['blocked']) {
     $error = t('public.receive.rate_limited', ['min' => (int)ceil($rl['remaining'] / 60)]);
-} else {
-    rl_increment('public');
 }
 
 if (strlen($raw_token) !== 16 || !ctype_alnum($raw_token)) {

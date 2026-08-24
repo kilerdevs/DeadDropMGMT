@@ -97,6 +97,22 @@ function get_client_ip(): string {
     return (string)($_SERVER['REMOTE_ADDR'] ?? '0.0.0.0');
 }
 
+// ── Request scheme detection (session cookie "secure" flag, HSTS) ────────────
+// Behind a TLS-terminating reverse proxy PHP sees plain HTTP, so $_SERVER
+//['HTTPS'] lies about the browser-side security context. With
+// DDMGMT_TRUST_PROXY=1 the X-Forwarded-Proto header decides (only the literal
+// "https" counts, first hop of a comma list). Without proxy trust PHP's own
+// view wins — never set the cookie "secure"-less on a proxy you trust.
+function request_is_https(): bool {
+    if (_secret('DDMGMT_TRUST_PROXY', '0') === '1') {
+        $proto = strtolower(trim(explode(',', (string)($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? ''))[0]));
+        if ($proto !== '') {
+            return $proto === 'https';
+        }
+    }
+    return !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off';
+}
+
 // Overwrite file contents with null bytes before unlinking (best-effort)
 function secure_unlink(string $path): void {
     if (!is_file($path)) return;

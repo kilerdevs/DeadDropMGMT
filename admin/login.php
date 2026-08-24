@@ -44,7 +44,11 @@ switch (admin_login($username, $password)) {
         exit;
 }
 
-rl_increment('admin_login');
-$_SESSION['login_error'] = t('admin.login.error.bad_credentials');
+// One atomic spend + verdict: a budget that fills with this very attempt
+// denies it immediately instead of leaking one extra try to a race.
+$hit = rl_hit('admin_login');
+$_SESSION['login_error'] = $hit['blocked']
+    ? t('admin.login.error.rate_limited', ['min' => (int)ceil($hit['remaining'] / 60)])
+    : t('admin.login.error.bad_credentials');
 header('Location: /admin/index.php');
 exit;

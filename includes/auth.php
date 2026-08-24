@@ -9,7 +9,7 @@ function start_secure_session(): void {
     session_set_cookie_params([
         'lifetime' => 0,
         'path'     => '/',
-        'secure'   => isset($_SERVER['HTTPS']),
+        'secure'   => request_is_https(),
         'httponly' => true,
         'samesite' => 'Strict',
     ]);
@@ -207,7 +207,7 @@ function set_security_headers(bool $admin = false): string {
     header('Cache-Control: no-store, no-cache, must-revalidate, private');
     header('Pragma: no-cache');
 
-    if (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') {
+    if (request_is_https()) {
         header('Strict-Transport-Security: max-age=31536000; includeSubDomains');
     }
 
@@ -277,28 +277,63 @@ function rl_status(string $scope = 'public'): array {
     ];
 }
 
-function rl_increment(string $scope = 'public'): void {
-    if (!rl_enabled()) return;
+// Spend one attempt from the IP budget AND decide, atomically. The whole
+// read-decide-write runs inside one transaction on a row lock (SELECT ...
+// FOR UPDATE): concurrent requests from the same IP are serialized, so no
+// increment can be lost and two simultaneous visitors can never both see
+// "one attempt left". The returned 'blocked' verdict comes from the
+// post-increment count of that single state transition.
+function rl_hit(string $scope = 'public'): array {
+    if (!rl_enabled()) {
+        return ['blocked' => false, 'remaining' => 0, 'count' => 0];
+    }
     require_once dirname(__DIR__) . '/includes/settings.php';
     $ip     = get_client_ip();
+    $max    = rl_max();
     $window = rl_window_seconds();
+    $db     = get_db();
     try {
-        $db   = get_db();
-        $stmt = $db->prepare('SELECT window_start FROM rate_limits WHERE ip_address = ? AND scope = ? LIMIT 1');
+        $db->beginTransaction();
+        $stmt = $db->prepare(
+            'SELECT count, window_start FROM rate_limits WHERE ip_address = ? AND scope = ? LIMIT 1 FOR UPDATE'
+        );
         $stmt->execute([$ip, $scope]);
         $row = $stmt->fetch();
-        if (!$row || (time() - strtotime($row['window_start'])) >= $window) {
+
+        $stale = !$row || (time() - strtotime($row['window_start'])) >= $window;
+        if ($stale) {
             $db->prepare(
                 'INSERT INTO rate_limits (ip_address, scope, count, window_start) VALUES (?, ?, 1, UTC_TIMESTAMP())
                  ON DUPLICATE KEY UPDATE count = 1, window_start = UTC_TIMESTAMP()'
             )->execute([$ip, $scope]);
+            $count = 1;
+            $window_start = time();
         } else {
+            $count = (int)$row['count'] + 1;
+            $window_start = (int)strtotime($row['window_start']);
             $db->prepare('UPDATE rate_limits SET count = count + 1 WHERE ip_address = ? AND scope = ?')
                ->execute([$ip, $scope]);
         }
+        $db->commit();
     } catch (Exception $e) {
-        log_err('Rate limit increment failed: ' . $e->getMessage());
+        if ($db->inTransaction()) {
+            $db->rollBack();
+        }
+        // Fail CLOSED: an uncountable limiter must deny, never wave through.
+        log_err('Rate limit increment failed (fail closed): ' . $e->getMessage());
+        return ['blocked' => true, 'remaining' => $window, 'count' => 0];
     }
+    return [
+        'blocked'   => $count >= $max,
+        'remaining' => max(0, $window - (time() - $window_start)),
+        'count'     => $count,
+    ];
+}
+
+// Legacy shape for callers that only spend budget without reading the
+// verdict — every decision-making path should use rl_hit() instead.
+function rl_increment(string $scope = 'public'): void {
+    rl_hit($scope);
 }
 
 // Reset a scope's counter for the current IP (called on a successful attempt).
@@ -351,7 +386,7 @@ function bucket_clear(string $scope = 'public'): void {
 // stored SHA-256-hashed, expires, cleared on successful claim.
 
 function enrollment_secret_generate(): string {
-    return bin2hex(random_bytes(24));
+    return bin2hex(random_bytes(32)); // 256 bits → 64 hex chars
 }
 
 function enrollment_secret_hash(string $secret): string {

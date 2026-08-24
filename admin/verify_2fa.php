@@ -59,8 +59,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // whether the account exists or its secret decrypts.
                 totp_verify(DUMMY_TOTP_SECRET, $code);
             }
-            rl_increment('admin_2fa');
-            $error = t('admin.verify2fa.error.invalid_code');
+            $hit = rl_hit('admin_2fa');
+            $error = $hit['blocked']
+                ? t('admin.verify2fa.error.rate_limited', ['min' => (int)ceil($hit['remaining'] / 60)])
+                : t('admin.verify2fa.error.invalid_code');
         }
     }
 }
