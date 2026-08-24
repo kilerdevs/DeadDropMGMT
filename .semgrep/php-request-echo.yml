@@ -31,10 +31,7 @@ rules:
       - pattern: $_REQUEST
       - pattern: $_COOKIE
     pattern-sinks:
-      - patterns:
-          - pattern: echo $SINK
-      - patterns:
-          - pattern: print $SINK
+      - pattern: echo $SINK;
     pattern-sanitizers:
       - pattern: htmlspecialchars(...)
       - pattern: htmlentities(...)

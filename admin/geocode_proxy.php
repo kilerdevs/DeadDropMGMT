@@ -24,4 +24,12 @@ if ($data === false) {
 }
 
 header('Content-Type: application/json');
-echo $data;
+// Re-encode instead of echoing raw upstream bytes: the client is guaranteed
+// well-formed JSON no matter what Nominatim returned (and request-derived
+// query strings can never smuggle content through).
+$decoded = json_decode((string)$data, true);
+if (!is_array($decoded)) {
+    http_response_code(502);
+    exit('{"error":"upstream returned invalid JSON"}');
+}
+echo json_encode($decoded);
