@@ -35,7 +35,7 @@ jobs:
       DDMGMT_DB_PASS: root
       DDMGMT_TEST_DB: deaddrops_test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
@@ -81,7 +81,7 @@ jobs:
       DDMGMT_DB_PASS: root
       DDMGMT_TEST_DB: deaddrops_test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
@@ -101,13 +101,13 @@ jobs:
 
       - name: Run tests with coverage
         run: |
-          php tests/coverage_runner.php | tee coverage.txt
+          php tests/coverage_runner.php --html=coverage-html | tee coverage.txt
           grep -E "^\s*(Lines|Lines):" coverage.txt | head -1 >> $GITHUB_STEP_SUMMARY || true
           grep -oP "Lines:\s+\K[\d.]+" coverage.txt | head -1 | \
             { read pct; echo "### Line coverage: ${pct}%" >> $GITHUB_STEP_SUMMARY; } || true
 
       - name: Upload HTML report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: coverage-html
           path: coverage-html
@@ -123,7 +123,7 @@ jobs:
       DDMGMT_DB_USER: deaddrop
       DDMGMT_DB_PASS: deaddrop-db
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Build Apache image
         run: docker build -t deaddrop:apache .
