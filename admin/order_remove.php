@@ -4,6 +4,7 @@ require_once dirname(__DIR__) . '/config.php';
 require_once dirname(__DIR__) . '/includes/db.php';
 require_once dirname(__DIR__) . '/includes/auth.php';
 require_once dirname(__DIR__) . '/includes/audit.php';
+require_once dirname(__DIR__) . '/includes/order_state.php';
 require_once dirname(__DIR__) . '/includes/i18n.php';
 
 set_security_headers(true);
@@ -28,6 +29,7 @@ if ($id <= 0) {
     exit;
 }
 
+// Central authorization check for every courier/admin mutation.
 if (!courier_owns_order($id)) {
     $_SESSION['flash']    = t('admin.orders.flash.no_access');
     $_SESSION['flash_ok'] = false;
@@ -35,29 +37,15 @@ if (!courier_owns_order($id)) {
     exit;
 }
 
-try {
-    $db  = get_db();
-    $tok = $db->prepare('SELECT order_token FROM orders WHERE id = ? LIMIT 1');
-    $tok->execute([$id]);
-    $order_token = $tok->fetchColumn() ?: null;
-
-    $photos = $db->prepare('SELECT filename FROM order_photos WHERE order_id = ?');
-    $photos->execute([$id]);
-    foreach ($photos->fetchAll() as $ph) {
-        secure_unlink(dirname(__DIR__) . '/uploads/' . $ph['filename']);
-    }
-
-    $stmt = $db->prepare('DELETE FROM orders WHERE id = ?');
-    $stmt->execute([$id]);
-
-    if ($stmt->rowCount() > 0) {
-        audit('order_remove', $id, $order_token);
-    }
-    $_SESSION['flash']    = $stmt->rowCount() > 0 ? t('admin.orders.flash.deleted') : t('admin.orders.flash.not_found');
-    $_SESSION['flash_ok'] = $stmt->rowCount() > 0;
-} catch (Exception $e) {
-    log_err('Order remove error: ' . $e->getMessage());
-    $_SESSION['flash']    = t('admin.orders.flash.delete_failed');
+// Atomic delete under a row lock: token + photo list are captured in the
+// same transaction that removes the row; files are swept only after commit.
+$res = order_delete_atomic($id);
+if ($res !== null) {
+    audit('order_remove', $id, $res['token']);
+    $_SESSION['flash']    = t('admin.orders.flash.deleted');
+    $_SESSION['flash_ok'] = true;
+} else {
+    $_SESSION['flash']    = t('admin.orders.flash.not_found');
     $_SESSION['flash_ok'] = false;
 }
 

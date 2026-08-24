@@ -8,11 +8,13 @@ $db  = get_db();
 $up  = dirname(__DIR__) . '/uploads';
 if (!is_dir($up)) { mkdir($up, 0770, true); }
 
-// Seed: expired order (with photo file), active order, never-expiring order
+// Seed: expired order (with photo file), active order, never-expiring order.
+// Delivered rows carry delivered_at — the schema's state-machine CHECK
+// requires it, exactly like production code sets it.
 $mk = static function (string $token, ?string $expires) use ($db): int {
     $db->prepare('DELETE FROM orders WHERE order_token = ?')->execute([$token]);
-    $db->prepare('INSERT INTO orders (order_token, pickup_password_hash, location_encrypted, location_iv, status, expires_at)
-                  VALUES (?, "x", "e", "00", "delivered", ' . ($expires ?? 'NULL') . ')')
+    $db->prepare('INSERT INTO orders (order_token, pickup_password_hash, location_encrypted, location_iv, status, delivered_at, expires_at)
+                  VALUES (?, "x", "e", "abab", "delivered", NOW(), ' . ($expires ?? 'NULL') . ')')
        ->execute([$token]);
     return (int)$db->lastInsertId();
 };

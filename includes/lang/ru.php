@@ -68,6 +68,8 @@ return [
 
     'public.receive.rate_limited'  => 'Слишком много попыток — подождите {min} мин.',
     'public.receive.error.server'  => 'Ошибка сервера. Попробуйте снова.',
+
+    'public.receive.error.invalid_state' => 'Этот заказ невозможно получить — он не готов к получению или уже получен.',
     'public.receive.title.done'    => 'Получено',
     'public.receive.title.confirm' => 'Подтверждение получения',
     'public.receive.title.error'   => 'Ошибка',
@@ -251,6 +253,10 @@ return [
     'admin.panic.report.photos_db' => 'Фото (БД)',
     'admin.panic.report.files'     => 'Файлы',
     'admin.panic.report.logs'      => 'Логи',
+
+    'admin.panic.report.audit'       => 'Записи аудита',
+
+    'admin.panic.report.failed_files' => 'Не удалось удалить файлов: {n} — повторите очистку',
     'admin.panic.done.body' => 'База данных очищена. Сессия администратора завершена.',
     'admin.panic.relogin_button' => 'Войти снова',
     'admin.panic.step3.label'   => 'Шаг 3 из 3 — последнее предупреждение',
@@ -328,17 +334,20 @@ return [
     'admin.js.copy_warning' => 'ВНИМАНИЕ: В целях безопасности место получения доступно в течение {ttl}ч после доставки, после чего безвозвратно удаляется. Статус заказа может измениться в любой момент.',
     'admin.js.menu_aria' => 'Меню',
 
-    'admin.edit.error.pw_too_short' => 'Новый пароль должен содержать не менее 4 символов.',
+    'admin.edit.error.pw_too_short' => 'Новый пароль должен содержать не менее 8 символов.',
+
+
+    'admin.edit.error.invalid_transition' => 'Доставленный заказ нельзя вернуть в статус «готовится».',
     'admin.edit.success.saved'      => 'Изменения сохранены.',
     'admin.edit.error.save_failed'  => 'Ошибка сохранения — проверьте журнал ошибок.',
     'admin.edit.title_prefix' => 'Редактировать',
     'admin.edit.mark_delivered_button' => 'Отметить как доставленное',
     'admin.edit.status.preparing_option' => 'Готовится',
     'admin.edit.status.delivered_option' => 'Доставлено',
-    'admin.edit.pw_hashed_note' => 'Пароль зашифрован bcrypt — установите новый, чтобы отобразить его здесь.',
+    'admin.edit.pw_hashed_note' => 'Только хеш — показан однократно при создании. Задайте новый, чтобы заменить.',
     'admin.edit.new_pw_label'       => 'Новый пароль получения',
     'admin.edit.new_pw_hint'        => 'оставьте пустым, чтобы сохранить текущий',
-    'admin.edit.new_pw_placeholder' => 'Новый пароль (мин. 4 символа)',
+    'admin.edit.new_pw_placeholder' => 'Новый пароль (мин. 8 символов)',
     'admin.edit.location_hint' => 'зашифровано AES-256',
     'admin.edit.pin_hint'      => 'нажмите, чтобы переместить — пусто = сохранить текущую',
     'admin.edit.current_pin'   => 'Текущая метка: {lat}, {lng}',
@@ -444,7 +453,7 @@ return [
     'admin.orders.flash.status_change_failed' => 'Не удалось изменить статус.',
 
     'admin.new_order.flash.missing_location' => 'Укажите описание места или установите метку на карте.',
-    'admin.new_order.flash.password_short'   => 'Пароль получения должен содержать не менее 4 символов.',
+    'admin.new_order.flash.password_short'   => 'Пароль получения должен содержать не менее 8 символов.',
     'admin.new_order.flash.created'          => 'Заказ создан. Токен: {token}',
     'admin.new_order.flash.created_with_pw'  => 'Заказ создан. Токен: {token} | Пароль: {password}',
     'admin.new_order.flash.upload_errors'    => 'Не удалось загрузить фото: {files}',

@@ -68,6 +68,8 @@ return [
 
     'public.receive.rate_limited'  => 'Trop de tentatives — attendez {min} min.',
     'public.receive.error.server'  => 'Erreur serveur. Veuillez réessayer.',
+
+    'public.receive.error.invalid_state' => 'Cette commande ne peut pas être réceptionnée : elle n\'est pas prête ou l\'a déjà été.',
     'public.receive.title.done'    => 'Reçu',
     'public.receive.title.confirm' => 'Confirmer le retrait',
     'public.receive.title.error'   => 'Erreur',
@@ -251,6 +253,10 @@ return [
     'admin.panic.report.photos_db' => 'Photos (BD)',
     'admin.panic.report.files'     => 'Fichiers',
     'admin.panic.report.logs'      => 'Journaux',
+
+    'admin.panic.report.audit'       => 'Entrées d\'audit',
+
+    'admin.panic.report.failed_files' => '{n} fichier(s) n\'ont pas pu être supprimés — relancez la purge',
     'admin.panic.done.body' => 'Base de données vidée. Session administrateur terminée.',
     'admin.panic.relogin_button' => 'Se reconnecter',
     'admin.panic.step3.label'   => 'Étape 3 sur 3 — dernier avertissement',
@@ -328,7 +334,10 @@ return [
     'admin.js.copy_warning' => 'ATTENTION : Pour des raisons de sécurité, le lieu de retrait est disponible pendant {ttl}h après la livraison, puis définitivement supprimé. Le statut de la livraison peut changer à tout moment.',
     'admin.js.menu_aria' => 'Menu',
 
-    'admin.edit.error.pw_too_short' => 'Le nouveau mot de passe doit comporter au moins 4 caractères.',
+    'admin.edit.error.pw_too_short' => 'Le nouveau mot de passe doit contenir au moins 8 caractères.',
+
+
+    'admin.edit.error.invalid_transition' => 'Une commande livrée ne peut pas revenir en préparation.',
     'admin.edit.success.saved'      => 'Modifications enregistrées.',
     'admin.edit.error.save_failed'  => "Échec de l'enregistrement — vérifiez le journal des erreurs.",
     'admin.edit.title_prefix' => 'Modifier',
@@ -338,7 +347,7 @@ return [
     'admin.edit.pw_hashed_note' => "Mot de passe chiffré avec bcrypt — définissez-en un nouveau pour l'afficher ici.",
     'admin.edit.new_pw_label'       => 'Nouveau mot de passe de retrait',
     'admin.edit.new_pw_hint'        => "laissez vide pour conserver l'actuel",
-    'admin.edit.new_pw_placeholder' => 'Nouveau mot de passe (min. 4 caractères)',
+    'admin.edit.new_pw_placeholder' => 'Nouveau mot de passe (min. 8 caractères)',
     'admin.edit.location_hint' => 'chiffré AES-256',
     'admin.edit.pin_hint'      => 'cliquez pour déplacer — vide = conserver l\'actuelle',
     'admin.edit.current_pin'   => 'Repère actuel : {lat}, {lng}',
@@ -442,7 +451,7 @@ return [
     'admin.orders.flash.status_change_failed' => 'Échec du changement de statut.',
 
     'admin.new_order.flash.missing_location' => 'Indiquez une description du lieu ou placez une épingle sur la carte.',
-    'admin.new_order.flash.password_short'   => 'Le mot de passe de retrait doit contenir au moins 4 caractères.',
+    'admin.new_order.flash.password_short'   => 'Le mot de passe de retrait doit contenir au moins 8 caractères.',
     'admin.new_order.flash.created'          => 'Commande créée. Jeton : {token}',
     'admin.new_order.flash.created_with_pw'  => 'Commande créée. Jeton : {token} | Mot de passe : {password}',
     'admin.new_order.flash.upload_errors'    => "Échec de l'envoi des photos : {files}",

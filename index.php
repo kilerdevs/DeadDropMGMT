@@ -29,22 +29,29 @@ $blocked           = false;
 $cooldown_secs     = 0;
 $current_token     = '';
 
+// A reveal lives for minutes, not "a while": after this window the unlocked
+// capability is gone and the recipient must re-enter the pickup password.
+const REVEAL_MAX_AGE = 180;
+
 // ── PRG: restore reveal state from session after redirect ─────────────────────
-// The payload is AES-sealed inside the session — the session store never
-// holds the decrypted location, only ciphertext like the database.
+// Everything sensitive — decrypted location, notes, photo list, token —
+// travels inside ONE authenticated, AES-sealed payload. The session store
+// never holds plaintext reveal data, and any tampering with the sealed blob
+// makes open_payload() reject the whole thing rather than partially use it.
 if ($_SERVER['REQUEST_METHOD'] === 'GET' && !empty($_SESSION['reveal'])) {
     $rv = $_SESSION['reveal'];
-    unset($_SESSION['reveal']);
-    if ((time() - ($rv['ts'] ?? 0)) < 300 && ($rv['type'] ?? '') === 'delivered') {
+    unset($_SESSION['reveal']); // single-use: consume before anything else
+    if ((time() - ($rv['ts'] ?? 0)) < REVEAL_MAX_AGE && ($rv['type'] ?? '') === 'delivered') {
         $dec = open_payload($rv['sealed'] ?? []);
-        if ($dec !== false) {
+        if (is_array($dec) && isset($dec['token']) && is_string($dec['token'])) {
             $loc_data         = $dec;
-            $order_notes      = $rv['notes'];
-            $order_expires_ts = $rv['expires'];
-            $photos           = $rv['photos'];
-            $current_token    = $rv['token'];
+            $order_notes      = (string)($dec['notes'] ?? '');
+            $order_expires_ts = (int)($dec['expires'] ?? 0);
+            $photos           = is_array($dec['photos'] ?? null) ? $dec['photos'] : [];
+            $current_token    = $dec['token'];
         }
-    } elseif ((time() - ($rv['ts'] ?? 0)) < 300 && ($rv['type'] ?? '') === 'preparing') {
+        // Tampered/expired/unopenable payload → nothing is revealed at all.
+    } elseif ((time() - ($rv['ts'] ?? 0)) < REVEAL_MAX_AGE && ($rv['type'] ?? '') === 'preparing') {
         $correct_preparing = true;
     }
     unset($rv);
@@ -98,7 +105,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 if (!$order) {
                     log_event('lookup', null, $raw_token);
-                    $error = t('public.index.error.not_found');
+                    if ($password !== '') {
+                        // Enumeration resistance: burn the same bcrypt cost a
+                        // real order would and answer exactly like a wrong
+                        // password — unknown token vs bad secret is then
+                        // indistinguishable by timing or by response body.
+                        verify_password($password, DUMMY_PICKUP_HASH);
+                        $error = t('public.index.error.invalid_credentials');
+                    } else {
+                        $error = t('public.index.error.not_found');
+                    }
                 } elseif ($password === '' && !$allow_status_lookup) {
                     $error = t('public.index.error.password_required');
                 } elseif ($password === '') {
@@ -109,6 +125,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 } else {
                     if (verify_password($password, $order['pickup_password_hash'])) {
                         bucket_clear('public');
+                        rl_reset('public');
                         if ($order['status'] === 'preparing') {
                             log_event('unlock_success', (int)$order['id'], $raw_token);
                             $_SESSION['reveal'] = ['type' => 'preparing', 'ts' => time()];
@@ -126,14 +143,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                      WHERE order_id = ? ORDER BY sort_order, id'
                                 );
                                 $ps->execute([$order['id']]);
+                                // One authenticated blob per reveal: location,
+                                // notes, expiry, photos and the scoped token
+                                // travel together or not at all.
                                 $_SESSION['reveal'] = [
-                                    'type'    => 'delivered',
-                                    'sealed'  => seal_payload($dec),
-                                    'notes'   => trim($order['notes'] ?? ''),
-                                    'expires' => $order['expires_at'] ? (int)strtotime($order['expires_at']) : 0,
-                                    'photos'  => $ps->fetchAll(),
-                                    'token'   => $raw_token,
-                                    'ts'      => time(),
+                                    'type'   => 'delivered',
+                                    'sealed' => seal_payload([
+                                        'text'         => (string)$dec['text'],
+                                        'lat'          => $dec['lat'],
+                                        'lng'          => $dec['lng'],
+                                        'instructions' => (string)($dec['instructions'] ?? ''),
+                                        'notes'        => trim($order['notes'] ?? ''),
+                                        'expires'      => $order['expires_at'] ? (int)strtotime($order['expires_at']) : 0,
+                                        'photos'       => $ps->fetchAll(),
+                                        'token'        => $raw_token,
+                                    ]),
+                                    'ts' => time(),
                                 ];
                                 header('Location: /');
                                 exit;

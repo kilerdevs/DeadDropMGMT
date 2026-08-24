@@ -42,6 +42,12 @@ define('SESSION_LIFETIME', 3600); // seconds
 define('RATE_LIMIT_MAX',    10);
 define('RATE_LIMIT_WINDOW', 900); // 15 minutes
 
+// Fixed bcrypt hash of an unknown random secret. Verifying submitted pickup
+// passwords against it when the order token does not exist equalizes CPU cost
+// between "unknown token" and "wrong password" (enumeration resistance).
+// The plaintext it hashes was never stored anywhere.
+define('DUMMY_PICKUP_HASH', '$2y$12$JOfiPnfCGcrXUxs5MiJ81.vMz8Qs6n2qJpelljzdwVQJ8TVatrxTC');
+
 // ── Timezone (UTC everywhere so PHP + MySQL agree regardless of server clock) ─
 date_default_timezone_set('UTC');
 

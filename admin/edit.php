@@ -39,8 +39,9 @@ if (!$order) {
     exit;
 }
 
-// Couriers may only edit their own orders
-if (is_courier() && (int)($order['created_by'] ?? 0) !== current_user_id()) {
+// Couriers may only edit their own orders — the same central check every
+// other mutating endpoint uses.
+if (!courier_owns_order($id)) {
     $_SESSION['flash']    = t('admin.orders.flash.no_access');
     $_SESSION['flash_ok'] = false;
     header('Location: /admin/orders.php');
@@ -66,9 +67,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $lat_raw          = $_POST['lat'] ?? '';
         $lng_raw          = $_POST['lng'] ?? '';
 
+        // State machine: preparing -> delivered only. A delivered order can
+        // never regress to preparing (the recipient may already have seen it);
+        // the UI no longer offers it and the server refuses it outright.
+        if ($order['status'] === 'delivered' && $new_status === 'preparing') {
+            $error = t('admin.edit.error.invalid_transition');
+        }
+
         // Decode current location data for coordinate fallback
-        $cur = decrypt_location_data($order['location_encrypted'], $order['location_iv'])
-            ?: ['text' => '', 'lat' => null, 'lng' => null, 'instructions' => ''];
+        if ($error === '') {
+            $cur = decrypt_location_data($order['location_encrypted'], $order['location_iv'])
+                ?: ['text' => '', 'lat' => null, 'lng' => null, 'instructions' => ''];
+        } else {
+            $cur = ['text' => '', 'lat' => null, 'lng' => null, 'instructions' => ''];
+        }
 
         $final_text  = $new_location;
         $final_instr = $new_instructions;
@@ -84,32 +96,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
 
-        // delivered_at + expires_at resolved in PHP
-        if ($new_status === 'delivered' && $order['status'] !== 'delivered') {
-            $delivered_at = date('Y-m-d H:i:s');
-            $expires_at   = date('Y-m-d H:i:s', strtotime('+' . order_ttl_hours() . ' hours'));
-        } elseif ($new_status === 'preparing') {
-            $delivered_at = null;
-            $expires_at   = null;
-        } else {
-            $delivered_at = $order['delivered_at'];
-            $expires_at   = $order['expires_at'];
-        }
-
-        // Password — keep current if not changing
+        // Password — hash-only: keep current hash if not changing, otherwise
+        // replace it. The old recoverable AES copy is purged on every save.
         if ($new_password !== '') {
-            if (strlen($new_password) < 4) {
+            if (strlen($new_password) < 8) {
                 $error = t('admin.edit.error.pw_too_short');
             } else {
-                $pw_hash    = hash_password($new_password);
-                $pw_enc_raw = encrypt_location($new_password);
-                $pw_enc     = $pw_enc_raw['ciphertext'];
-                $pw_iv      = $pw_enc_raw['iv'];
+                $pw_hash = hash_password($new_password);
             }
         } else {
             $pw_hash = $order['pickup_password_hash'];
-            $pw_enc  = $order['pickup_password_enc'];
-            $pw_iv   = $order['pickup_password_iv'];
         }
 
         if ($error === '') {
@@ -121,30 +117,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'instructions' => $final_instr,
                 ]);
 
-                get_db()->prepare(
-                    'UPDATE orders SET
-                        status                = ?,
-                        delivered_at          = ?,
-                        expires_at            = ?,
-                        notes                 = ?,
-                        location_encrypted    = ?,
-                        location_iv           = ?,
-                        pickup_password_hash  = ?,
-                        pickup_password_enc   = ?,
-                        pickup_password_iv    = ?
-                     WHERE id = ?'
-                )->execute([
-                    $new_status,
-                    $delivered_at,
-                    $expires_at,
-                    $new_notes !== '' ? $new_notes : null,
-                    $enc['ciphertext'],
-                    $enc['iv'],
-                    $pw_hash,
-                    $pw_enc,
-                    $pw_iv,
-                    $id,
-                ]);
+                // delivered_at/expires_at are set by the SAME conditional
+                // update that flips the status — no read-decide-write window.
+                if ($order['status'] === 'preparing' && $new_status === 'delivered') {
+                    get_db()->prepare(
+                        'UPDATE orders SET
+                            status                = "delivered",
+                            delivered_at          = NOW(),
+                            expires_at            = DATE_ADD(NOW(), INTERVAL ? HOUR),
+                            notes                 = ?,
+                            location_encrypted    = ?,
+                            location_iv           = ?,
+                            pickup_password_hash  = ?,
+                            pickup_password_enc   = NULL,
+                            pickup_password_iv    = NULL
+                         WHERE id = ? AND status = "preparing"'
+                    )->execute([
+                        order_ttl_hours(),
+                        $new_notes !== '' ? $new_notes : null,
+                        $enc['ciphertext'],
+                        $enc['iv'],
+                        $pw_hash,
+                        $id,
+                    ]);
+                } else {
+                    get_db()->prepare(
+                        'UPDATE orders SET
+                            notes                 = ?,
+                            location_encrypted    = ?,
+                            location_iv           = ?,
+                            pickup_password_hash  = ?,
+                            pickup_password_enc   = NULL,
+                            pickup_password_iv    = NULL
+                         WHERE id = ? AND status = ?'
+                    )->execute([
+                        $new_notes !== '' ? $new_notes : null,
+                        $enc['ciphertext'],
+                        $enc['iv'],
+                        $pw_hash,
+                        $id,
+                        $order['status'],
+                    ]);
+                }
 
                 // Handle new photo uploads
                 if (!empty($_FILES['photos']['name'][0])) {
@@ -189,11 +203,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $loc = decrypt_location_data($order['location_encrypted'], $order['location_iv'])
     ?: ['text' => t('admin.edit.decrypt_error'), 'lat' => null, 'lng' => null, 'instructions' => ''];
 
-// Decrypt pickup password for display
+// Pickup passwords are hash-only: nothing is decrypted for display. The
+// credential was shown once at creation and can be replaced, not recovered.
 $pw_display = null;
-if (!empty($order['pickup_password_enc']) && !empty($order['pickup_password_iv'])) {
-    $pw_display = decrypt_location($order['pickup_password_enc'], $order['pickup_password_iv']);
-}
 
 // Load photos
 try {
@@ -267,21 +279,20 @@ $init_zoom = $has_pin ? 17 : 12;
                 <div class="form-group">
                     <label for="status"><?= t('admin.orders.th.status') ?></label>
                     <select id="status" name="status">
-                        <option value="preparing" <?= $order['status'] === 'preparing' ? 'selected' : '' ?>><?= t('admin.edit.status.preparing_option') ?></option>
-                        <option value="delivered" <?= $order['status'] === 'delivered' ? 'selected' : '' ?>><?= t('admin.edit.status.delivered_option') ?></option>
+                        <?php if ($order['status'] === 'preparing'): ?>
+                        <option value="preparing" selected><?= t('admin.edit.status.preparing_option') ?></option>
+                        <option value="delivered"><?= t('admin.edit.status.delivered_option') ?></option>
+                        <?php else: ?>
+                        <!-- delivered is terminal: no regression option offered -->
+                        <option value="delivered" selected><?= t('admin.edit.status.delivered_option') ?></option>
+                        <?php endif; ?>
                     </select>
                 </div>
 
                 <!-- Current pickup password -->
                 <div class="form-group">
                     <div class="field-label"><?= t('public.index.pw_label') ?></div>
-                    <?php if ($pw_display !== null && $pw_display !== false): ?>
-                    <div class="location-display location-display-pw">
-                        <?= htmlspecialchars($pw_display, ENT_QUOTES, 'UTF-8') ?>
-                    </div>
-                    <?php else: ?>
                     <div class="location-note"><?= t('admin.edit.pw_hashed_note') ?></div>
-                    <?php endif; ?>
                 </div>
 
                 <!-- New password -->
@@ -427,8 +438,7 @@ $init_zoom = $has_pin ? 17 : 12;
                 <div class="edit-extra-actions">
                     <button class="action-btn"
                             data-copy
-                            data-token="<?= htmlspecialchars($order['order_token'], ENT_QUOTES, 'UTF-8') ?>"
-                            data-code="<?= htmlspecialchars($pw_display ?: '', ENT_QUOTES, 'UTF-8') ?>">
+                            data-token="<?= htmlspecialchars($order['order_token'], ENT_QUOTES, 'UTF-8') ?>">
                         <?= t('admin.edit.copy_data_button') ?>
                     </button>
                 </div>

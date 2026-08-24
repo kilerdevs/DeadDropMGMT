@@ -74,6 +74,19 @@ T::eq('REMOTE_ADDR is final fallback', $ip, get_client_ip());
 $_SERVER['HTTP_X_FORWARDED_FOR'] = 'not-an-ip, 203.0.113.9';
 T::eq('invalid header skipped, REMOTE_ADDR used', $ip, get_client_ip());
 
+// Fail-closed: if the limiter subsystem breaks (table gone), pickup/login
+// must be DENIED, never silently unblocked (child process = fresh settings
+// cache, exactly like the next request). stderr is silenced portably:
+// /dev/null on Unix, NUL on Windows.
+$devnull = PHP_OS_FAMILY === 'Windows' ? 'NUL' : '/dev/null';
+$fc = json_decode(shell_exec(
+    escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(__DIR__ . '/_rl_failclosed.php') . " 2>$devnull"
+) ?: '{}', true) ?: [];
+T::ok('broken limiter blocks (fail closed)', ($fc['blocked'] ?? false) === true);
+T::ok('fail-closed block carries a cooldown', (int)($fc['remaining'] ?? 0) > 0);
+$s = rl_status($scope);
+T::eq('rate_limits table restored after probe (data intact)', 2, rl_status($scope)['count']);
+
 // Cleanup
 $db->prepare('DELETE FROM rate_limits WHERE ip_address = ?')->execute([$ip]);
 

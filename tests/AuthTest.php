@@ -53,6 +53,25 @@ T::ok('totp_enabled carried into session', $_SESSION['totp_enabled'] === true);
 admin_logout();
 T::eq('session destroyed on logout', PHP_SESSION_NONE, session_status());
 
+// ── Session hardening invariants ─────────────────────────────────────────────
+$params = session_get_cookie_params();
+T::ok('session cookie is HttpOnly', $params['httponly'] === true);
+T::ok('session cookie is SameSite=Strict', ($params['samesite'] ?? '') === 'Strict');
+T::eq('session cookie is session-scoped', 0, $params['lifetime']);
+T::ok('session name is app-specific', SESSION_NAME === 'ddmgmt');
+
+// Logout must invalidate sensitive state: a reveal armed before logout is
+// unreachable afterwards.
+$_SESSION = [];
+start_secure_session();
+$_SESSION['reveal'] = ['type' => 'preparing', 'ts' => time()];
+generate_csrf();
+admin_logout();
+start_secure_session();
+T::ok('logout wipes any pending reveal state', empty($_SESSION['reveal']));
+T::ok('logout wipes the CSRF token', empty($_SESSION['csrf_token']));
+admin_logout();
+
 // ── Passwordless account: username alone must NOT reach the setup step ──────
 $_SESSION = [];
 start_secure_session(); // logout above destroyed the session

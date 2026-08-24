@@ -43,8 +43,8 @@ $generated_password = false;
 if ($password === '') {
     $password           = generate_passphrase();
     $generated_password = true;
-    } elseif (strlen($password) < 4) {
-        $_SESSION['flash']    = t('admin.new_order.flash.password_short');
+} elseif (strlen($password) < 8) {
+    $_SESSION['flash']    = t('admin.new_order.flash.password_short');
     $_SESSION['flash_ok'] = false;
     header('Location: /admin/new_order.php#new-order');
     exit;
@@ -70,21 +70,19 @@ try {
         'lng'          => $lng,
         'instructions' => $instructions,
     ]);
-    $pw_hash    = hash_password($password);
-    $pw_enc_raw = encrypt_location($password); // AES copy for admin display
+    // Hash only — the pickup password is shown ONCE in the flash message and
+    // never stored recoverably. Lost credentials are replaced, not recovered.
+    $pw_hash = hash_password($password);
 
     $db   = get_db();
     $stmt = $db->prepare(
         'INSERT INTO orders
-         (order_token, pickup_password_hash, pickup_password_enc, pickup_password_iv,
-          location_encrypted, location_iv, notes, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+         (order_token, pickup_password_hash, location_encrypted, location_iv, notes, created_by)
+         VALUES (?, ?, ?, ?, ?, ?)'
     );
     $stmt->execute([
         $token,
         $pw_hash,
-        $pw_enc_raw['ciphertext'],
-        $pw_enc_raw['iv'],
         $enc['ciphertext'],
         $enc['iv'],
         $notes !== '' ? $notes : null,
@@ -119,8 +117,7 @@ try {
 
     $msg = $generated_password
         ? t('admin.new_order.flash.created_with_pw', ['token' => $token, 'password' => $password])
-        : t('admin.new_order.flash.created', ['token' => $token]);
-    if (!empty($photo_errors)) {
+        : t('admin.new_order.flash.created', ['token' => $token]);    if (!empty($photo_errors)) {
         $msg .= ' | ' . t('admin.new_order.flash.upload_errors', ['files' => implode(', ', $photo_errors)]);
     }
     $_SESSION['flash']    = $msg;

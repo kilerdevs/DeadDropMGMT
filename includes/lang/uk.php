@@ -68,6 +68,8 @@ return [
 
     'public.receive.rate_limited'  => 'Забагато спроб — зачекайте {min} хв.',
     'public.receive.error.server'  => 'Помилка сервера. Спробуйте ще раз.',
+
+    'public.receive.error.invalid_state' => 'Це замовлення неможливо отримати — воно не готове до отримання або вже отримане.',
     'public.receive.title.done'    => 'Отримано',
     'public.receive.title.confirm' => 'Підтвердження отримання',
     'public.receive.title.error'   => 'Помилка',
@@ -251,6 +253,10 @@ return [
     'admin.panic.report.photos_db' => 'Фото (БД)',
     'admin.panic.report.files'     => 'Файли',
     'admin.panic.report.logs'      => 'Логи',
+
+    'admin.panic.report.audit'       => 'Записи аудиту',
+
+    'admin.panic.report.failed_files' => 'Не вдалося видалити файлів: {n} — повторіть очищення',
     'admin.panic.done.body' => 'Базу даних очищено. Сесію адміністратора завершено.',
     'admin.panic.relogin_button' => 'Увійти знову',
     'admin.panic.step3.label'   => 'Крок 3 з 3 — останнє попередження',
@@ -328,17 +334,20 @@ return [
     'admin.js.copy_warning' => 'УВАГА: З міркувань безпеки місце отримання доступне протягом {ttl} год після доставки, після чого безповоротно видаляється. Статус замовлення може змінитися в будь-який момент.',
     'admin.js.menu_aria' => 'Меню',
 
-    'admin.edit.error.pw_too_short' => 'Новий пароль має містити щонайменше 4 символи.',
+    'admin.edit.error.pw_too_short' => 'Новий пароль має містити щонайменше 8 символів.',
+
+
+    'admin.edit.error.invalid_transition' => 'Доставлене замовлення не можна повернути у статус «готується».',
     'admin.edit.success.saved'      => 'Зміни збережено.',
     'admin.edit.error.save_failed'  => 'Помилка збереження — перевірте журнал помилок.',
     'admin.edit.title_prefix' => 'Редагувати',
     'admin.edit.mark_delivered_button' => 'Позначити як доставлене',
     'admin.edit.status.preparing_option' => 'Готується',
     'admin.edit.status.delivered_option' => 'Доставлено',
-    'admin.edit.pw_hashed_note' => 'Пароль зашифровано bcrypt — встановіть новий, щоб відобразити його тут.',
+    'admin.edit.pw_hashed_note' => 'Лише хеш — показаний одноразово при створенні. Задайте новий, щоб замінити.',
     'admin.edit.new_pw_label'       => 'Новий пароль отримання',
     'admin.edit.new_pw_hint'        => 'залиште порожнім, щоб зберегти поточний',
-    'admin.edit.new_pw_placeholder' => 'Новий пароль (мін. 4 символи)',
+    'admin.edit.new_pw_placeholder' => 'Новий пароль (мін. 8 символів)',
     'admin.edit.location_hint' => 'зашифровано AES-256',
     'admin.edit.pin_hint'      => 'натисніть, щоб перемістити — порожньо = зберегти поточну',
     'admin.edit.current_pin'   => 'Поточна мітка: {lat}, {lng}',
@@ -444,7 +453,7 @@ return [
     'admin.orders.flash.status_change_failed' => 'Не вдалося змінити статус.',
 
     'admin.new_order.flash.missing_location' => 'Вкажіть опис місця або позначте точку на карті.',
-    'admin.new_order.flash.password_short'   => 'Пароль отримання має містити щонайменше 4 символи.',
+    'admin.new_order.flash.password_short'   => 'Пароль отримання має містити щонайменше 8 символів.',
     'admin.new_order.flash.created'          => 'Замовлення створено. Токен: {token}',
     'admin.new_order.flash.created_with_pw'  => 'Замовлення створено. Токен: {token} | Пароль: {password}',
     'admin.new_order.flash.upload_errors'    => 'Не вдалося завантажити фото: {files}',

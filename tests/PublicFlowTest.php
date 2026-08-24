@@ -61,12 +61,12 @@ $enc = encrypt_location_data([
 ]);
 $hash = password_hash($pass, PASSWORD_BCRYPT);
 $ins  = $db->prepare(
-    "INSERT INTO orders (order_token, pickup_password_hash, location_encrypted, location_iv, status, expires_at, notes)
-     VALUES (?, ?, ?, ?, ?, NOW() + INTERVAL 24 HOUR, ?)"
+    "INSERT INTO orders (order_token, pickup_password_hash, location_encrypted, location_iv, status, delivered_at, expires_at, notes)
+     VALUES (?, ?, ?, ?, ?, ?, NOW() + INTERVAL 24 HOUR, ?)"
 );
-$ins->execute([$tokD, $hash, $enc['ciphertext'], $enc['iv'], 'delivered', 'notka dla odbiorcy']);
-$ins->execute([$tokD2, $hash, $enc['ciphertext'], $enc['iv'], 'delivered', '']);
-$ins->execute([$tokP, $hash, $enc['ciphertext'], $enc['iv'], 'preparing', '']);
+$ins->execute([$tokD, $hash, $enc['ciphertext'], $enc['iv'], 'delivered', date('Y-m-d H:i:s'), 'notka dla odbiorcy']);
+$ins->execute([$tokD2, $hash, $enc['ciphertext'], $enc['iv'], 'delivered', date('Y-m-d H:i:s'), '']);
+$ins->execute([$tokP, $hash, $enc['ciphertext'], $enc['iv'], 'preparing', null, '']);
 
 set_setting('rate_limit_max', '3');
 set_setting('rate_limit_window_min', '15');
@@ -76,6 +76,20 @@ $cookie = '';
 // 1. Unknown token → not-found alert, no reveal
 [, $body, $cookie] = _pf_post("http://127.0.0.1:$port/", ['order_token' => 'UNKNOWN00000000AA'], $cookie);
 T::ok('unknown token rejected', str_contains($body, 'class="alert"'));
+$unknownBody = $body;
+
+// 1b. Enumeration resistance: unknown token WITH a password must answer
+// exactly like a wrong password for an existing order — same body.
+[, $bodyWrong] = _pf_post("http://127.0.0.1:$port/", ['order_token' => $tokD, 'pickup_password' => 'nope'], $cookie);
+[, $bodyUnknownPw] = _pf_post("http://127.0.0.1:$port/", ['order_token' => 'UNKNOWN0000000AB', 'pickup_password' => 'nope'], $cookie);
+preg_match('/<div class="alert">(.*?)<\/div>/s', $bodyWrong, $mW);
+preg_match('/<div class="alert">(.*?)<\/div>/s', $bodyUnknownPw, $mU);
+T::ok('unknown token + password ≡ wrong password (same answer)',
+    ($mW[1] ?? 'a') === ($mU[1] ?? 'b') && ($mW[1] ?? '') !== '');
+
+// Those were two burned failures — start clean before the scripted budget math.
+$db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
+$cookie = '';
 
 // 2. Status lookup (empty password) → badge + password step for delivered order
 [, $body, $cookie] = _pf_post("http://127.0.0.1:$port/", ['order_token' => $tokD], $cookie);
@@ -135,6 +149,35 @@ T::ok('bad CSRF blocks deletion',
 T::ok('receipt confirmed (done page)', str_contains($body, 'status-badge delivered'));
 T::ok('order deleted from DB',
     !$db->query("SELECT 1 FROM orders WHERE order_token = '$token'")->fetch());
+
+// 9b. Replaying the receipt is a safe failure — nothing resurrects, no oracle
+// (fresh budget first so the block below comes from STATE, not the limiter)
+set_setting('rate_limit_max', '50');
+$db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
+[, $bodyReplay] = _pf_post(
+    "http://127.0.0.1:$port/receive.php",
+    ['csrf_token' => $csrf2, 'order_token' => $token, 'step' => '2'],
+    $cookie
+);
+T::ok('replayed receipt shows a safe error', str_contains((string)$bodyReplay, 'class="alert"'));
+T::ok('replayed receipt does not resurrect the order',
+    !$db->query("SELECT 1 FROM orders WHERE order_token = '$token'")->fetch());
+
+// 9c. A PREPARING order cannot even reach the confirmation page
+[$stPrep] = _pf_post(
+    "http://127.0.0.1:$port/receive.php",
+    ['csrf_token' => $csrf2, 'order_token' => $tokP, 'step' => '1'],
+    $cookie
+);
+T::eq('preparing order bounced from confirmation (redirect)', 302, $stPrep);
+[$stPrep2] = _pf_post(
+    "http://127.0.0.1:$port/receive.php",
+    ['csrf_token' => $csrf2, 'order_token' => $tokP, 'step' => '2'],
+    $cookie
+);
+T::ok('preparing order cannot be destroyed via step 2', $stPrep2 === 200);
+T::ok('preparing order still exists after attack',
+    (bool)$db->query("SELECT 1 FROM orders WHERE order_token = '$tokP'")->fetch());
 
 // 10. Preparing order: correct password → "not ready yet" note, no location
 [$st, , $cookie] = _pf_post("http://127.0.0.1:$port/", ['order_token' => $tokP, 'pickup_password' => $pass], $cookie);

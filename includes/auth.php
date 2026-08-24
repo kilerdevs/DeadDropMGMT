@@ -257,7 +257,11 @@ function rl_status(string $scope = 'public'): array {
         $stmt->execute([get_client_ip(), $scope]);
         $row = $stmt->fetch();
     } catch (Exception $e) {
-        return ['blocked' => false, 'remaining' => 0, 'count' => 0];
+        // Fail CLOSED: this limiter guards pickup-password guessing and admin
+        // login. If the counter is unreadable the caller must treat the
+        // request as blocked (temporary outage), never as unblocked traffic.
+        log_err('Rate limit status failed (fail closed): ' . $e->getMessage());
+        return ['blocked' => true, 'remaining' => $window, 'count' => 0];
     }
     if (!$row || (time() - strtotime($row['window_start'])) >= $window) {
         return ['blocked' => false, 'remaining' => $window, 'count' => 0];

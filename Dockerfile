@@ -4,14 +4,15 @@
 
 FROM php:8.3-apache
 
-# gd needs freetype/jpeg/png system libs; everything else (openssl, fileinfo,
-# session, json) ships enabled in the base image already.
+# gd needs freetype/jpeg/png/webp system libs; everything else (openssl,
+# fileinfo, session, json) ships enabled in the base image already.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
         libfreetype6-dev \
         libjpeg62-turbo-dev \
         libpng-dev \
- && docker-php-ext-configure gd --with-freetype --with-jpeg \
+        libwebp-dev \
+ && docker-php-ext-configure gd --with-freetype --with-jpeg --with-webp \
  && docker-php-ext-install -j"$(nproc)" gd pdo_mysql \
  && a2enmod rewrite headers \
  && rm -rf /var/lib/apt/lists/*

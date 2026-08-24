@@ -45,7 +45,8 @@ publish a fix before any public disclosure.
 - `index.php`, `receive.php` — public order lookup / delivery confirmation flows
 - `admin/*` — authentication, session handling, CSRF, 2FA, authorization gaps
   between owner and courier roles
-- `includes/crypto.php` — encryption, hashing, passphrase generation
+- `includes/crypto.php` — encryption, hashing, ≥64-bit passphrase generation
+- `includes/order_state.php` — atomic order state machine (deliver/receive/delete/expiry)
 - `includes/auth.php` — rate limiting, headers, session configuration
 - SQL injection, XSS, privilege escalation, insecure deserialization,
   path traversal, race conditions with security impact
@@ -61,7 +62,10 @@ publish a fix before any public disclosure.
 - Clicking through the OSM embed iframe leaking the recipient IP to
   OpenStreetMap — disclosed in the README
 - Brute-force of pickup passphrases without rate-limit circumvention — the
-  IP-based limiter is the control; demonstrate a *bypass* instead
+  IP-based limiter (fail-closed) plus per-session bucket are the controls;
+  demonstrate a *bypass* instead
+- Guessing a generated pickup passphrase offline is bounded by ~64.6 bits of
+  entropy and bcrypt cost 12; online guessing by the dual budget above
 - Self-XSS, missing security headers on static error pages, or anything
   requiring social engineering rather than a flaw in the application
 - Automated scanner output without a working demonstration

@@ -79,8 +79,12 @@ final class T {
     }
 }
 
-// Warnings/notices during tests are failures, not noise.
+// Warnings/notices during tests are failures, not noise — except where the
+// code deliberately suppresses them with @, which we honour.
 set_error_handler(static function (int $no, string $str, string $file, int $line): bool {
+    if (!(error_reporting() & $no)) {
+        return true; // @-suppressed — respect it
+    }
     throw new ErrorException($str, 0, $no, $file, $line);
 });
 
@@ -99,4 +103,8 @@ require_once dirname(__DIR__) . '/includes/db.php';
 require_once dirname(__DIR__) . '/includes/settings.php';
 require_once dirname(__DIR__) . '/includes/auth.php';
 require_once dirname(__DIR__) . '/includes/totp.php';
+require_once dirname(__DIR__) . '/includes/analytics.php';
+require_once dirname(__DIR__) . '/includes/audit.php';
+require_once dirname(__DIR__) . '/includes/order_state.php';
+require_once dirname(__DIR__) . '/includes/wipe.php';
 require_once dirname(__DIR__) . '/includes/cleanup.php';

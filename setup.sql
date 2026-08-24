@@ -52,6 +52,9 @@ CREATE TABLE IF NOT EXISTS orders (
     created_by           INT                    DEFAULT NULL,
     order_token          CHAR(16)      NOT NULL UNIQUE,
     pickup_password_hash VARCHAR(255)  NOT NULL,
+    -- Deprecated: legacy installs may still carry the recoverable AES copy
+    -- of the pickup password. New code never writes it — run
+    -- tools/purge_pickup_password_recovery.php to clear leftover values.
     pickup_password_enc  TEXT                   DEFAULT NULL,
     pickup_password_iv   CHAR(32)               DEFAULT NULL,
     location_encrypted   TEXT          NOT NULL,
@@ -90,6 +93,38 @@ SET @fk_sql = IF(@fk_exists = 0,
 PREPARE fk_stmt FROM @fk_sql;
 EXECUTE fk_stmt;
 DEALLOCATE PREPARE fk_stmt;
+
+-- ── Orders: DB-enforced state machine ─────────────────────────────────────────
+-- preparing = nothing delivered yet (no timestamps), delivered = both
+-- timestamps present. Application code uses conditional UPDATE/DELETE plus
+-- affected-row checks — this CHECK is the last line of defense against
+-- impossible states from any path.
+--
+-- Legacy rows that violate the invariant are normalized first so the ALTER
+-- never fails mid-upgrade:
+UPDATE orders
+   SET delivered_at = COALESCE(delivered_at, created_at)
+ WHERE status = 'delivered' AND delivered_at IS NULL;
+UPDATE orders
+   SET expires_at = COALESCE(expires_at, DATE_ADD(COALESCE(delivered_at, created_at), INTERVAL 24 HOUR))
+ WHERE status = 'delivered' AND expires_at IS NULL;
+
+SET @chk_exists = (
+    SELECT COUNT(*) FROM information_schema.TABLE_CONSTRAINTS
+    WHERE CONSTRAINT_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'orders'
+      AND CONSTRAINT_TYPE = 'CHECK'
+      AND CONSTRAINT_NAME = 'chk_orders_state'
+);
+SET @chk_sql = IF(@chk_exists = 0,
+    'ALTER TABLE orders ADD CONSTRAINT chk_orders_state CHECK (
+        (status = ''preparing'' AND delivered_at IS NULL)
+     OR (status = ''delivered'' AND delivered_at IS NOT NULL))',
+    'SELECT 1'
+);
+PREPARE chk_stmt FROM @chk_sql;
+EXECUTE chk_stmt;
+DEALLOCATE PREPARE chk_stmt;
 
 -- ── Order photos ──────────────────────────────────────────────────────────────
 

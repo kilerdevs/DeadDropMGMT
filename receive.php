@@ -6,6 +6,7 @@ require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/crypto.php';
 require_once __DIR__ . '/includes/analytics.php';
 require_once __DIR__ . '/includes/settings.php';
+require_once __DIR__ . '/includes/order_state.php';
 require_once __DIR__ . '/includes/i18n.php';
 
 $csp_nonce = set_security_headers(false);
@@ -42,10 +43,14 @@ if (strlen($raw_token) !== 16 || !ctype_alnum($raw_token)) {
 }
 
 // ── Step 1 — show confirmation page ──────────────────────────────────────────
+// A token alone proves nothing: only a DELIVERED order may be received, so
+// anything else (preparing, already received/deleted, unknown) is bounced
+// with the same redirect — no existence or state oracle.
 if ($step === 1 && $error === '') {
-    // Verify order still exists before showing the confirm page
     try {
-        $stmt = get_db()->prepare('SELECT id, order_token, status FROM orders WHERE order_token = ? LIMIT 1');
+        $stmt = get_db()->prepare(
+            "SELECT id FROM orders WHERE order_token = ? AND status = 'delivered' LIMIT 1"
+        );
         $stmt->execute([$raw_token]);
         $order = $stmt->fetch();
     } catch (Exception $e) {
@@ -60,30 +65,17 @@ if ($step === 1 && $error === '') {
     // Fall through to render the confirmation page below
 }
 
-// ── Step 2 — execute deletion (blocked budget already set $error above) ──────
+// ── Step 2 — execute receipt (blocked budget already set $error above) ───────
+// The deletion itself is atomic (token + terminal state checked inside one
+// transaction under a row lock): a replayed or out-of-order request changes
+// nothing and reports a safe failure.
 if ($step === 2 && $error === '') {
     try {
-        $db   = get_db();
-        $stmt = $db->prepare('SELECT * FROM orders WHERE order_token = ? LIMIT 1');
-        $stmt->execute([$raw_token]);
-        $order = $stmt->fetch();
-
-        if (!$order) {
-            $error = t('public.index.error.not_found');
+        $deleted = order_receive_atomic($raw_token);
+        if (!$deleted) {
+            $error = t('public.receive.error.invalid_state');
         } else {
-            log_event('received', (int)$order['id'], $raw_token);
-
-            // Securely delete photo files
-            $photos = $db->prepare('SELECT filename FROM order_photos WHERE order_id = ?');
-            $photos->execute([$order['id']]);
-            foreach ($photos->fetchAll() as $ph) {
-                secure_unlink(__DIR__ . '/uploads/' . $ph['filename']);
-            }
-            $dir = __DIR__ . '/uploads/' . (int)$order['id'] . '/';
-            if (is_dir($dir) && count(glob($dir . '*')) === 0) { @rmdir($dir); }
-
-            $db->prepare('DELETE FROM orders WHERE id = ?')->execute([$order['id']]);
-            $deleted = true;
+            log_event('received', null, $raw_token);
         }
     } catch (Exception $e) {
         log_err('Receive step2: ' . $e->getMessage());

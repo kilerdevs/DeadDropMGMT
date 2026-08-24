@@ -57,7 +57,7 @@ The author provides this software **"as is," without warranty of any kind**, and
 - Passwordless first login with enrollment secrets: accounts can be created without a password — the owner receives a single-use, 24-hour enrollment code (shown exactly once, stored only hashed), and the login form asks for that code instead of a password for unclaimed usernames. Knowing just the username gets an attacker nothing; claiming burns the code (5-minute setup window, race-guarded, audited). Presetting a password at creation still works
 - Zero-config first run: on a fresh install (no accounts yet) the login page itself becomes a create-owner form — pick a username, set a password, done; no SQL or seed constants needed. The form disappears permanently once any account exists
 - Create orders with an interactive Leaflet map picker
-- Auto-generated memorable pickup passphrases (4 words + digit + symbol, ~40 bits)
+- Auto-generated memorable pickup passphrases (6 words + 4-digit number + symbol, ~64.6 bits) — shown **once** at creation, stored only as a bcrypt hash, replaceable but never recoverable
 - Extend / close / delete orders with CSRF-protected actions
 - Photo upload with automatic GD compression
 - Configurable TTL — orders auto-expire and are securely wiped
@@ -146,9 +146,9 @@ Browser ──[TLS, external]── Web server / PHP
 | SQL injection | PDO prepared statements throughout — zero string interpolation in SQL | S1–S5 | A1–A2 |
 | Password storage | bcrypt cost=12 via `password_hash()` / `password_verify()` | S5 | A4 |
 | Account takeover | TOTP 2FA (RFC 6238) — self-service per account, secret GCM-encrypted at rest. Passwordless accounts are claimed only with a single-use enrollment secret, never by username alone | S5 | A1, A2 |
-| Location data at rest | AES-256-GCM (authenticated), random nonce per record; legacy CBC rows still decrypt and re-encrypt to GCM on next edit. Key lives only in `config.php` or env (`DDMGMT_AES_KEY_HEX`), never in DB | S1, S4 | A4 |
-| Pickup password guessing | Dual budget enforced together: IP-based limiter (DB-backed, togglable) **and** a per-session failure bucket — whoever trips either is blocked; ~40-bit generated passphrases (4 words + digit + symbol) | S2 | A1 |
-| Token enumeration | 16-char alphanumeric random tokens (~75 bits) | S3 | A1 |
+| Location data at rest | AES-256-GCM (authenticated), random nonce per record; legacy CBC rows are rejected at runtime — migrate with `tools/migrate_cbc_to_gcm.php`. Key lives only in `config.php` or env (`DDMGMT_AES_KEY_HEX`), never in DB | S1, S4 | A4 |
+| Pickup password guessing | Dual budget enforced together: IP-based limiter (**fail-closed**: if the limiter DB is down, pickup and login are denied, not waved through) **and** a per-session failure bucket — whoever trips either is blocked; ≥64-bit generated passphrases (6 words + 4-digit + symbol), hash-only at rest, equalized-cost responses for unknown tokens | S2 | A1 |
+| Token enumeration | 16-char alphanumeric random tokens (~95 bits); unknown-token answers burn the same bcrypt cost and return the same body as wrong passwords when a credential was submitted; receipt requires the delivered state atomically | S3 | A1 |
 | Session fixation / theft | `session_regenerate_id(true)` on login; `httponly`, `samesite=Strict`, `secure` when HTTPS | S5 | A1, A2 |
 | CSRF | 64-byte random token in session, `hash_equals()` on every POST | S5, S7 | A2 |
 | XSS | `htmlspecialchars(..., ENT_QUOTES, 'UTF-8')` on all user-derived output; strict CSP with nonces | S5 | A1, A2 |
@@ -173,14 +173,21 @@ What remains after mitigations — stated plainly:
 - **OSM embed iframe** sends the *recipient's* IP to OpenStreetMap when viewing
   a delivered order's location — browser-side, outside app control. Zero
   third-party contact requires a self-hosted tile server.
-- **Legacy CBC rows** exist until each record is next edited (GCM fallback
-  decrypt keeps them readable). Run the migration script or edit orders once
-  to convert them eagerly.
+- **Legacy CBC rows are rejected at runtime.** Run
+  `php tools/migrate_cbc_to_gcm.php` after upgrading (dry-run first); until
+  you do, pre-GCM orders are unreadable by the app — loudly, not silently.
+- **Pickup passwords are hash-only.** Generated credentials appear exactly
+  once (creation flash message) and can be replaced in the order editor, but
+  never displayed again. `php tools/purge_pickup_password_recovery.php`
+  clears the encrypted copies older versions stored.
+- **Panic mode destroys everything, evidence included** — orders, photos,
+  event log, audit log and on-disk logs; only accounts and settings survive.
+  Partial filesystem failures are reported honestly and the wipe is re-runnable (ADR-015).
 - **Rate limiting is IP-based *plus* a per-session failure bucket**, which
   fixes both classic blind spots: strangers behind one NAT/VPN exit no longer
   lock each other out (separate session buckets), and an attacker must rotate
   IP *and* cookie per attempt. Still tunable in Settings; still no defense
-  against truly industrial distributed guessing — the ~40-bit passphrase and
+  against truly industrial distributed guessing — the ≥64-bit passphrase and
   auto-expiry carry that.
 - **Availability is best-effort**: pseudo-cron cleanup runs on page hits unless
   a real cron calls `cron/cleanup.php`; nothing protects against DDoS.
@@ -226,8 +233,8 @@ php tests/run_all.php         # runs every tests/*Test.php, exits non-zero on fa
 
 The suite never touches your real database: `tests/bootstrap.php` forces
 `DDMGMT_DB_NAME=deaddrops_test` and points the app at TCP loopback unless you
-say otherwise. Covered: AES-256-GCM roundtrip + tamper rejection + legacy CBC
-fallback (`CryptoTest`), login/2FA/session-fixation/logout (`AuthTest`),
+say otherwise. Covered: AES-256-GCM roundtrip + tamper rejection + CBC
+rejection/migration (`CryptoTest`), login/2FA/session-fixation/logout (`AuthTest`),
 CSRF tokens (`CsrfTest`), RFC 4648 base32 + RFC 6238 vectors (`TotpTest`),
 rate-limit budgets/scopes/window-expiry/kill-switch (`RateLimitTest`),
 owner-vs-courier authorization (`AuthorizationTest`) and expiry cleanup with
@@ -346,7 +353,8 @@ DeadDropMGMT/
 ├── includes/                 Blocked from web via .htaccess
 │   ├── db.php                PDO singleton
 │   ├── auth.php              Session, CSRF, rate limiting, security headers
-│   ├── crypto.php            AES-256-GCM encrypt/decrypt, bcrypt, passphrase generator
+│   ├── crypto.php            AES-256-GCM encrypt/decrypt, bcrypt, 64-bit passphrase generator
+│   ├── order_state.php       Atomic state machine: deliver / receive / delete / expiry
 │   ├── totp.php              TOTP (RFC 6238) — base32, otpauth:// URI
 │   ├── audit.php             Write-action audit logger
 │   ├── settings.php          Settings cache (one DB query per page load)
