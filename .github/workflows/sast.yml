@@ -1,0 +1,36 @@
+name: SAST
+
+# Static security analysis over the PHP codebase. CodeQL dropped PHP
+# language support (its v4 action rejects the language outright), so the
+# same job is done with Semgrep: taint/security rulesets for PHP, secrets
+# detection, and a weekly sweep so new rules catch old code.
+
+on:
+  push:
+    branches: [master, dev]
+  pull_request:
+    branches: [master, dev]
+  schedule:
+    - cron: '23 4 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  semgrep:
+    name: Semgrep (php security)
+    runs-on: ubuntu-latest
+    container:
+      # Digest-pinned: a moving tag must not change what scans this repo.
+      image: semgrep/semgrep@sha256:67319956da3dcb58baf5b322899c15458e3963e7018a86aeeb5cd224e69cb77a
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Scan
+        run: |
+          semgrep scan \
+            --config p/php \
+            --config p/security-audit \
+            --config p/secrets \
+            --error \
+            --metrics=off
