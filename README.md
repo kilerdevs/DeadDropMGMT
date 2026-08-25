@@ -175,9 +175,12 @@ What remains after mitigations — stated plainly:
 - **OSM embed iframe** sends the *recipient's* IP to OpenStreetMap when viewing
   a delivered order's location — browser-side, outside app control. Zero
   third-party contact requires a self-hosted tile server.
-- **Legacy CBC rows are rejected at runtime.** Run
-  `php tools/migrate_cbc_to_gcm.php` after upgrading (dry-run first); until
-  you do, pre-GCM orders are unreadable by the app — loudly, not silently.
+- **Legacy rows are rejected at runtime — both kinds.** Pre-GCM AES-CBC rows
+  and rows encrypted under the raw master key (pre-HKDF, ADR-016) are both
+  refused. Run `php tools/migrate_cbc_to_gcm.php` (only if pre-GCM rows may
+  exist) and then `php tools/separate_keys.php` after upgrading, dry-run
+  first; until both complete, old orders and TOTP secrets are unreadable by
+  the app — loudly, not silently.
 - **Pickup passwords are hash-only.** Generated credentials appear exactly
   once (creation flash message) and can be replaced in the order editor, but
   never displayed again. `php tools/purge_pickup_password_recovery.php`
@@ -235,15 +238,18 @@ php tests/run_all.php         # runs every tests/*Test.php, exits non-zero on fa
 
 The suite never touches your real database: `tests/bootstrap.php` forces
 `DDMGMT_DB_NAME=deaddrops_test` and points the app at TCP loopback unless you
-say otherwise. Covered: AES-256-GCM roundtrip + tamper rejection + CBC
-rejection/migration (`CryptoTest`), login/2FA/session-fixation/logout (`AuthTest`),
-CSRF tokens (`CsrfTest`), RFC 4648 base32 + RFC 6238 vectors (`TotpTest`),
-rate-limit budgets/scopes/window-expiry/kill-switch (`RateLimitTest`),
-owner-vs-courier authorization (`AuthorizationTest`) and expiry cleanup with
-photo-file shredding (`CleanupTest`), and an end-to-end public-flow suite
-(`PublicFlowTest`) driving a real HTTP server: token lookup, password
-unlock, PRG reveal, receipt confirmation, rate limiting and the per-session
-failure bucket. Runs automatically in GitHub Actions
+say otherwise. Covered: AES-256-GCM roundtrip + tamper rejection + CBC/raw-key
+rejection + HKDF key separation (`CryptoTest`), login/2FA/session-fixation/logout
+(`AuthTest`), CSRF tokens (`CsrfTest`), RFC 4648 base32 + RFC 6238 vectors
+(`TotpTest`), rate-limit budgets/scopes/window-expiry/kill-switch/concurrency
+(`RateLimitTest`), owner-vs-courier authorization (`AuthorizationTest`), the
+proxy anonymity gate (`ProxyTest`), expiry cleanup with photo-file shredding
+(`CleanupTest`), atomic state transitions under contention
+(`StateTransitionTest`), panic wipe (`PanicTest`), upload hardening
+(`UploadHardeningTest`) and an end-to-end public-flow suite (`PublicFlowTest`)
+driving a real HTTP server: token lookup, password unlock, PRG reveal, receipt
+confirmation, rate limiting and the per-session failure bucket. Runs
+automatically in GitHub Actions
 (`.github/workflows/ci.yml`, MariaDB 11 service container) across PHP
 8.2–8.4 plus MySQL 8, with smoke tests, CVE gates and SBOMs for all three Docker stacks.
 

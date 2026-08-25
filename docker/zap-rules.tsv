@@ -1,0 +1,13 @@
+# ZAP baseline rule configuration (TSV, no header) — passed via -c.
+# Actions: FAIL (default) / WARN / IGNORE / OUTOFSCOPE.
+# Every IGNORE here is a TRIAGED finding with a reason — anything new still
+# fails the build. Re-triage whenever the relevant code changes.
+10031	IGNORE	User Controllable HTML Element Attribute: heuristic fires on htmlspecialchars-escaped attribute values (verified by .semgrep taint rule + AuthTest)
+10038	IGNORE	CSP Not Set: only robots.txt/sitemap.xml static files; app pages send strict CSP with nonce
+10049	IGNORE	Non-Storable Content: no-store is intentional — pages carry decrypted locations and secrets
+10055	IGNORE	CSP fallback heuristic: default-src, object-src, base-uri and frame-ancestors are all defined
+10063	IGNORE	Permissions Policy Not Set: static robots.txt/sitemap.xml only
+10094	IGNORE	Base64 Disclosure: the per-request CSP nonce is base64 by design
+10112	IGNORE	Session Management Response Identified: informational
+90004	IGNORE	COEP: optional modern header; the OSM iframe embed requires cross-origin resources
+90005	IGNORE	Sec-Fetch-Dest: client-controlled request metadata, not an app property
