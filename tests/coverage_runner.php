@@ -88,11 +88,23 @@ if ($htmlDir = getopt('', ['html:'])['html'] ?? null) {
 
 // ── Coverage floors: an explicit answer to "did security quality regress?" ───
 // The job fails when overall includes/ coverage drops below --min-overall,
-// or when any security-critical file drops below --min-critical. Floors are
-// printed even on success so drift stays visible.
-$opts        = getopt('', ['html:', 'min-overall:', 'min-critical:']);
+// when any security-critical file drops below --min-critical, or below a
+// per-file --min-file=name:pct override. Floors are printed even on success
+// so drift stays visible. Per-file overrides exist for files whose residual
+// lines are structurally untestable in this single-process runner (e.g. the
+// DB connect-failure die()) — the override documents that decision.
+$opts        = getopt('', ['html:', 'min-overall:', 'min-critical:', 'min-file:']);
 $minOverall  = isset($opts['min-overall'])  ? (float)$opts['min-overall']  : 0.0;
 $minCritical = isset($opts['min-critical']) ? (float)$opts['min-critical'] : 0.0;
+$minFile     = [];
+foreach ((array)($opts['min-file'] ?? []) as $spec) {
+    $parts = explode(':', (string)$spec);
+    if (count($parts) !== 2 || !is_numeric($parts[1])) {
+        fwrite(STDERR, "Bad --min-file spec (want name:pct): {$spec}\n");
+        exit(1);
+    }
+    $minFile[$parts[0]] = (float)$parts[1];
+}
 
 if ($minOverall > 0 || $minCritical > 0) {
     // Files where a coverage regression is a security event, not a stats blip.
@@ -131,15 +143,20 @@ if ($minOverall > 0 || $minCritical > 0) {
         }
     }
 
-    if ($minCritical > 0) {
+    if ($minCritical > 0 || $minFile !== []) {
         echo "Floor check — security-critical files:\n";
-        foreach ($critical as $f) {
-            $pct = $perFile[$f] ?? 0.0;
-            printf("  %-20s %6.2f%% (floor %.2f%%)\n", $f, $pct, $minCritical);
-            if ($pct < $minCritical) {
+        $watched = array_unique(array_merge(
+            $minCritical > 0 ? $critical : [],
+            array_keys($minFile)
+        ));
+        foreach ($watched as $f) {
+            $floor = $minFile[$f] ?? $minCritical;
+            $pct   = $perFile[$f] ?? 0.0;
+            printf("  %-20s %6.2f%% (floor %.2f%%)\n", $f, $pct, $floor);
+            if ($pct < $floor) {
                 fwrite(STDERR, sprintf(
                     "COVERAGE FLOOR VIOLATION: %s at %.2f%% is below the %.2f%% floor.\n",
-                    $f, $pct, $minCritical
+                    $f, $pct, $floor
                 ));
                 $fail = true;
             }

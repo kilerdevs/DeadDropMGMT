@@ -246,19 +246,26 @@ rejection + HKDF key separation (`CryptoTest`), login/2FA/session-fixation/logou
 proxy anonymity gate (`ProxyTest`), expiry cleanup with photo-file shredding
 (`CleanupTest`), atomic state transitions under contention
 (`StateTransitionTest`), panic wipe (`PanicTest`), upload hardening
-(`UploadHardeningTest`) and an end-to-end public-flow suite (`PublicFlowTest`)
-driving a real HTTP server: token lookup, password unlock, PRG reveal, receipt
-confirmation, rate limiting and the per-session failure bucket. Runs
+(`UploadHardeningTest`), fail-closed branches of every guard, limiter, wipe
+and decrypt path plus the DB TLS option matrix (`FailClosedTest`) and an
+end-to-end public-flow and authorization suite over real HTTP
+(`PublicFlowTest`, `AuthorizationHttpTest`, `StateRaceTest`,
+`RateLimitConcurrencyTest`) driving a live server: token lookup, password
+unlock, PRG reveal, receipt confirmation, rate limiting, the per-session
+failure bucket, IDOR/destructive-IDOR probes and concurrent state races. Runs
 automatically in GitHub Actions
 (`.github/workflows/ci.yml`, MariaDB 11 service container) across PHP
 8.2–8.4 plus MySQL 8, with smoke tests, CVE gates and SBOMs for all three Docker stacks.
 
 **Coverage.** A separate CI job runs the suite under `pcov` and reports line
-coverage over `includes/` — the security-critical library code (crypto,
-auth, TOTP, rate limiting, logger, cleanup). The summary lands in the job
-summary; a browsable HTML report is uploaded as an artifact for 14 days.
-Locally: `composer install && php tests/coverage_runner.php` — Composer is
-dev-only tooling, the application itself never touches it.
+coverage over `includes/` - the security-critical library code (crypto,
+auth, TOTP, rate limiting, logger, cleanup). The job enforces floors: 85% on
+every security-critical file (80% for `db.php`, whose residual lines are the
+connect-failure `die()` itself) and an overall floor across `includes/` -
+any regression from the measured baseline fails the build. The summary lands
+in the job summary; a browsable HTML report is uploaded as an artifact for
+14 days. Locally: `composer install && php tests/coverage_runner.php` -
+Composer is dev-only tooling, the application itself never touches it.
 
 ---
 

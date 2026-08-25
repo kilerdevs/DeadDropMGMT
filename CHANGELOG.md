@@ -3,6 +3,24 @@
 All notable changes to DeadDropMGMT are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is semver.
 
+## [Unreleased]
+
+### Added
+- `FailClosedTest`: in-process coverage of every fail-closed branch — security
+  headers (both CSP profiles + HSTS), guard pre-exit conditions, rate-limiter
+  disabled/failure paths, session-failure buckets, wipe transaction abort,
+  order-state SQL-failure handling, crypto input rejection and the DB TLS
+  option matrix; closes the pcov blind spot where HTTP-driven auth paths were
+  invisible to the coverage floor
+- Coverage floors: 85% on each security-critical file (80% for `db.php`'s
+  residual `die()` path), 58% overall across `includes/`; per-file overrides
+  via `coverage_runner --min-file=name:pct`
+
+### Changed
+- `includes/db.php`: TLS options extracted into the pure, unit-tested
+  `db_options()` factory; connection into `db_connect()` — removes the last
+  PHPStan environment-dependent suppression
+
 ## [1.0.0] — 2026-08-24
 
 First tagged release: the security-hardened core, fully gated by CI.

@@ -15,10 +15,5 @@ parameters:
 		- config.php
 		- docker
 	treatPhpDocTypesAsCertain: false
-	ignoreErrors:
-		# DB_TLS constants come from _secret() — locally they collapse to the
-		# empty fallback, so PHPStan proves the guard "always false". In any
-		# real deployment the env var is set; the comparison is the point.
-		-
-			identifier: notIdentical.alwaysFalse
-			path: includes/db.php
+	# The TLS option matrix lives in the pure db_options() factory, so no
+	# environment-dependent "always false" suppressions are needed anymore.

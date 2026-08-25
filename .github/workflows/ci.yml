@@ -186,14 +186,15 @@ jobs:
           # tee (the last pipeline command) exits 0 — this exact masking hid a
           # coverage crash once while the job stayed green.
           set -o pipefail
-          # Floors recalibrated 2026-08-25 against the post-HKDF/2FA baseline
-          # (overall 50.78%, criticals 57-98%): the new auth paths run mostly
-          # inside the HTTP test server, which pcov cannot see. The gate still
-          # fails on ANY regression from today's numbers; the follow-up that
-          # raises them back toward 80/90 is in-process tests for the new
-          # auth paths.
+          # Floors: criticals at 85% (auth 93%, crypto 86%, order_state 92%,
+          # totp 98%, wipe 91% as measured 2026-08-25 after the FailClosed
+          # suite closed the in-process auth gap). db.php overrides to 80:
+          # its residual lines are the connect-failure die() itself, which
+          # cannot execute inside this single-process collector; that path is
+          # covered behaviourally by the smoke tests instead. The gate fails
+          # on ANY regression from these numbers.
           php tests/coverage_runner.php --html=coverage-html \
-               --min-overall=50 --min-critical=55 | tee coverage.txt
+               --min-overall=58 --min-critical=85 --min-file=db.php:80 | tee coverage.txt
           grep -oP "Lines:\s+\K[\d.]+" coverage.txt | head -1 | \
             { read pct; echo "### Line coverage: ${pct}%" >> $GITHUB_STEP_SUMMARY; } || true
 
