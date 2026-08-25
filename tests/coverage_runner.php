@@ -18,6 +18,7 @@ use SebastianBergmann\CodeCoverage\Driver\Selector;
 use SebastianBergmann\CodeCoverage\Filter;
 use SebastianBergmann\CodeCoverage\Report\Html\Html as HtmlReport;
 use SebastianBergmann\CodeCoverage\Report\Text as TextReport;
+use SebastianBergmann\CodeCoverage\Report\Thresholds;
 
 require_once dirname(__DIR__) . '/vendor/autoload.php';
 
@@ -78,7 +79,7 @@ foreach ($coverages as $cc) {
 }
 
 echo "\n" . str_repeat('=', 60) . "\n";
-echo (new TextReport(70, 95, false, false))->process($merged, false);
+echo (new TextReport(Thresholds::from(70, 95)))->process($merged);
 
 if ($htmlDir = getopt('', ['html:'])['html'] ?? null) {
     (new HtmlReport())->process($merged, $htmlDir);
