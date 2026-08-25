@@ -3,8 +3,17 @@ declare(strict_types=1);
 require_once dirname(__DIR__) . '/config.php';
 require_once dirname(__DIR__) . '/includes/db.php';
 
-function get_settings(): array {
+// Shared store behind get_settings()/set_setting(): a reference so writes can
+// keep an already-built cache coherent. Matters for any long-lived process
+// (the coverage runner runs all suites in one) — a stale cache made a suite
+// read the previous suite's values.
+function &_settings_store(): ?array {
     static $cache = null;
+    return $cache;
+}
+
+function get_settings(): array {
+    $cache = &_settings_store();
     if ($cache !== null) {
         return $cache;
     }
@@ -31,6 +40,12 @@ function set_setting(string $key, string $value): void {
          VALUES (?, ?, "")
          ON DUPLICATE KEY UPDATE value = VALUES(value)'
     )->execute([$key, $value]);
+    // Write-through: the process that wrote a value must also read it back,
+    // even when the cache was already built.
+    $cache = &_settings_store();
+    if ($cache !== null) {
+        $cache[$key] = $value;
+    }
 }
 
 // Helpers used throughout the application
