@@ -182,6 +182,10 @@ jobs:
 
       - name: Run tests with coverage
         run: |
+          # pipefail: a fatal inside the runner must fail the job even though
+          # tee (the last pipeline command) exits 0 — this exact masking hid a
+          # coverage crash once while the job stayed green.
+          set -o pipefail
           php tests/coverage_runner.php --html=coverage-html \
                --min-overall=80 --min-critical=90 | tee coverage.txt
           grep -oP "Lines:\s+\K[\d.]+" coverage.txt | head -1 | \
@@ -215,43 +219,28 @@ jobs:
       # Vulnerability scans of BOTH shipped images (the FPM image is what the
       # nginx and Caddy stacks actually run): HIGH/CRITICAL findings with a
       # fix available fail the build — bumping the base image is the fix.
-      - name: Scan Apache image (Trivy)
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+      # setup-trivy installs the LATEST Trivy binary on every run (the action
+      # itself stays SHA-pinned), so the scanner never goes stale; Dependabot
+      # bumps the pin weekly.
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
         with:
-          image-ref: deaddrop:apache
-          format: table
-          exit-code: '1'
-          ignore-unfixed: true
-          severity: HIGH,CRITICAL
-          vuln-type: os,library
+          version: latest
+          cache: true
+
+      - name: Scan Apache image (Trivy)
+        run: trivy image --exit-code 1 --ignore-unfixed --severity HIGH,CRITICAL deaddrop:apache
 
       - name: Scan FPM image (Trivy)
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
-        with:
-          image-ref: deaddrop:fpm
-          format: table
-          exit-code: '1'
-          ignore-unfixed: true
-          severity: HIGH,CRITICAL
-          vuln-type: os,library
+        run: trivy image --exit-code 1 --ignore-unfixed --severity HIGH,CRITICAL deaddrop:fpm
 
       # SBOM (CycloneDX) for both images — the inventory that makes the CVE
       # scans auditable and gives downstream deployers something to diff.
-      - name: Generate SBOMs (CycloneDX)
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
-        with:
-          image-ref: deaddrop:apache
-          format: cyclonedx
-          output: sbom-apache.cdx.json
-          scan-type: image
+      - name: Generate Apache SBOM (CycloneDX)
+        run: trivy image --format cyclonedx --output sbom-apache.cdx.json deaddrop:apache
 
       - name: Generate FPM SBOM (CycloneDX)
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
-        with:
-          image-ref: deaddrop:fpm
-          format: cyclonedx
-          output: sbom-fpm.cdx.json
-          scan-type: image
+        run: trivy image --format cyclonedx --output sbom-fpm.cdx.json deaddrop:fpm
 
       - name: Upload SBOMs
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0

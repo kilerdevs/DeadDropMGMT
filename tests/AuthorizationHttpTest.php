@@ -17,8 +17,16 @@ $cmd  = escapeshellarg(PHP_BINARY)
       . " -S 127.0.0.1:$port -t " . escapeshellarg($root);
 $proc = proc_open($cmd, [['pipe', 'r'], ['file', 'NUL', 'w'], ['file', 'NUL', 'w']], $p);
 register_shutdown_function(function () use ($proc): void {
+    // Portable teardown: taskkill is Windows-only — on Linux an orphaned
+    // php -S keeps the output pipe open and hangs the whole job.
     $st = proc_get_status($proc);
-    if (!empty($st['running'])) { exec('taskkill /F /T /PID ' . (int)$st['pid'] . ' >NUL 2>&1'); }
+    if (!empty($st['running'])) {
+        if (DIRECTORY_SEPARATOR === '\\') {
+            exec('taskkill /F /T /PID ' . (int)$st['pid'] . ' >NUL 2>&1');
+        } else {
+            proc_terminate($proc);
+        }
+    }
     proc_close($proc);
 });
 $B = "http://127.0.0.1:$port";

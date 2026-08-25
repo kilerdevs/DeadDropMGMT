@@ -25,7 +25,10 @@ define('T_INPROCESS', 1);
 require_once __DIR__ . '/bootstrap.php';
 
 $filter = new Filter();
-$filter->includeDirectory(dirname(__DIR__) . '/includes');
+// php-code-coverage 11.0.12 removed includeDirectory() — enumerate the
+// library files explicitly. composer.json pins this exact version so the
+// API cannot drift under us again (a silent minor bump broke this once).
+$filter->includeFiles(glob(dirname(__DIR__) . '/includes/*.php') ?: []);
 
 $makeCoverage = static fn(): CodeCoverage => new CodeCoverage(
     (new Selector())->forLineCoverage($filter),
