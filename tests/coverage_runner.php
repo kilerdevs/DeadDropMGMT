@@ -16,7 +16,7 @@ if (!file_exists(dirname(__DIR__) . '/vendor/autoload.php')) {
 use SebastianBergmann\CodeCoverage\CodeCoverage;
 use SebastianBergmann\CodeCoverage\Driver\Selector;
 use SebastianBergmann\CodeCoverage\Filter;
-use SebastianBergmann\CodeCoverage\Report\Html\Html as HtmlReport;
+use SebastianBergmann\CodeCoverage\Report\Html\Facade as HtmlReport;
 use SebastianBergmann\CodeCoverage\Report\Text as TextReport;
 use SebastianBergmann\CodeCoverage\Report\Thresholds;
 
@@ -102,7 +102,7 @@ if ($minOverall > 0 || $minCritical > 0) {
     $sumExe  = 0;
     $sumRun  = 0;
     $walk = static function ($node) use (&$walk, &$perFile, &$sumExe, &$sumRun): void {
-        foreach ($node->filesAndDirectories() as $child) {
+        foreach ($node->children() as $child) {
             if ($child instanceof \SebastianBergmann\CodeCoverage\Node\Directory) {
                 $walk($child);
                 continue;
