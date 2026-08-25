@@ -14,9 +14,10 @@ require_once __DIR__ . '/bootstrap.php';
 // outcome deterministic regardless of interleaving.
 
 $db    = get_db();
-$probe = static function (string $mode, string $arg): array {
+$devnull = PHP_OS_FAMILY === 'Windows' ? 'NUL' : '/dev/null';
+$probe = static function (string $mode, string $arg) use ($devnull): array {
     $cmd = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(__DIR__ . '/_st_race.php')
-         . ' ' . escapeshellarg($mode) . ' ' . escapeshellarg($arg) . ' 2>NUL';
+         . ' ' . escapeshellarg($mode) . ' ' . escapeshellarg($arg) . " 2>$devnull";
     $out = shell_exec($cmd);
     return json_decode(trim((string)$out), true) ?: [];
 };

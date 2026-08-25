@@ -40,8 +40,10 @@ sort($files);
 
 $totalPass = $totalFail = 0;
 $coverages = [];
+$suiteOutput = [];
 
 foreach ($files as $file) {
+    ob_start();
     echo "=== " . basename($file) . " ===\n";
     T::$pass = T::$fail = 0;
     T::$messages = [];
@@ -56,10 +58,17 @@ foreach ($files as $file) {
         }
     }
     $cc->stop();
+    // Buffer and hold EVERY suite output: once anything flushes, PHP considers
+    // headers sent and the next suite's session_start() fatals (15 suites of
+    // banners eventually overflow the default output buffer). Everything is
+    // printed after the last suite, when no session will start again.
+    $suiteOutput[] = ob_get_clean();
     $totalPass += T::$pass;
     $totalFail += T::$fail;
     $coverages[] = $cc;
 }
+
+echo implode('', $suiteOutput);
 
 // Merge per-suite collections into one report
 /** @var CodeCoverage $merged */

@@ -55,11 +55,13 @@ $csrfOf = static function (string $b): string {
     return $m[1] ?? '';
 };
 
-// Wait for the server
+// Wait for the server — ALWAYS sleep between probes: a tight loop burns all
+// attempts before php -S even binds on a cold CI runner.
 $up = false;
-for ($i = 0; $i < 30; $i++) {
+for ($i = 0; $i < 50; $i++) {
     try { [$st] = _az('GET', "$B/healthz.php", null, ''); if ($st === 200) { $up = true; break; } }
-    catch (Throwable) { usleep(200000); }
+    catch (Throwable) { }
+    usleep(200000);
 }
 T::ok('server booted', $up);
 if (!$up) { exit(T::done()); }
