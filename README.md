@@ -149,7 +149,7 @@ Browser ──[TLS, external]── Web server / PHP
 | Account takeover | TOTP 2FA (RFC 6238) — self-service per account, secret GCM-encrypted at rest. Passwordless accounts are claimed only with a single-use enrollment secret, never by username alone | S5 | A1, A2 |
 | Location data at rest | AES-256-GCM (authenticated), random nonce per record; keys are HKDF purpose-subkeys of the master key — locations, TOTP secrets, reveal payloads and the log chain each use their own (ADR-016). Legacy CBC rows and raw-master rows are rejected at runtime — migrate with `tools/migrate_cbc_to_gcm.php` then `tools/separate_keys.php`. Master key lives only in `config.php` or env (`DDMGMT_AES_KEY_HEX`), never in DB | S1, S4 | A4 |
 | Pickup password guessing | Dual budget enforced together: IP-based limiter (**fail-closed**: if the limiter DB is down, pickup and login are denied, not waved through) **and** a per-session failure bucket — whoever trips either is blocked; ≥64-bit generated passphrases (6 words + 4-digit + symbol), hash-only at rest, equalized-cost responses for unknown tokens | S2 | A1 |
-| Rate-limit bypass via spoofed `X-Forwarded-For` | Proxy headers are honored only when `DDMGMT_TRUST_PROXY=1` (opt-in for reverse-proxy/CDN installs); header values are validated as literal IPs and `REMOTE_ADDR` is the default source of truth | S2 | A1 |
+| Rate-limit bypass via spoofed `X-Forwarded-For` | Proxy headers are honored only when `DDMGMT_TRUST_PROXY=1` (opt-in for reverse-proxy/CDN installs) **and** the direct peer matches `DDMGMT_TRUSTED_PROXIES` (default: loopback + RFC1918); header values are validated as literal IPs and `REMOTE_ADDR` is the default source of truth | S2 | A1 |
 | Token enumeration | 16-char alphanumeric random tokens (~95 bits); unknown-token answers burn the same bcrypt cost and return the same body as wrong passwords when a credential was submitted; receipt requires the delivered state atomically | S3 | A1 |
 | Session fixation / theft | `session_regenerate_id(true)` on login; `httponly`, `samesite=Strict`, `secure` when HTTPS | S5 | A1, A2 |
 | CSRF | 64-byte random token in session, `hash_equals()` on every POST | S5, S7 | A2 |
@@ -428,6 +428,16 @@ the audit log see the real client address from `CF-Connecting-IP` /
 `X-Forwarded-For` / `X-Real-IP`. Without that flag the headers are ignored —
 otherwise any client could spoof its IP and sidestep the limiter. Only enable
 it when the proxy overwrites (not appends to) these headers.
+
+The flag alone is not enough: headers are honored only when the **direct
+connection peer** (`REMOTE_ADDR`) matches `DDMGMT_TRUSTED_PROXIES` — a
+comma-separated list of IPs or CIDR ranges. Unset, it defaults to loopback and
+RFC1918 space (`127.0.0.0/8`, `::1`, `10/8`, `172.16/12`, `192.168/16`), which
+fits same-host nginx/Apache and private docker networks. If your proxy connects
+from public addresses, list them explicitly. A request whose peer is not on the
+list gets its proxy headers ignored (and logs one warning) even with the flag
+set — so a stale flag on an app that is directly reachable cannot be turned
+into free IP rotation by whoever finds it.
 
 #### Rotating the AES key
 

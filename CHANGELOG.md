@@ -6,6 +6,13 @@ All notable changes to DeadDropMGMT are documented here. The format follows
 ## [Unreleased]
 
 ### Security
+- Proxy-header trust is now bound to the connection peer: with
+  `DDMGMT_TRUST_PROXY=1`, `CF-Connecting-IP` / `X-Forwarded-For` /
+  `X-Real-IP` are honored only when `REMOTE_ADDR` matches
+  `DDMGMT_TRUSTED_PROXIES` (default: loopback + RFC1918; explicit IP/CIDR
+  list otherwise). Previously a single flipped env flag on an app reachable
+  outside its proxy let any client rotate its rate-limit identity and poison
+  the audit log at will
 - Receipt confirmation is now bound to a verified pickup-password unlock:
   a correct password arms a single-use, AES-sealed receipt capability bound
   to that one token (600 s TTL); `receive.php` step 2 consumes it before any

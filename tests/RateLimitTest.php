@@ -64,21 +64,46 @@ T::ok('re-enabled limiter sees existing count', ($s['count'] ?? -1) === 2);
 set_setting('rate_limit_enabled', '1');
 
 // Client IP resolution (config.php): proxy headers are ignored unless the
-// deployment opts in via DDMGMT_TRUST_PROXY=1 — a client must never be able
-// to spoof its way past the limiter by default.
+// deployment opts in via DDMGMT_TRUST_PROXY=1 AND the direct peer is a
+// trusted proxy. A spoofable header from an internet peer must never rotate
+// the limiter's idea of the client — flag or no flag.
 $_SERVER['HTTP_CF_CONNECTING_IP'] = '203.0.113.1';
 $_SERVER['HTTP_X_FORWARDED_FOR']  = '203.0.113.2';
 T::eq('proxy headers ignored without DDMGMT_TRUST_PROXY', $ip, get_client_ip());
 putenv('DDMGMT_TRUST_PROXY=1');
-T::eq('CF header wins when trusted', '203.0.113.1', get_client_ip());
+T::eq('public peer: headers ignored despite trust flag', $ip, get_client_ip());
+putenv('DDMGMT_TRUSTED_PROXIES=' . $ip);
+T::eq('explicitly listed peer: CF header wins', '203.0.113.1', get_client_ip());
 unset($_SERVER['HTTP_CF_CONNECTING_IP']);
 T::eq('XFF first entry wins next', '203.0.113.2', get_client_ip());
+putenv('DDMGMT_TRUSTED_PROXIES');
+T::eq('default list excludes public peer', $ip, get_client_ip());
 unset($_SERVER['HTTP_X_FORWARDED_FOR']);
-T::eq('REMOTE_ADDR is final fallback', $ip, get_client_ip());
-$_SERVER['HTTP_X_FORWARDED_FOR'] = 'not-an-ip, 203.0.113.9';
-T::eq('invalid header skipped, REMOTE_ADDR used', $ip, get_client_ip());
+
+$_SERVER['REMOTE_ADDR'] = '127.0.0.1';
+$_SERVER['HTTP_X_FORWARDED_FOR'] = '203.0.113.2';
+T::eq('loopback peer honored by default list', '203.0.113.2', get_client_ip());
 unset($_SERVER['HTTP_X_FORWARDED_FOR']);
+T::eq('REMOTE_ADDR fallback', '127.0.0.1', get_client_ip());
+$_SERVER['REMOTE_ADDR'] = '192.168.55.3';
+$_SERVER['HTTP_X_REAL_IP'] = '198.51.100.9';
+T::eq('RFC1918 peer: X-Real-IP honored', '198.51.100.9', get_client_ip());
+unset($_SERVER['HTTP_X_REAL_IP']);
+$_SERVER['REMOTE_ADDR'] = '::1';
+$_SERVER['HTTP_CF_CONNECTING_IP'] = 'not-an-ip';
+T::eq('invalid header skipped, v6 loopback used', '::1', get_client_ip());
+$_SERVER['HTTP_CF_CONNECTING_IP'] = '2001:db8::7';
+T::eq('v6 loopback peer: header honored', '2001:db8::7', get_client_ip());
+unset($_SERVER['HTTP_CF_CONNECTING_IP']);
 putenv('DDMGMT_TRUST_PROXY');
+
+// CIDR matcher backing the trusted-proxy decision
+T::ok('cidr: /24 range hit',            _ip_in_cidr('10.1.2.3', '10.1.2.0/24'));
+T::ok('cidr: /24 range miss',          !_ip_in_cidr('10.1.3.3', '10.1.2.0/24'));
+T::ok('cidr: bare address exact match', _ip_in_cidr('192.168.0.9', '192.168.0.9'));
+T::ok('cidr: family mismatch refused', !_ip_in_cidr('::1', '127.0.0.0/8'));
+T::ok('cidr: mapped v4 normalized',     _ip_in_cidr('::ffff:10.1.2.3', '10.1.2.0/24'));
+$_SERVER['REMOTE_ADDR'] = $ip;
 
 // Fail-closed: if the limiter subsystem breaks (table gone), pickup/login
 // must be DENIED, never silently unblocked (child process = fresh settings
