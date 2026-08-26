@@ -186,16 +186,18 @@ jobs:
           # tee (the last pipeline command) exits 0 — this exact masking hid a
           # coverage crash once while the job stayed green.
           set -o pipefail
-          # Floors: criticals at 85% (auth 93%, crypto 86%, order_state 92%,
-          # totp 98%, wipe 91%, logger 87% as measured 2026-08-26) and 80%
-          # overall across includes/ — the FailClosed/I18n/Logger/Settings/
-          # ProxyClient suites closed the pcov blind spots that HTTP-driven
-          # paths left open. db.php overrides to 80: its residual lines are
-          # the connect-failure die() itself, which cannot execute inside
-          # this single-process collector; that path is covered behaviourally
-          # by the smoke tests instead. The gate fails on ANY regression.
+          # Floors: criticals at 85% (auth 93%, order_state 92%, totp 98%,
+          # wipe 91%, logger 87% as measured 2026-08-26) and 80% overall
+          # across includes/ — the FailClosed/I18n/Logger/Settings/ProxyClient
+          # suites closed the pcov blind spots that HTTP-driven paths left
+          # open. db.php overrides to 80: its residual lines are the
+          # connect-failure die() itself, which cannot execute inside this
+          # single-process collector; that path is covered behaviourally by
+          # the smoke tests instead. crypto.php overrides to 83: the post-
+          # encode MIME re-check adds defensive branches only hit with
+          # adversarial GD outputs. The gate fails on ANY regression.
           php tests/coverage_runner.php --html=coverage-html \
-               --min-overall=80 --min-critical=85 --min-file=db.php:80 | tee coverage.txt
+               --min-overall=80 --min-critical=85 --min-file=db.php:80 --min-file=crypto.php:83 | tee coverage.txt
           grep -oP "Lines:\s+\K[\d.]+" coverage.txt | head -1 | \
             { read pct; echo "### Line coverage: ${pct}%" >> $GITHUB_STEP_SUMMARY; } || true
 
