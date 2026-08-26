@@ -50,9 +50,11 @@ if (!$up) { exit(T::done()); }
 $db   = get_db();
 $tokD  = 'PFTOKENDELIVER01';
 $tokD2 = 'PFTOKENDELIVER02';
+$tokD3 = 'PFTOKENDELIVER03';
+$tokD4 = 'PFTOKENDELIVER04';
 $tokP  = 'PFTOKENPREPARIN2';
 $pass  = 'RevealPass1!';
-foreach ([$tokD, $tokD2, $tokP] as $t) { $db->prepare('DELETE FROM orders WHERE order_token = ?')->execute([$t]); }
+foreach ([$tokD, $tokD2, $tokD3, $tokD4, $tokP] as $t) { $db->prepare('DELETE FROM orders WHERE order_token = ?')->execute([$t]); }
 $enc = encrypt_location_data([
     'text'         => 'PUBLICFLOWTEST skrzynka pod trzecią ławą',
     'lat'          => 52.2297,
@@ -66,6 +68,8 @@ $ins  = $db->prepare(
 );
 $ins->execute([$tokD, $hash, $enc['ciphertext'], $enc['iv'], 'delivered', date('Y-m-d H:i:s'), 'notka dla odbiorcy']);
 $ins->execute([$tokD2, $hash, $enc['ciphertext'], $enc['iv'], 'delivered', date('Y-m-d H:i:s'), '']);
+$ins->execute([$tokD3, $hash, $enc['ciphertext'], $enc['iv'], 'delivered', date('Y-m-d H:i:s'), '']);
+$ins->execute([$tokD4, $hash, $enc['ciphertext'], $enc['iv'], 'delivered', date('Y-m-d H:i:s'), '']);
 $ins->execute([$tokP, $hash, $enc['ciphertext'], $enc['iv'], 'preparing', null, '']);
 
 set_setting('rate_limit_max', '3');
@@ -163,6 +167,62 @@ T::ok('replayed receipt shows a safe error', str_contains((string)$bodyReplay, '
 T::ok('replayed receipt does not resurrect the order',
     !$db->query("SELECT 1 FROM orders WHERE order_token = '$token'")->fetch());
 
+// 9d. A session that NEVER authenticated gets no CSRF token for the
+// destructive flow at all — nothing will arm or accept its confirmation.
+// (With a valid CSRF but no unlock the gate itself is proven in 9e.)
+set_setting('rate_limit_max', '50');
+$db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
+[, $bodyNoUnlock, $cookieNoUnlock] = _pf_get("http://127.0.0.1:$port/");
+T::ok('never-unlocked session is not handed a destructive-flow CSRF token',
+    preg_match('/name="csrf_token"/', $bodyNoUnlock) !== 1);
+[$stNoUnlock] = _pf_post(
+    "http://127.0.0.1:$port/receive.php",
+    ['csrf_token' => '', 'order_token' => $tokD3, 'step' => '2'],
+    $cookieNoUnlock
+);
+T::eq('token-only destruction attempt bounced (redirect)', 302, $stNoUnlock);
+T::ok('order survives token-only deletion attempt',
+    (bool)$db->query("SELECT 1 FROM orders WHERE order_token = '$tokD3'")->fetch());
+
+// 9e. THE CORE INVARIANT: even a fully valid session (own CSRF, completed
+// unlock of tokD3) may only destroy the token it unlocked. The receipt
+// capability is sealed, bound to that one token, and single-use.
+set_setting('rate_limit_max', '50');
+$db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
+$cookieE = '';
+_pf_post("http://127.0.0.1:$port/", ['order_token' => $tokD3], $cookieE);
+[$stE, , $cookieE] = _pf_post("http://127.0.0.1:$port/", ['order_token' => $tokD3, 'pickup_password' => $pass], $cookieE);
+T::eq('unlock arms the receipt capability (redirect)', 302, $stE);
+[, $bodyE, $cookieE] = _pf_get("http://127.0.0.1:$port/", $cookieE);
+preg_match('/name="csrf_token"\s*value="([0-9a-f]{64})"/', $bodyE, $mE);
+[, $bodyCross] = _pf_post(
+    "http://127.0.0.1:$port/receive.php",
+    ['csrf_token' => $mE[1] ?? '', 'order_token' => $tokD4, 'step' => '2'],
+    $cookieE
+);
+T::ok('capability for another token is rejected (cross-token attack)',
+    str_contains((string)$bodyCross, 'class="alert"'));
+T::ok('cross-token target survives',
+    (bool)$db->query("SELECT 1 FROM orders WHERE order_token = '$tokD4'")->fetch());
+// The denied attempt still consumed the single-use capability:
+T::ok('order intact after denied cross-token attempt',
+    (bool)$db->query("SELECT 1 FROM orders WHERE order_token = '$tokD3'")->fetch());
+
+// Fresh unlock re-arms the capability: own-token receipt now completes.
+_pf_post("http://127.0.0.1:$port/", ['order_token' => $tokD3], $cookieE);
+[, , $cookieE] = _pf_post("http://127.0.0.1:$port/", ['order_token' => $tokD3, 'pickup_password' => $pass], $cookieE);
+[, $bodyOwn, $cookieE] = _pf_get("http://127.0.0.1:$port/", $cookieE);
+preg_match('/name="csrf_token"\s*value="([0-9a-f]{64})"/', $bodyOwn, $mO);
+[, $bodyOwn2] = _pf_post(
+    "http://127.0.0.1:$port/receive.php",
+    ['csrf_token' => $mO[1] ?? '', 'order_token' => $tokD3, 'step' => '2'],
+    $cookieE
+);
+T::ok('own-token receipt completes after re-unlock',
+    str_contains((string)$bodyOwn2, 'status-badge delivered'));
+T::ok('unlocked order deleted by its own capability',
+    !$db->query("SELECT 1 FROM orders WHERE order_token = '$tokD3'")->fetch());
+
 // 9c. A PREPARING order cannot even reach the confirmation page
 [$stPrep] = _pf_post(
     "http://127.0.0.1:$port/receive.php",
@@ -230,7 +290,7 @@ T::ok('order survives blocked deletion attempt',
     (bool)$db->query("SELECT 1 FROM orders WHERE order_token = '$tokD2'")->fetch());
 
 // Cleanup
-$db->prepare('DELETE FROM orders WHERE order_token IN (?, ?, ?)')->execute([$tokD, $tokD2, $tokP]);
+$db->prepare('DELETE FROM orders WHERE order_token IN (?, ?, ?, ?, ?)')->execute([$tokD, $tokD2, $tokD3, $tokD4, $tokP]);
 $db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
 
 exit(T::done());

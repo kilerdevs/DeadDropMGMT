@@ -172,9 +172,12 @@ function osm_fetch(string $url): string|false {
 }
 
 // Shared storage for the staged badge info of the current request.
+// func_num_args() distinguishes an explicit osm_last_via_stage(null)
+// ("consume") from a parameterless read — the previous !== null check made
+// the consume call a silent no-op, so stale badge info survived the flush.
 function osm_last_via_stage(?array $info = null): ?array {
     static $staged = null;
-    if ($info !== null) {
+    if (func_num_args() > 0) {
         $staged = $info;
     }
     return $staged;

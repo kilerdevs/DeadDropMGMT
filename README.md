@@ -259,13 +259,14 @@ automatically in GitHub Actions
 
 **Coverage.** A separate CI job runs the suite under `pcov` and reports line
 coverage over `includes/` - the security-critical library code (crypto,
-auth, TOTP, rate limiting, logger, cleanup). The job enforces floors: 85% on
-every security-critical file (80% for `db.php`, whose residual lines are the
-connect-failure `die()` itself) and an overall floor across `includes/` -
-any regression from the measured baseline fails the build. The summary lands
-in the job summary; a browsable HTML report is uploaded as an artifact for
-14 days. Locally: `composer install && php tests/coverage_runner.php` -
-Composer is dev-only tooling, the application itself never touches it.
+auth, TOTP, rate limiting, logger, proxy client, i18n, settings). The job
+enforces floors: 85% on every security-critical file (80% for `db.php`,
+whose residual lines are the connect-failure `die()` itself) and 80%
+overall across `includes/` - any regression from the measured baseline
+fails the build. The summary lands in the job summary; a browsable HTML
+report is uploaded as an artifact for 14 days. Locally:
+`composer install && php tests/coverage_runner.php` - Composer is dev-only
+tooling, the application itself never touches it.
 
 ---
 

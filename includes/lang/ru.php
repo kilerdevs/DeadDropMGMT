@@ -69,6 +69,7 @@ return [
     'public.receive.rate_limited'  => 'Слишком много попыток — подождите {min} мин.',
     'public.receive.error.server'  => 'Ошибка сервера. Попробуйте снова.',
 
+    'public.receive.error.locked' => 'Подтверждение получения истекло. Разблокируйте заказ паролем ещё раз, затем подтвердите.',
     'public.receive.error.invalid_state' => 'Этот заказ невозможно получить — он не готов к получению или уже получен.',
     'public.receive.title.done'    => 'Получено',
     'public.receive.title.confirm' => 'Подтверждение получения',

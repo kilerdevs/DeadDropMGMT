@@ -69,6 +69,7 @@ return [
     'public.receive.rate_limited'  => 'Too many attempts — wait {min} min.',
     'public.receive.error.server'  => 'Server error. Please try again.',
 
+    'public.receive.error.locked' => 'Receipt confirmation expired. Unlock the order with the pickup password again, then confirm.',
     'public.receive.error.invalid_state' => 'This order cannot be received — it is not awaiting pickup or was already received.',
     'public.receive.title.done'    => 'Received',
     'public.receive.title.confirm' => 'Confirm pickup',

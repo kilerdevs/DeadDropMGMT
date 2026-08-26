@@ -69,6 +69,7 @@ return [
     'public.receive.rate_limited'  => 'Забагато спроб — зачекайте {min} хв.',
     'public.receive.error.server'  => 'Помилка сервера. Спробуйте ще раз.',
 
+    'public.receive.error.locked' => 'Підтвердження отримання застаріло. Розблокуйте замовлення паролем ще раз, а потім підтвердіть.',
     'public.receive.error.invalid_state' => 'Це замовлення неможливо отримати — воно не готове до отримання або вже отримане.',
     'public.receive.title.done'    => 'Отримано',
     'public.receive.title.confirm' => 'Підтвердження отримання',

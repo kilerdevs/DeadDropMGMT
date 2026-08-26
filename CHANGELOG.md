@@ -5,16 +5,34 @@ All notable changes to DeadDropMGMT are documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+- Receipt confirmation is now bound to a verified pickup-password unlock:
+  a correct password arms a single-use, AES-sealed receipt capability bound
+  to that one token (600 s TTL); `receive.php` step 2 consumes it before any
+  deletion. Possession of the order token alone — even with a valid CSRF
+  token — can no longer destroy a delivered order. Cross-token use of a
+  capability is rejected and still consumes it
+- Fixed the tamper-evident log chain: `_log_last_hash()` read the file
+  position right after `fopen('c+')` (always 0), so every entry anchored to
+  the genesis hash and each write OVERWROTE the log from byte zero — history
+  and tamper evidence were both lost. The chain now genuinely links and
+  detects modification, truncation and forgery
+- Fixed `osm_last_via_stage(null)` being a silent no-op (`!== null` guard),
+  so staged proxy-badge info now actually clears on flush
+
+### Changed
+- `index.php` spends its rate-limit budget through one atomic check-and-
+  consume (`rl_hit`) up front; non-failure outcomes refund the spend, so the
+  budget keeps counting failed guesses while every decision stays race-free
+
 ### Added
-- `FailClosedTest`: in-process coverage of every fail-closed branch — security
-  headers (both CSP profiles + HSTS), guard pre-exit conditions, rate-limiter
-  disabled/failure paths, session-failure buckets, wipe transaction abort,
-  order-state SQL-failure handling, crypto input rejection and the DB TLS
-  option matrix; closes the pcov blind spot where HTTP-driven auth paths were
-  invisible to the coverage floor
-- Coverage floors: 85% on each security-critical file (80% for `db.php`'s
-  residual `die()` path), 58% overall across `includes/`; per-file overrides
-  via `coverage_runner --min-file=name:pct`
+- Five suites: `FailClosedTest` (fail-closed branches of guards, limiter,
+  wipe, state machine, crypto, DB options), `I18nTest`, `LoggerTest`
+  (chain integrity incl. forgery/truncation/legacy keys, audit, event log),
+  `SettingsTest`, `ProxyClientTest` (outbound client vs local stub server);
+  coverage floors raised to 85% per critical file and **80% overall**
+- Coverage floors accept per-file overrides via
+  `coverage_runner --min-file=name:pct`
 
 ### Changed
 - `includes/db.php`: TLS options extracted into the pure, unit-tested

@@ -69,6 +69,7 @@ return [
     'public.receive.rate_limited'  => 'Troppi tentativi — attendi {min} min.',
     'public.receive.error.server'  => 'Errore del server. Riprova.',
 
+    'public.receive.error.locked' => 'La conferma di ricezione è scaduta. Sblocca di nuovo l\'ordine con la password e poi conferma.',
     'public.receive.error.invalid_state' => 'Quest\'ordine non può essere ritirato: non è pronto per il ritiro o è già stato ritirato.',
     'public.receive.title.done'    => 'Ricevuto',
     'public.receive.title.confirm' => 'Conferma ritiro',
