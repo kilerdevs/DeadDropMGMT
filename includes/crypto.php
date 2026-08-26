@@ -286,7 +286,28 @@ function save_uploaded_photo(array $file_entry, int $order_id, int $max_bytes = 
         return false;
     }
 
-    return $order_id . '/' . $filename;
+    // Re-sniff what actually landed on disk. GD re-encodes everything, but
+    // malformed input has historically produced surprising output — verify
+    // the artifact is still a member of the allowed image map before handing
+    // out its path.
+    $finfo = new finfo(FILEINFO_MIME_TYPE);
+    $out_mime = $finfo->file($dest);
+    if ($out_mime === false || !isset($allowed_mime[$out_mime])) {
+        @unlink($dest);
+        return false;
+    }
+    // If GD rendered into a different format than sniffed on input, rename
+    // so the extension never lies about the bytes inside.
+    if ($out_mime !== $mime) {
+        $renamed = $dir . bin2hex(random_bytes(14)) . '.' . $allowed_mime[$out_mime];
+        if (!@rename($dest, $renamed)) {
+            @unlink($dest);
+            return false;
+        }
+        $dest = $renamed;
+    }
+
+    return $order_id . '/' . basename($dest);
 }
 
 function _compress_image(string $src_path, string $dest_path, string $mime, int $max_bytes): bool {

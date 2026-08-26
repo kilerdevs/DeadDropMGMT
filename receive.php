@@ -17,7 +17,19 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     exit;
 }
 
-if (!verify_csrf($_POST['csrf_token'] ?? '')) {
+// Token enumeration is limited on every public surface, not just the
+// destructive one: the confirmation probe burns budget like anything else.
+// rl_hit is one atomic state transition — spend + verdict — so concurrent
+// requests can never both slip through on a stale count. It runs BEFORE the
+// CSRF check deliberately: a flood of forged requests must drain its own
+// budget (self-throttling), and an already-blocked visitor gets the cooldown
+// card instead of being waved to a redirect that leaks nothing anyway.
+$rl = rl_hit('public');
+$error = $rl['blocked']
+    ? t('public.receive.rate_limited', ['min' => (int)ceil($rl['remaining'] / 60)])
+    : '';
+
+if ($error === '' && !verify_csrf($_POST['csrf_token'] ?? '')) {
     header('Location: /');
     exit;
 }
@@ -25,17 +37,7 @@ if (!verify_csrf($_POST['csrf_token'] ?? '')) {
 $raw_token = trim($_POST['order_token'] ?? '');
 $step      = (int)($_POST['step'] ?? 0);
 $deleted   = false;
-$error     = '';
 $csrf      = generate_csrf();
-
-// Token enumeration is limited on every public surface, not just the
-// destructive one: the confirmation probe burns budget like anything else.
-// rl_hit is one atomic state transition — spend + verdict — so concurrent
-// requests can never both slip through on a stale count.
-$rl = rl_hit('public');
-if ($rl['blocked']) {
-    $error = t('public.receive.rate_limited', ['min' => (int)ceil($rl['remaining'] / 60)]);
-}
 
 if (strlen($raw_token) !== 16 || !ctype_alnum($raw_token)) {
     header('Location: /');

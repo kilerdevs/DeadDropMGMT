@@ -192,9 +192,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if ($is_ajax) {
-        header('Content-Type: application/json');
-        echo json_encode(['ok' => empty($error), 'msg' => $error ?: $success]);
-        exit;
+        json_out(['ok' => empty($error), 'msg' => $error ?: $success]);
     }
 }
 
@@ -498,6 +496,7 @@ $init_zoom = $has_pin ? 17 : 12;
         .then(function (r) { return r.json(); })
         .then(function (d) {
             saving = false;
+            if (d.csrf) csrf = d.csrf; // token rotated server-side on each save
             if (d.ok) {
                 showPopup(<?= json_encode('✓ ' . t('admin.edit.js.saved')) ?>, false);
                 setTimeout(function () { location.reload(); }, 600);

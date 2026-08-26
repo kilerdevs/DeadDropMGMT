@@ -68,20 +68,25 @@ T::ok('seconds-only render', str_contains(format_countdown(42), '42s'));
 // A stale stamp triggers exactly one full pass per process...
 set_setting('last_cleanup', (string)(time() - 7200));
 $before = (int)$db->query("SELECT value FROM settings WHERE key_name = 'last_cleanup'")->fetchColumn();
-run_cleanup_if_due();
+run_cleanup_if_due(1.0);
 $after = (int)$db->query("SELECT value FROM settings WHERE key_name = 'last_cleanup'")->fetchColumn();
 T::ok('due cleanup stamps fresh time and sweeps', $after > $before);
 
 // ...and the process-level guard makes every later visit a no-op.
-run_cleanup_if_due();
+run_cleanup_if_due(1.0);
 $again = (int)$db->query("SELECT value FROM settings WHERE key_name = 'last_cleanup'")->fetchColumn();
 T::ok('cleanup runs at most once per process', $again === $after);
 
 // Even a broken store cannot turn a page visit into a crash.
 with_table_hidden_st('settings', function (): void {
-    run_cleanup_if_due(); // static guard exits long before any DB touch
+    run_cleanup_if_due(1.0); // static guard exits long before any DB touch
     T::ok('throttled cleanup ignores unreadable settings', true);
 });
+
+// The probability gate fires BEFORE the settings read: chance 0 must skip
+// an otherwise-due sweep entirely (child process = fresh static guard).
+$skip = shell_exec(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(__DIR__ . '/_cleanup_chance.php'));
+T::eq('probability gate skips the DB read', '1', trim((string)$skip));
 
 // ...and do_cleanup itself answers with a count, never throws.
 T::ok('do_cleanup returns a count', is_int(do_cleanup()));

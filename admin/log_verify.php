@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 require_once dirname(__DIR__) . '/config.php';
+require_once dirname(__DIR__) . '/includes/db.php';
 require_once dirname(__DIR__) . '/includes/auth.php';
 require_once dirname(__DIR__) . '/includes/settings.php';
 
@@ -13,7 +14,9 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
     exit('{"valid":false,"checked":0,"broken_line":null,"reason":"method"}');
 }
 
-if (!verify_csrf($_POST['csrf_token'] ?? '')) {
+// Read-only probe: verification succeeds but the session token is NOT
+// consumed — the owner may re-run the check from the same rendered page.
+if (!verify_csrf($_POST['csrf_token'] ?? '', rotate: false)) {
     http_response_code(403);
     header('Content-Type: application/json; charset=utf-8');
     exit('{"valid":false,"checked":0,"broken_line":null,"reason":"csrf"}');

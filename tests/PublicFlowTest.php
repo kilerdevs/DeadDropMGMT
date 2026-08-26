@@ -155,15 +155,18 @@ T::ok('order deleted from DB',
     !$db->query("SELECT 1 FROM orders WHERE order_token = '$token'")->fetch());
 
 // 9b. Replaying the receipt is a safe failure — nothing resurrects, no oracle
-// (fresh budget first so the block below comes from STATE, not the limiter)
+// (fresh budget first so the block below comes from STATE, not the limiter).
+// CSRF rotation retires the spent token, so the replay is bounced to / —
+// equally harmless, and the order stays gone either way.
 set_setting('rate_limit_max', '50');
 $db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
-[, $bodyReplay] = _pf_post(
+[$stReplay, $bodyReplay] = _pf_post(
     "http://127.0.0.1:$port/receive.php",
     ['csrf_token' => $csrf2, 'order_token' => $token, 'step' => '2'],
     $cookie
 );
-T::ok('replayed receipt shows a safe error', str_contains((string)$bodyReplay, 'class="alert"'));
+T::ok('replayed receipt is refused',
+      $stReplay === 302 || str_contains((string)$bodyReplay, 'class="alert"'));
 T::ok('replayed receipt does not resurrect the order',
     !$db->query("SELECT 1 FROM orders WHERE order_token = '$token'")->fetch());
 
@@ -223,19 +226,38 @@ T::ok('own-token receipt completes after re-unlock',
 T::ok('unlocked order deleted by its own capability',
     !$db->query("SELECT 1 FROM orders WHERE order_token = '$tokD3'")->fetch());
 
-// 9c. A PREPARING order cannot even reach the confirmation page
+// 9c. A PREPARING order cannot be confirmed or destroyed over HTTP, even by
+// a fully valid session holding fresh tokens. CSRF rotation retires tokens
+// after every successful POST, so each step harvests a live one from a
+// delivered-order session; the preparing target is then refused by the
+// fail-closed layers (capability binding / state gate — the state rule
+// itself is pinned in StateTransitionTest::receive refuses preparing).
+$pf_csrf_after_unlock = static function (string $tok, string $pw, string &$ck) use ($port): string {
+    [, , $ck] = _pf_post("http://127.0.0.1:$port/", ['order_token' => $tok], $ck);
+    [, , $ck] = _pf_post("http://127.0.0.1:$port/", ['order_token' => $tok, 'pickup_password' => $pw], $ck);
+    [, $b, $ck] = _pf_get("http://127.0.0.1:$port/", $ck);
+    preg_match('/name="csrf_token"\s*value="([0-9a-f]{64})"/', $b, $m);
+    return $m[1] ?? '';
+};
+set_setting('rate_limit_max', '50');
+$db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
+$cookieP = '';
+$pc1 = $pf_csrf_after_unlock($tokD4, $pass, $cookieP);
+T::ok('delivered unlock hands out a live token (test setup)', $pc1 !== '');
 [$stPrep] = _pf_post(
     "http://127.0.0.1:$port/receive.php",
-    ['csrf_token' => $csrf2, 'order_token' => $tokP, 'step' => '1'],
-    $cookie
+    ['csrf_token' => $pc1, 'order_token' => $tokP, 'step' => '1'],
+    $cookieP
 );
 T::eq('preparing order bounced from confirmation (redirect)', 302, $stPrep);
-[$stPrep2] = _pf_post(
+$pc2 = $pf_csrf_after_unlock($tokD4, $pass, $cookieP);
+[$stPrep2, $bodyPrep2] = _pf_post(
     "http://127.0.0.1:$port/receive.php",
-    ['csrf_token' => $csrf2, 'order_token' => $tokP, 'step' => '2'],
-    $cookie
+    ['csrf_token' => $pc2, 'order_token' => $tokP, 'step' => '2'],
+    $cookieP
 );
-T::ok('preparing order cannot be destroyed via step 2', $stPrep2 === 200);
+T::ok('preparing order cannot be destroyed via step 2',
+      $stPrep2 === 200 && str_contains((string)$bodyPrep2, 'class="alert"'));
 T::ok('preparing order still exists after attack',
     (bool)$db->query("SELECT 1 FROM orders WHERE order_token = '$tokP'")->fetch());
 

@@ -70,7 +70,9 @@ The author provides this software **"as is," without warranty of any kind**, and
 
 ### Operations
 - IP-based rate limiting, configurable and togglable per surface (pickup guessing, admin login, 2FA codes)
-- Pseudo-cron cleanup on each page visit (throttled to 1×/hour)
+- Pseudo-cron cleanup on each page visit (throttled to 1x/hour; the DB check
+  itself fires probabilistically - 1-in-100 requests - so busy sites pay
+  almost nothing per hit)
 - Real cron endpoint (`cron/cleanup.php`) for server-side scheduling
 - Secure file wipe: overwrites with null bytes before `unlink()`
 
@@ -322,6 +324,7 @@ DeadDropMGMT/
 │
 ├── index.php                 Public order lookup & location reveal
 ├── receive.php               Delivery confirmation endpoint
+├── healthz.php               Container/monitor health probe
 ├── public.js, gallery.js     Public-facing JS (lookup flow, photo gallery)
 ├── style.css                 Public CSS
 ├── favicon.svg               Green dead-drop pin on dark tile
@@ -334,6 +337,8 @@ DeadDropMGMT/
 ├── admin/                    Admin panel (owner + courier roles)
 │   ├── index.php             Login wall
 │   ├── login.php             Credential check → 2FA if enabled
+│   ├── bootstrap.php         Zero-config first run: creates the owner account
+│   ├── check_setup.php       Login-form helper: does this username still await enrollment?
 │   ├── verify_2fa.php        TOTP code prompt (login step 2)
 │   ├── set_lang.php          Per-account UI language switcher (AJAX)
 │   ├── 2fa.php               Self-service 2FA enroll / disable (QR + manual)
@@ -531,6 +536,10 @@ chown www-data:www-data logs/ uploads/
 ```
 
 ### 7. Cron (optional but recommended)
+
+On anything with real traffic, install the hourly cron — pseudo-cron only
+guarantees *eventual* expiry sweeps, and real cron takes the page-hit path
+out of the latency budget entirely:
 
 ```cron
 0 * * * * curl -s https://yourdomain.com/cron/cleanup.php > /dev/null

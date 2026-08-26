@@ -6,6 +6,38 @@ All notable changes to DeadDropMGMT are documented here. The format follows
 ## [Unreleased]
 
 ### Security
+- CSRF tokens are single-use now: every successful verification mints a
+  fresh value, so a token stolen by XSS or leakage cannot be replayed for
+  further state-changing requests. Fetch-based endpoints return the next
+  token in their JSON (`csrf` field); read-only probes (per-keystroke setup
+  check, log verification) verify without consuming
+- Fixed a dead end in the config-fallback owner login: `user_id = 0` failed
+  the `!empty()` session check, kicking the bootstrap owner straight back to
+  the login wall after one request
+- The enrollment branch of `admin_login()` burns a dummy bcrypt verification
+  on failure, so "account awaits first-login setup" is no longer reachable
+  by timing the missing password check
+- `admin/check_setup.php` is rate-limited under its own generous budget
+  (30 / window), so the enrollment-state probe can no longer be polled at
+  wire speed; the limiter runs before the CSRF check in `receive.php` too,
+  making forged-request floods self-throttling
+- Logout sends `Clear-Site-Data` ("cache", "cookies", "storage"), closing
+  the shared-computer gap where bfcache could still render admin pages
+- Photo upload re-sniffs the MIME of the GD re-encoded output and refuses
+  (or renames) anything that is not a member of the allowed image map —
+  malformed input can no longer smuggle surprising bytes onto disk
+- Unparseable `DDMGMT_TRUSTED_PROXIES` entries are logged once per process
+  instead of silently falling back to `REMOTE_ADDR`
+
+### Changed
+- `get_client_ip()` / `_ip_in_cidr()` moved from `config.php` to
+  `includes/net.php` — hand-edited configs can no longer weaken proxy-header
+  validation; config files stay constants-only
+- Pseudo-cron cleanup gates its settings-table read behind a 1-in-100
+  probability (tests pass an explicit chance); busy deployments should
+  install real cron, which bypasses all gating
+
+### Security
 - Proxy-header trust is now bound to the connection peer: with
   `DDMGMT_TRUST_PROXY=1`, `CF-Connecting-IP` / `X-Forwarded-For` /
   `X-Real-IP` are honored only when `REMOTE_ADDR` matches
