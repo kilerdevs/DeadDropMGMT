@@ -38,11 +38,17 @@ $cmd  = escapeshellarg(PHP_BINARY)
 $proc = proc_open($cmd, [['pipe', 'r'], ['file', $null, 'w'], ['file', $null, 'w']], $pipes);
 if (!is_resource($proc)) { fwrite(STDERR, "cannot spawn stub server\n"); exit(1); }
 register_shutdown_function(static function () use ($proc, $router, $stubDir): void {
-    // proc_terminate alone leaves the listener alive on Windows — kill the tree
-    $st = proc_get_status($proc);
-    if (!empty($st['running'])) {
-        exec('taskkill /F /T /PID ' . (int)$st['pid'] . ' >NUL 2>&1');
+    // SIGTERM ends php -S on POSIX; on Windows the listener survives
+    // proc_terminate, so the whole tree gets force-killed instead
+    if (!empty(proc_get_status($proc)['running'])) {
+        if (DIRECTORY_SEPARATOR === '\\') {
+            exec('taskkill /F /T /PID ' . (int)proc_get_status($proc)['pid'] . ' >NUL 2>&1');
+        } else {
+            proc_terminate($proc);
+        }
     }
+    // proc_close BLOCKS until the child exits - skipping the kill above made
+    // this wait on the stub server forever and hung the entire CI job
     proc_close($proc);
     @unlink($router); @rmdir($stubDir);
 });
