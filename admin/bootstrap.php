@@ -1,10 +1,6 @@
 <?php
 declare(strict_types=1);
-require_once dirname(__DIR__) . '/config.php';
-require_once dirname(__DIR__) . '/includes/db.php';
-require_once dirname(__DIR__) . '/includes/auth.php';
-require_once dirname(__DIR__) . '/includes/audit.php';
-require_once dirname(__DIR__) . '/includes/i18n.php';
+require_once dirname(__DIR__) . '/includes/kernel.php';
 
 // First-run owner creation. Only reachable while the users table is empty:
 // the visitor picks a username, gets routed to the set-password step, and
@@ -26,7 +22,6 @@ if (!verify_csrf($_POST['csrf_token'] ?? '')) {
     _bootstrap_back(t('admin.common.invalid_csrf'));
 }
 
-require_once dirname(__DIR__) . '/includes/settings.php';
 $rl = rl_status('admin_login');
 if ($rl['blocked']) {
     _bootstrap_back(t('admin.login.error.rate_limited', ['min' => (int)ceil($rl['remaining'] / 60)]));

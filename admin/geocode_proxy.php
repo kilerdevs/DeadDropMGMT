@@ -1,7 +1,6 @@
 <?php
 declare(strict_types=1);
-require_once dirname(__DIR__) . '/includes/auth.php';
-require_once dirname(__DIR__) . '/includes/proxy.php';
+require_once dirname(__DIR__) . '/includes/kernel.php';
 require_admin();
 
 // Release the session lock during the proxy chain (see tile_proxy.php).

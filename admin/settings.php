@@ -1,11 +1,6 @@
 <?php
 declare(strict_types=1);
-require_once dirname(__DIR__) . '/config.php';
-require_once dirname(__DIR__) . '/includes/db.php';
-require_once dirname(__DIR__) . '/includes/auth.php';
-require_once dirname(__DIR__) . '/includes/settings.php';
-require_once dirname(__DIR__) . '/includes/audit.php';
-require_once dirname(__DIR__) . '/includes/i18n.php';
+require_once dirname(__DIR__) . '/includes/kernel.php';
 
 start_secure_session();
 require_owner();
@@ -63,13 +58,12 @@ $csrf = generate_csrf();
 // Analytics stats for the warning label
 try {
     $analytics_events = (int)get_db()->query("SELECT COUNT(*) FROM order_events WHERE event_type NOT LIKE 'admin_%'")->fetchColumn();
-    $analytics_orders = (int)get_db()->query("SELECT COUNT(DISTINCT order_token) FROM order_events WHERE order_token IS NOT NULL")->fetchColumn();
+    $analytics_orders = (int)get_db()->query('SELECT COUNT(DISTINCT order_token) FROM order_events WHERE order_token IS NOT NULL')->fetchColumn();
 } catch (Exception $e) {
     $analytics_events = 0;
     $analytics_orders = 0;
 }
 
-require_once dirname(__DIR__) . '/includes/proxy.php';
 $proxy_pool = osm_proxy_pool();
 
 $groups = [

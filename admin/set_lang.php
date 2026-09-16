@@ -1,9 +1,6 @@
 <?php
 declare(strict_types=1);
-require_once dirname(__DIR__) . '/config.php';
-require_once dirname(__DIR__) . '/includes/db.php';
-require_once dirname(__DIR__) . '/includes/auth.php';
-require_once dirname(__DIR__) . '/includes/i18n.php';
+require_once dirname(__DIR__) . '/includes/kernel.php';
 
 header('Content-Type: application/json');
 start_secure_session();
