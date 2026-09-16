@@ -5,6 +5,11 @@ All notable changes to DeadDropMGMT are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- CI supply chain refreshed (checkout v7, setup-php 2.37.2,
+  upload-artifact v7, ZAP baseline pin); Docker images run PHP 8.5,
+  validated by the in-container lifecycle journey
+
 ## [1.1.0] - 2026-09-16
 
 ### Added
