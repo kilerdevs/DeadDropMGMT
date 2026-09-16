@@ -11,6 +11,11 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   manifest instead of being pasted across every entry script. Services stay
   plain functions with their own require guards, so tests, cron, and CLI
   entry points load them directly as before — zero behaviour change
+- Kernel migration finished: the public pages (`index.php`, `receive.php`),
+  `cron/cleanup.php`, the `tools/` one-shots, and `docker/e2e_journey.php`
+  boot through the same manifest. `healthz.php` stays dependency-free on
+  purpose (liveness must not depend on the stack it reports on), and the
+  `KernelTest` header guard now covers all 40 entry points
 - Automated formatting gate: `.php-cs-fixer.php` (conservative ruleset —
   whitespace, quotes, short arrays, strict-types; brace placement and line
   splitting deliberately out so the gate prevents drift without restyling

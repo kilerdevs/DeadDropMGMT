@@ -66,8 +66,29 @@ foreach (glob($root . '/admin/*.php') as $f) {
     if (isset($partials[$name])) {
         continue;
     }
-    $src = (string)file_get_contents($f);
-    $checked++;
+    $checked += _kernel_guarded($name, (string)file_get_contents($f));
+}
+T::ok('admin entry pages scanned', $checked === 32);
+
+// ── Same rule for every other entry point: public pages, cron, CLI tools,
+// and the docker journey script. Deliberate exceptions (not scanned):
+// healthz.php answers liveness with zero dependencies by design,
+// config.php IS the base layer, and tests/* keep their own bootstrap.
+$others = array_merge(
+    [$root . '/index.php', $root . '/receive.php', $root . '/cron/cleanup.php'],
+    glob($root . '/tools/*.php') ?: [],
+    [$root . '/docker/e2e_journey.php'],
+);
+foreach ($others as $f) {
+    $checked += _kernel_guarded('entry ' . basename($f), (string)file_get_contents($f));
+}
+T::ok('non-admin entry points scanned', count($others) === 8);
+
+exit(T::done());
+
+// Asserts one entry script loads services only via the kernel; returns 1
+// when the file was checked (keeps the scanned-count pins honest).
+function _kernel_guarded(string $name, string $src): int {
     T::ok("$name requires kernel", str_contains($src, 'includes/kernel.php'));
     $stray = [];
     foreach (explode("\n", $src) as $line) {
@@ -78,7 +99,5 @@ foreach (glob($root . '/admin/*.php') as $f) {
         }
     }
     T::ok("$name has no direct includes pulls", $stray === []);
+    return 1;
 }
-T::ok('admin entry pages scanned', $checked === 32);
-
-exit(T::done());

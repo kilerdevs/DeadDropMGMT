@@ -14,8 +14,7 @@ declare(strict_types=1);
 $options = getopt('', ['dry-run']);
 $dry     = isset($options['dry-run']);
 
-require_once dirname(__DIR__) . '/config.php';
-require_once dirname(__DIR__) . '/includes/db.php';
+require_once dirname(__DIR__) . '/includes/kernel.php';
 
 $db = get_db();
 

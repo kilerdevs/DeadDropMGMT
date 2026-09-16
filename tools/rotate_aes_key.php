@@ -32,8 +32,7 @@ if ($old === $new) {
 $oldKey = hex2bin($old);
 $newKey = hex2bin($new);
 
-require_once dirname(__DIR__) . '/config.php';
-require_once dirname(__DIR__) . '/includes/db.php';
+require_once dirname(__DIR__) . '/includes/kernel.php';
 
 // Same wire format as includes/crypto.php, but keyed explicitly — the app's
 // AES_KEY_HEX points at whichever key is currently deployed, not necessarily

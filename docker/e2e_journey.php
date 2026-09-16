@@ -12,9 +12,7 @@ declare(strict_types=1);
 // The HTTP assertions are what a real browser would see; the wipe assertions
 // read the storage truth behind it.
 
-require_once dirname(__DIR__) . '/config.php';
-require_once dirname(__DIR__) . '/includes/db.php';
-require_once dirname(__DIR__) . '/includes/logger.php'; // glob_list() — no implicit dependency via config
+require_once dirname(__DIR__) . '/includes/kernel.php';
 
 $base = getenv('JOURNEY_BASE_URL') ?: 'http://127.0.0.1';
 if (substr($base, -1) === '/') {

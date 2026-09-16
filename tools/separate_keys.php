@@ -18,9 +18,7 @@ declare(strict_types=1);
 $options = getopt('', ['dry-run']);
 $dry     = isset($options['dry-run']);
 
-require_once dirname(__DIR__) . '/config.php';
-require_once dirname(__DIR__) . '/includes/db.php';
-require_once dirname(__DIR__) . '/includes/crypto.php';
+require_once dirname(__DIR__) . '/includes/kernel.php';
 
 $master = hex2bin(AES_KEY_HEX);
 if (strlen($master) !== 32) {

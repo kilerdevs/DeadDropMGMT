@@ -9,10 +9,7 @@
 declare(strict_types=1);
 
 define('BASE_DIR', dirname(__DIR__));
-require_once BASE_DIR . '/config.php';
-require_once BASE_DIR . '/includes/db.php';
-require_once BASE_DIR . '/includes/settings.php';
-require_once BASE_DIR . '/includes/cleanup.php';
+require_once BASE_DIR . '/includes/kernel.php';
 
 try {
     $deleted = do_cleanup();
