@@ -62,6 +62,26 @@ T::eq('rate-limit rows destroyed', 0, (int)$db->query('SELECT COUNT(*) FROM rate
 T::ok('photo file #1 shredded from disk', !is_file("$up/$id1/$hex1.jpg"));
 T::ok('photo file #2 shredded from disk', !is_file("$up/$id2/$hex2.png"));
 T::ok('upload directories removed', !is_dir("$up/$id1") && !is_dir("$up/$id2"));
+
+// The rotated log generation carries the same history — panic must take it.
+file_put_contents(APP_LOG_PATH . '.1', 'pre-panic history');
+do_panic_wipe();
+T::ok('rotated log generation destroyed', !is_file(APP_LOG_PATH . '.1'));
+
+// A planted symlink inside uploads/ is removed WITHOUT touching its target:
+// overwrite follows links, so following it would zero an arbitrary file.
+$outside = sys_get_temp_dir() . '/ddmgmt_panic_target_' . getmypid();
+file_put_contents($outside, 'must-survive');
+mkdir("$up/999002", 0770, true);
+if (@symlink($outside, "$up/999002/evil.jpg")) {
+    do_panic_wipe();
+    T::ok('symlink removed, target untouched',
+        !is_link("$up/999002/evil.jpg") && file_get_contents($outside) === 'must-survive');
+} else {
+    T::ok('symlink case skipped (links cannot be created here)', true);
+}
+@unlink($outside);
+@rmdir("$up/999002");
 T::ok('no filesystem failures reported on clean run', ($report['files_failed'] ?? 99) === 0);
 T::eq('files deleted reported accurately', 2, $report['files']);
 
@@ -77,19 +97,25 @@ T::eq('re-run has no failures', 0, $retry['files_failed']);
 
 // Partial failure must be OBSERVABLE: an undeletable file is reported, not
 // hidden behind a success message; and the retry finishes the job.
-mkdir("$up/999001", 0770, true);
-file_put_contents("$up/999001/stubborn.jpg", str_repeat('C', 512));
-// Cross-platform "undeletable": POSIX honours the directory mode, Windows
-// only the read-only attribute on the file itself.
-chmod("$up/999001", 0550);
-chmod("$up/999001/stubborn.jpg", 0444);
-$partial = do_panic_wipe(); // DB is already empty; sweep still walks the tree
-T::ok('undeletable file reported as failed', ($partial['files_failed'] ?? 0) >= 1);
-chmod("$up/999001/stubborn.jpg", 0644); // make it deletable again
-chmod("$up/999001", 0770);
-$final = do_panic_wipe();
-T::ok('stubborn file cleaned once writable again',
-    !is_file("$up/999001/stubborn.jpg") && ($final['files_failed'] ?? 99) === 0);
-@rmdir("$up/999001");
+// As root (some CI images, containers) mode bits do not apply — unlink
+// succeeds and there is nothing to observe, so this case is skipped there.
+if (function_exists('posix_geteuid') && posix_geteuid() === 0) {
+    T::ok('undeletable-file case skipped as root (modes do not apply)', true);
+} else {
+    mkdir("$up/999001", 0770, true);
+    file_put_contents("$up/999001/stubborn.jpg", str_repeat('C', 512));
+    // Cross-platform "undeletable": POSIX honours the directory mode, Windows
+    // only the read-only attribute on the file itself.
+    chmod("$up/999001", 0550);
+    chmod("$up/999001/stubborn.jpg", 0444);
+    $partial = do_panic_wipe(); // DB is already empty; sweep still walks the tree
+    T::ok('undeletable file reported as failed', ($partial['files_failed'] ?? 0) >= 1);
+    chmod("$up/999001/stubborn.jpg", 0644); // make it deletable again
+    chmod("$up/999001", 0770);
+    $final = do_panic_wipe();
+    T::ok('stubborn file cleaned once writable again',
+        !is_file("$up/999001/stubborn.jpg") && ($final['files_failed'] ?? 99) === 0);
+    @rmdir("$up/999001");
+}
 
 exit(T::done());

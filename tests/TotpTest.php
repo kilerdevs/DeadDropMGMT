@@ -47,6 +47,19 @@ T::ok('non-numeric code rejected', !totp_verify($secret, 'abcdef'));
 T::ok('empty code rejected', !totp_verify($secret, ''));
 T::ok('short code rejected', !totp_verify($secret, substr($valid, 0, 5)));
 
+// Fail closed on weak secrets: an empty/undecodable/corrupt secret must never
+// verify — its HMAC key would be empty and publicly computable offline.
+T::ok('empty secret never verifies', !totp_verify('', $valid));
+T::ok('junk secret never verifies', !totp_verify('!!!', $valid));
+T::ok('short decoded secret never verifies', !totp_verify('MY', '123456'));
+T::throws('totp_code throws on empty secret', fn() => totp_code('', $now), InvalidArgumentException::class);
+// Absurd parameters reject instead of hanging (huge window) or dividing by
+// zero (zero period).
+T::ok('negative window rejected', !totp_verify($secret, $valid, -1));
+T::ok('huge window rejected', !totp_verify($secret, $valid, 1000000));
+T::ok('zero period rejected', !totp_verify($secret, $valid, 1, 0));
+T::throws('totp_code throws on zero period', fn() => totp_code($secret, $now, 0), InvalidArgumentException::class);
+
 // otpauth URI for QR enrollment
 $uri = totp_uri($secret, 'user@example.com', 'DeadDrop');
 T::ok('uri scheme+label', str_starts_with($uri, 'otpauth://totp/DeadDrop:user%40example.com'));

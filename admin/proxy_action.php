@@ -86,7 +86,7 @@ switch ($action) {
                 'added'   => $added,
                 'working' => count($found),
             ]);
-        } catch (Exception $e) {
+        } catch (Throwable $e) {
             log_err('Proxy discover: ' . $e->getMessage());
             json_out(['error' => t('admin.proxies.flash.discover_failed')], 500);
         }

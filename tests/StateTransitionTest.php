@@ -40,6 +40,13 @@ T::ok('deliver sets expiry ~TTL', abs(strtotime($row['expires_at']) - time() - 2
 T::ok('replayed delivery is a harmless no-op', !order_deliver_atomic($idP, 24));
 T::ok('nonexistent id delivers nothing', !order_deliver_atomic(99999999, 24));
 
+// Absurd TTLs clamp instead of overflowing DATE_ADD (which would NULL the
+// expiry and silently immortalize the order).
+$idClamp = $mk('sttdeliverclamp1', 'preparing');
+T::ok('huge TTL still delivers', order_deliver_atomic($idClamp, 999999999));
+$clamped = $db->query('SELECT expires_at FROM orders WHERE id = ' . $idClamp)->fetchColumn();
+T::ok('clamped TTL yields a real expiry', $clamped !== null && abs(strtotime($clamped) - time() - 720 * 3600) < 120);
+
 // 2 ── receive BEFORE delivery must not delete anything
 $idPrep = $mk('sttreceive0002', 'preparing');
 T::ok('receive refuses a preparing order', !order_receive_atomic('sttreceive0002'));

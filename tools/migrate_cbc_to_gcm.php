@@ -97,6 +97,7 @@ if ($failed > 0) {
     exit(1);
 }
 if ($dry) {
+    $db->rollBack(); // dry run holds the outer transaction — release it before exit
     printf("\nDry run OK — $total CBC row(s) convertible. Re-run without --dry-run to apply.\n");
     exit(0);
 }

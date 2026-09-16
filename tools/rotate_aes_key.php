@@ -130,6 +130,9 @@ if ($fail > 0) {
     exit(1);
 }
 if ($dry) {
+    // Nothing was written (all writes sit behind !$dry), but the outer
+    // transaction is still open — roll back instead of exiting with it held.
+    $db->rollBack();
     printf("\nDry run OK — $total row(s) decryptable with OLD key. Re-run without --dry-run to apply.\n");
     exit(0);
 }

@@ -17,6 +17,11 @@ $offset   = ($page - 1) * $per_page;
 try {
     $db    = get_db();
     $total = (int)$db->query('SELECT COUNT(*) FROM audit_log')->fetchColumn();
+    $pages = max(1, (int)ceil($total / $per_page));
+    // Clamp BEFORE the data query: an out-of-range ?page= must render the
+    // last valid page, not a permanently empty one.
+    $page   = min($page, $pages);
+    $offset = ($page - 1) * $per_page;
     $stmt  = $db->prepare(
         'SELECT username, action, order_id, order_token, detail, ip_address, created_at
          FROM audit_log ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?'

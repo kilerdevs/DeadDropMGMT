@@ -28,7 +28,7 @@ $tmp = "$tmpdir/ok.jpg";
 $img = imagecreatetruecolor(24, 18);
 imagefill($img, 0, 0, imagecolorallocate($img, 200, 40, 40));
 imagejpeg($img, $tmp, 90);
-imagedestroy($img);
+$img = null; // PHP 8.5 deprecates imagedestroy(); GC frees the GdImage
 
 $oid = 910001; _uh_track($oid);
 $rel = save_uploaded_photo(_uh_entry($tmp), $oid, 2 * 1024 * 1024);
@@ -44,7 +44,7 @@ if ($rel !== false) {
 $tmpGif = "$tmpdir/poly.gif";
 $img = imagecreatetruecolor(8, 8);
 imagegif($img, $tmpGif);
-imagedestroy($img);
+$img = null; // PHP 8.5 deprecates imagedestroy(); GC frees the GdImage
 file_put_contents($tmpGif, file_get_contents($tmpGif) . "<?php echo 'pwned'; __HALT_COMPILER();");
 
 $oid = 910002; _uh_track($oid);
@@ -101,7 +101,7 @@ $png = "$tmpdir/ok.png";
 $img = imagecreatetruecolor(10, 10);
 imagefill($img, 0, 0, imagecolorallocate($img, 10, 200, 30));
 imagepng($img, $png);
-imagedestroy($img);
+$img = null; // PHP 8.5 deprecates imagedestroy(); GC frees the GdImage
 $oid = 910008; _uh_track($oid);
 $relPng = save_uploaded_photo(_uh_entry($png), $oid, 2 * 1024 * 1024);
 T::ok('PNG accepted', $relPng !== false);
@@ -111,7 +111,7 @@ if (function_exists('imagecreatetruecolor') && function_exists('imagewebp')) {
     $img  = imagecreatetruecolor(10, 10);
     imagefill($img, 0, 0, imagecolorallocate($img, 10, 30, 200));
     imagewebp($img, $webp, 80);
-    imagedestroy($img);
+    $img = null; // PHP 8.5 deprecates imagedestroy(); GC frees the GdImage
     $oid = 910009; _uh_track($oid);
     $relW = save_uploaded_photo(_uh_entry($webp), $oid, 2 * 1024 * 1024);
     if ($relW !== false) {
@@ -154,7 +154,7 @@ T::ok('unknown mime has no loader', _compress_image($tmp, "$tmpdir/none.jpg", 'i
 $img = imagecreatetruecolor(40, 40);
 imagefill($img, 0, 0, imagecolorallocate($img, 90, 120, 200));
 imagepng($img, "$tmpdir/big.png");
-imagedestroy($img);
+$img = null; // PHP 8.5 deprecates imagedestroy(); GC frees the GdImage
 T::ok('exhausted PNG reduce loop fails cleanly', _compress_image("$tmpdir/big.png", "$tmpdir/tiny.png", 'image/png', 10) === false);
 T::ok('failed compression leaves no artifact', !is_file("$tmpdir/tiny.png"));
 
@@ -162,17 +162,24 @@ T::ok('failed compression leaves no artifact', !is_file("$tmpdir/tiny.png"));
 $img = imagecreatetruecolor(40, 40);
 imagefill($img, 0, 0, imagecolorallocate($img, 200, 90, 120));
 imagejpeg($img, "$tmpdir/big.jpg", 90);
-imagedestroy($img);
+$img = null; // PHP 8.5 deprecates imagedestroy(); GC frees the GdImage
 T::ok('exhausted JPEG reduce loop fails cleanly', _compress_image("$tmpdir/big.jpg", "$tmpdir/tiny.jpg", 'image/jpeg', 10) === false);
 
 // Pixel ceiling: a header-only PNG claiming 5000x5000 (25 MP over the 16 MP
-// cap) is refused before GD ever decodes — getimagesize reads the IHDR, so
+// cap) is refused before GD ever decodes - getimagesize reads the IHDR, so
 // the probe file is ~50 bytes and allocates nothing.
 $tmpBomb = "$tmpdir/bomb.png";
 $ihdr = pack('N', 13) . 'IHDR' . pack('N', 5000) . pack('N', 5000) . "\x08\x02\x00\x00\x00";
 file_put_contents($tmpBomb, "\x89PNG\r\n\x1a\n" . $ihdr . pack('N', crc32(substr($ihdr, 4))));
 $oid = 910099; _uh_track($oid);
 T::ok('over-cap pixel dimensions refused', save_uploaded_photo(_uh_entry($tmpBomb), $oid, 2 * 1024 * 1024) === false);
+
+// Size gate reads the on-disk truth, not the client-influenced 'size' field:
+// a small valid image with a forged 200 MB size is still refused.
+$forged = _uh_entry("$tmpdir/ok.jpg");
+$forged['size'] = 200 * 1024 * 1024;
+$oid = 910098; _uh_track($oid);
+T::ok('forged client size cannot skip the ceiling', save_uploaded_photo($forged, $oid, 2 * 1024 * 1024) === false);
 
 // Cleanup: files + rows
 foreach ($orderIds as $oidDel) {

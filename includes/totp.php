@@ -41,9 +41,21 @@ function totp_generate_secret(): string {
 }
 
 function totp_code(string $secret_b32, ?int $timestamp = null, int $period = 30, int $digits = 6): string {
+    $raw = base32_decode($secret_b32);
+    // Fail closed on weak secrets: an empty/undecodable/corrupt secret would
+    // otherwise HMAC under the empty key — a publicly computable code, so a
+    // row with a damaged secret becomes a 2FA bypass for anyone who computes
+    // the empty-key TOTP offline. 10 bytes (80 bits) is the minimum the
+    // enrollment path can ever produce (160-bit secrets).
+    if (strlen($raw) < 10) {
+        throw new InvalidArgumentException('TOTP secret too short.');
+    }
+    if ($period <= 0 || $digits < 6 || $digits > 8) {
+        throw new InvalidArgumentException('Invalid TOTP parameters.');
+    }
     $counter = intdiv($timestamp ?? time(), $period);
     $bin     = pack('N*', 0, $counter); // 8-byte big-endian counter
-    $hash    = hash_hmac('sha1', $bin, base32_decode($secret_b32), true);
+    $hash    = hash_hmac('sha1', $bin, $raw, true);
     $offset  = ord($hash[19]) & 0x0F;
     $part    = ((ord($hash[$offset]) & 0x7F) << 24)
              | ((ord($hash[$offset + 1]) & 0xFF) << 16)
@@ -53,11 +65,19 @@ function totp_code(string $secret_b32, ?int $timestamp = null, int $period = 30,
 }
 
 // Accepts the current step and one step either side to tolerate clock drift.
+// Weak secrets and absurd windows reject as false (never as an exception or
+// a hang): a huge $window would otherwise burn millions of HMACs per call.
 function totp_verify(string $secret_b32, string $code, int $window = 1, int $period = 30): bool {
     $code = trim($code);
     if (!ctype_digit($code)) return false;
+    if ($window < 0 || $window > 5 || $period <= 0) return false;
     for ($i = -$window; $i <= $window; $i++) {
-        if (hash_equals(totp_code($secret_b32, time() + $i * $period, $period), $code)) {
+        try {
+            $expected = totp_code($secret_b32, time() + $i * $period, $period);
+        } catch (InvalidArgumentException $e) {
+            return false;
+        }
+        if (hash_equals($expected, $code)) {
             return true;
         }
     }

@@ -26,12 +26,16 @@ if (!is_file($path)) {
     exit;
 }
 
-$size     = filesize($path);
+$size     = @filesize($path);
 $filename = $prefix . '-' . date('Y-m-d_His') . '.log';
 
 header('Content-Type: text/plain; charset=utf-8');
 header('Content-Disposition: attachment; filename="' . $filename . '"');
-header('Content-Length: ' . $size);
+// filesize() answers false on failure — a "Content-Length: " header would be
+// malformed, and the size can race the read anyway. Omit it when unknown.
+if ($size !== false) {
+    header('Content-Length: ' . $size);
+}
 header('Cache-Control: no-store');
 
 readfile($path);

@@ -198,17 +198,23 @@ features stop, never silent direct fallback (+). Recipient IP still leaks to
 OSM on delivered-order views — stated plainly in the README rather than
 pretended away (− documented).
 
-## ADR-010 · MariaDB-flavoured idempotent setup.sql
+## ADR-010 · MariaDB-flavoured idempotent setup.sql — SUPERSEDED
 
 **Context.** Schema must install identically on fresh databases and decade-old
 upgraded ones, from a single file.
 
-**Decision.** `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN IF NOT
+**Original decision.** `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN IF NOT
 EXISTS` + guarded FK checks. This syntax is MariaDB-specific; MySQL 8 lacks
 `ADD COLUMN IF NOT EXISTS`.
 
-**Consequences.** CI and Docker use MariaDB 11 (+). Pure-MySQL installs are
-unsupported, stated in Requirements (− accepted).
+**Superseded.** setup.sql was rewritten to a portable pattern
+(`information_schema` guards + `PREPARE`/`EXECUTE`), proven by the dual CI
+jobs (`tests` on MariaDB 11, `tests-mysql` on MySQL 8.0). Pure-MySQL installs
+are SUPPORTED (MySQL 5.7+ or MariaDB 10.3+, see README Requirements); the
+"unsupported" consequence below no longer applies.
+
+**Original consequences (historical).** CI and Docker use MariaDB 11 (+).
+Pure-MySQL installs are unsupported, stated in Requirements (− accepted).
 
 ## ADR-011 · Hand-rolled test harness instead of PHPUnit
 

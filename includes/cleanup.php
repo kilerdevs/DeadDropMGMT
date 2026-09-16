@@ -26,15 +26,24 @@ function do_cleanup(): int {
 // Pure dice roll for the pseudo-cron gate: 1.0+ always runs, 0/negative
 // never runs, anything in between runs with probability $chance. Kept pure
 // so the probability decision is unit-testable without touching the
-// process-level one-shot guard below.
-function _cleanup_roll(float $chance): bool {
+// process-level one-shot guard below. $rand exists for tests: random_int()
+// throws on CSPRNG failure, and that failure arm must be covered without
+// breaking the host's entropy source.
+function _cleanup_roll(float $chance, ?callable $rand = null): bool {
     if ($chance >= 1.0) {
         return true;
     }
     if ($chance <= 0.0) {
         return false;
     }
-    return random_int(1, max(1, (int)round(1 / $chance))) === 1;
+    // A dead CSPRNG must not 500 every page (this runs on each visit):
+    // fail toward cleanup — the pass itself is Throwable-guarded.
+    $pick = $rand ?? static fn(int $min, int $max): int => random_int($min, $max);
+    try {
+        return $pick(1, max(1, (int)round(1 / $chance))) === 1;
+    } catch (Throwable $e) {
+        return true;
+    }
 }
 
 // One expiry-sweep pass: stamp first (blocks concurrent duplicate runs),
@@ -65,6 +74,7 @@ function run_cleanup_if_due(float $chance = 0.01): void {
     if ($ran) return;
     // A lost die roll does NOT consume the one-shot: skipping the DB check
     // on this visit must not silence the sweep for the rest of the process.
+    // (Entropy failure is handled inside _cleanup_roll — fail toward cleanup.)
     if (!_cleanup_roll($chance)) return;
     $ran = true;
     _run_cleanup_pass();

@@ -145,6 +145,14 @@ if ($action === 'change_password') {
             password_hash($password, PASSWORD_BCRYPT, ['cost' => 12]),
             $uid,
         ]);
+        // A stale/typo'd user_id must not report success while changing
+        // nothing — the form rebuilds its user list from the same table.
+        if ($stmt->rowCount() === 0) {
+            $_SESSION['flash']    = t('admin.users.flash.not_courier');
+            $_SESSION['flash_ok'] = false;
+            header('Location: /admin/users.php');
+            exit;
+        }
         audit('password_change', null, null, "user_id={$uid}");
         $_SESSION['flash']    = t('admin.users.flash.password_changed');
         $_SESSION['flash_ok'] = true;
@@ -167,9 +175,16 @@ if ($action === 'reset_2fa') {
         exit;
     }
     try {
-        get_db()->prepare(
+        $stmt = get_db()->prepare(
             'UPDATE users SET totp_enabled = 0, totp_secret_enc = NULL, totp_secret_iv = NULL WHERE id = ?'
-        )->execute([$uid]);
+        );
+        $stmt->execute([$uid]);
+        if ($stmt->rowCount() === 0) {
+            $_SESSION['flash']    = t('admin.users.flash.not_courier');
+            $_SESSION['flash_ok'] = false;
+            header('Location: /admin/users.php');
+            exit;
+        }
         audit('2fa_reset', null, null, "user_id={$uid}");
         $_SESSION['flash']    = t('admin.users.flash.twofa_reset');
         $_SESSION['flash_ok'] = true;

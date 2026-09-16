@@ -42,6 +42,11 @@ T::eq('unrated HTTP proxy judged leaking → dropped', 0,
     count(proxy_filter_anonymity($working, $cands, '203.0.113.9', [$httpUnrated => false])));
 T::eq('unrated HTTP proxy never judged → dropped', 0,
     count(proxy_filter_anonymity($working, $cands, '203.0.113.9', [])));
+// Fail-closed default: a working entry with NO candidate record at all
+// (missing key, not rated:false) and no judge verdict must be dropped.
+// (With a positive verdict it is kept per the judged-anonymous row above.)
+T::eq('proxy missing from candidates, unjustified → dropped', 0,
+    count(proxy_filter_anonymity($working, [], '203.0.113.9', [])));
 
 // 4 ── Judge unreachable (no public IP): EVERY unrated HTTP proxy is dropped —
 // fail closed is the whole point of the round. Rated and HTTPS survive.

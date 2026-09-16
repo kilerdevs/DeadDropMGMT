@@ -21,7 +21,9 @@ const HKDF_SALT = 'deaddrop-mgmt-hkdf-salt-v1';
 
 function _master_key(): string {
     $key = hex2bin(AES_KEY_HEX);
-    if (strlen($key) !== 32) {
+    // hex2bin() answers false (not short garbage) on non-hex input — strlen
+    // would TypeError instead of the actionable RuntimeException below.
+    if ($key === false || strlen($key) !== 32) {
         throw new RuntimeException('AES key must be 32 bytes (64 hex chars).');
     }
     return $key;
@@ -74,7 +76,10 @@ function encrypt_location(string $plaintext): array {
 function decrypt_location(string $ciphertext_b64, string $iv_hex): string|false {
     $key = _location_key();
     $raw = base64_decode($ciphertext_b64, true);
-    if ($raw === false || strlen($iv_hex) !== 24) { // GCM nonce is exactly 12 bytes
+    // Length 24 alone does not imply valid hex: hex2bin() answers false on
+    // non-hex input and openssl_decrypt() would TypeError instead of failing
+    // closed — a corrupt/planted row must reject, not 500.
+    if ($raw === false || strlen($iv_hex) !== 24 || !ctype_xdigit($iv_hex)) {
         return false;
     }
     if (strlen($raw) < 16) {
@@ -100,7 +105,7 @@ function encrypt_secret(string $plaintext): array {
 
 function decrypt_secret(string $ciphertext_b64, string $iv_hex): string|false {
     $raw = base64_decode($ciphertext_b64, true);
-    if ($raw === false || strlen($iv_hex) !== 24 || strlen($raw) < 16) {
+    if ($raw === false || strlen($iv_hex) !== 24 || !ctype_xdigit($iv_hex) || strlen($raw) < 16) {
         return false;
     }
     return openssl_decrypt(
@@ -114,7 +119,13 @@ function decrypt_secret(string $ciphertext_b64, string $iv_hex): string|false {
 
 function encrypt_location_data(array $data): array {
     $defaults = ['text' => '', 'lat' => null, 'lng' => null, 'instructions' => ''];
-    return encrypt_location(json_encode(array_merge($defaults, $data), JSON_UNESCAPED_UNICODE));
+    // json_encode() answers false on invalid UTF-8 — passing that into
+    // encrypt_location(string) would TypeError instead of failing loudly.
+    $json = json_encode(array_merge($defaults, $data), JSON_UNESCAPED_UNICODE);
+    if ($json === false) {
+        throw new RuntimeException('Location data is not valid UTF-8.');
+    }
+    return encrypt_location($json);
 }
 
 function decrypt_location_data(string $ciphertext_b64, string $iv_hex): array|false {
@@ -140,8 +151,12 @@ function decrypt_location_data(string $ciphertext_b64, string $iv_hex): array|fa
 function seal_payload(array $data): array {
     $nonce = random_bytes(12);
     $tag   = '';
+    $json  = json_encode($data, JSON_UNESCAPED_UNICODE);
+    if ($json === false) {
+        throw new RuntimeException('Sealing failed: payload is not valid UTF-8.');
+    }
     $ct    = openssl_encrypt(
-        json_encode($data, JSON_UNESCAPED_UNICODE),
+        $json,
         'aes-256-gcm', _reveal_key(), OPENSSL_RAW_DATA, $nonce, $tag
     );
     if ($ct === false) {
@@ -151,7 +166,8 @@ function seal_payload(array $data): array {
 }
 
 function open_payload(array $sealed): array|false {
-    if (!isset($sealed['ct'], $sealed['iv']) || strlen((string)$sealed['iv']) !== 24) {
+    if (!isset($sealed['ct'], $sealed['iv']) || strlen((string)$sealed['iv']) !== 24
+        || !ctype_xdigit((string)$sealed['iv'])) {
         return false;
     }
     $raw = base64_decode((string)$sealed['ct'], true);
@@ -241,8 +257,14 @@ function save_uploaded_photo(array $file_entry, int $order_id, int $max_bytes = 
         return false;
     }
 
-    // Hard ceiling: refuse files that are absurdly large (100 MB) even before GD
-    if ($file_entry['size'] > 100 * 1024 * 1024) {
+    // Hard ceiling: refuse files that are absurdly large (100 MB) even before GD.
+    // Ground truth is the on-disk size, not $_FILES['size'] (client-influenced
+    // metadata and hand-built arrays must not be able to skip the early reject
+    // and push a huge file into GD decode before the 12 MB re-encode cap).
+    $actual_size = is_file($file_entry['tmp_name'] ?? '')
+        ? (@filesize($file_entry['tmp_name']) ?: PHP_INT_MAX)
+        : PHP_INT_MAX;
+    if ($actual_size > 100 * 1024 * 1024 || (int)($file_entry['size'] ?? 0) > 100 * 1024 * 1024) {
         return false;
     }
 
@@ -362,11 +384,11 @@ function _compress_image(string $src_path, string $dest_path, string $mime, int 
         $data = ob_get_clean();
 
         if ($img !== $orig) {
-            imagedestroy($img);
+            $img = null; // PHP 8.5 deprecates imagedestroy(); GC frees the GdImage
         }
 
         if (strlen($data) <= $max_bytes) {
-            imagedestroy($orig);
+            $orig = null; // PHP 8.5 deprecates imagedestroy(); GC frees the GdImage
             return (bool)file_put_contents($dest_path, $data);
         }
 
@@ -383,6 +405,6 @@ function _compress_image(string $src_path, string $dest_path, string $mime, int 
         }
     }
 
-    imagedestroy($orig);
+    $orig = null; // PHP 8.5 deprecates imagedestroy(); GC frees the GdImage
     return false;
 }

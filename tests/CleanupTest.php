@@ -21,6 +21,12 @@ $mk = static function (string $token, ?string $expires) use ($db): int {
 $expiredId = $mk('clstoken00000001', 'NOW() - INTERVAL 2 HOUR');
 $activeId  = $mk('clstoken00000002', 'NOW() + INTERVAL 2 HOUR');
 $noExpiry  = $mk('clstoken00000003', null);
+// A preparing row with a leaked expires_at must survive: only delivered
+// orders expire (defense in depth for the extend.php status guard).
+$db->prepare('DELETE FROM orders WHERE order_token = ?')->execute(['clstoken00000004']);
+$db->prepare('INSERT INTO orders (order_token, pickup_password_hash, location_encrypted, location_iv, status, delivered_at, expires_at)
+              VALUES ("clstoken00000004", "x", "e", "abab", "preparing", NULL, NOW() - INTERVAL 2 HOUR)')->execute();
+$preparingLeak = (int)$db->lastInsertId();
 
 $hex = bin2hex(random_bytes(14));
 $dir = "$up/$expiredId/";
@@ -40,6 +46,7 @@ T::eq('exactly one order deleted', 1, $deleted);
 T::ok('expired order gone', !$db->query('SELECT 1 FROM orders WHERE id = ' . $expiredId)->fetch());
 T::ok('active order kept', (bool)$db->query('SELECT 1 FROM orders WHERE id = ' . $activeId)->fetch());
 T::ok('never-expiring order kept', (bool)$db->query('SELECT 1 FROM orders WHERE id = ' . $noExpiry)->fetch());
+T::ok('preparing order with leaked expiry kept', (bool)$db->query('SELECT 1 FROM orders WHERE id = ' . $preparingLeak)->fetch());
 T::ok('photo file unlinked from disk', !is_file("$dir$hex.jpg"));
 T::ok('order directory removed', !is_dir($dir));
 
@@ -48,14 +55,21 @@ $tmp = tempnam(sys_get_temp_dir(), 'ddl');
 file_put_contents($tmp, 'topsecret');
 overwrite_and_unlink($tmp);
 T::ok('overwrite_and_unlink removes the file', !is_file($tmp));
-T::ok('overwrite_and_unlink tolerates missing path', true);
 overwrite_and_unlink($tmp . '-does-not-exist');
+T::ok('overwrite_and_unlink tolerates missing path', !is_file($tmp . '-does-not-exist'));
 
 // ── Pseudo-cron plumbing: dice and pass are directly testable halves ──────
 T::ok('dice always runs at 1.0', _cleanup_roll(1.0) === true);
 T::ok('dice never runs at 0.0', _cleanup_roll(0.0) === false);
 T::ok('dice never runs when negative', _cleanup_roll(-0.5) === false);
 T::ok('dice answers boolean in between', is_bool(_cleanup_roll(0.01)));
+// Injected randomness keeps the probability path deterministic ...
+T::ok('rigged die always hits', _cleanup_roll(0.5, static fn(int $min, int $max): int => 1) === true);
+T::ok('rigged die can miss', _cleanup_roll(0.5, static fn(int $min, int $max): int => 2) === false);
+// ... and a dead CSPRNG fails toward cleanup instead of 500ing the page.
+T::ok('entropy failure runs the sweep', _cleanup_roll(0.5, static function (int $min, int $max): int {
+    throw new RuntimeException('no entropy');
+}) === true);
 
 $stampOf = static function () use ($db): int {
     return (int)$db->query("SELECT value FROM settings WHERE key_name = 'last_cleanup'")->fetchColumn();

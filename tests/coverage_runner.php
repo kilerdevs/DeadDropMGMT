@@ -54,7 +54,10 @@ foreach ($files as $file) {
         include $file;
         // a suite that returns instead of calling T::done() still exits via exit()
     } catch (TExitSignal $sig) {
-        if ($sig->exitCode !== 0) {
+        // No extra counting here: T::done() exits nonzero exactly when
+        // T::$fail > 0, so $totalFail += T::$fail below already records it —
+        // incrementing too would double-count every failing suite.
+        if ($sig->exitCode !== 0 && T::$fail === 0) {
             $totalFail++;
         }
     }
@@ -108,7 +111,8 @@ foreach ((array)($opts['min-file'] ?? []) as $spec) {
 
 if ($minOverall > 0 || $minCritical > 0) {
     // Files where a coverage regression is a security event, not a stats blip.
-    $critical = ['auth.php', 'crypto.php', 'db.php', 'order_state.php', 'totp.php', 'wipe.php'];
+    $critical = ['auth.php', 'crypto.php', 'db.php', 'order_state.php', 'totp.php', 'wipe.php',
+                 'logger.php', 'net.php'];
 
     $perFile = [];
     $sumExe  = 0;

@@ -80,8 +80,9 @@ T::ok('cleanup runs at most once per process', $again === $after);
 // Even a broken store cannot turn a page visit into a crash.
 with_table_hidden_st('settings', function (): void {
     run_cleanup_if_due(1.0); // static guard exits long before any DB touch
-    T::ok('throttled cleanup ignores unreadable settings', true);
 });
+T::ok('throttled cleanup ignores unreadable settings',
+      (int)$db->query("SELECT value FROM settings WHERE key_name = 'last_cleanup'")->fetchColumn() === $after);
 
 // The probability gate fires BEFORE the settings read: chance 0 must skip
 // an otherwise-due sweep entirely (child process = fresh static guard).

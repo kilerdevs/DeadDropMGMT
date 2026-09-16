@@ -15,7 +15,7 @@ updates:
     schedule:
       interval: weekly
 
-  # Docker base images (php:8.3-apache, php:8.3-fpm): security patches land
+  # Docker base images (php:8.5-apache, php:8.5-fpm): security patches land
   # in the Debian layers constantly, and the Trivy gate holds the built
   # images to them. The digest-pinned Semgrep container lives in a workflow
   # `container:` block, which the docker ecosystem does not cover — bump it

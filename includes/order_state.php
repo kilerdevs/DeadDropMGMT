@@ -16,7 +16,8 @@ require_once dirname(__DIR__) . '/includes/db.php';
 // never an order that vanished while its row survived.
 
 // preparing → delivered. Returns false if the order was already delivered,
-// deleted, or never existed — replaying is safe.
+// deleted, or never existed — replaying is safe. TTL is clamped to 1–720 h
+// like the admin UI: an unbounded value overflows DATE_ADD and fails.
 function order_deliver_atomic(int $id, int $ttl_hours): bool {
     try {
         $db   = get_db();
@@ -26,9 +27,9 @@ function order_deliver_atomic(int $id, int $ttl_hours): bool {
                  expires_at = DATE_ADD(NOW(), INTERVAL ? HOUR)
              WHERE id = ? AND status = "preparing"'
         );
-        $stmt->execute([max(1, $ttl_hours), $id]);
+        $stmt->execute([min(720, max(1, $ttl_hours)), $id]);
         return $stmt->rowCount() > 0;
-    } catch (Exception $e) {
+    } catch (Throwable $e) {
         log_err('Deliver transition failed: ' . $e->getMessage());
         return false;
     }
@@ -69,7 +70,7 @@ function order_receive_atomic(string $token): bool {
         $db->commit();
         _unlink_order_files((int)$order['id'], $files);
         return true;
-    } catch (Exception $e) {
+    } catch (Throwable $e) {
         if ($db->inTransaction()) {
             $db->rollBack();
         }
@@ -107,7 +108,7 @@ function order_delete_atomic(int $id): ?array {
         $db->commit();
         _unlink_order_files($id, $files);
         return ['token' => (string)$token, 'files' => $files];
-    } catch (Exception $e) {
+    } catch (Throwable $e) {
         if ($db->inTransaction()) {
             $db->rollBack();
         }
@@ -127,8 +128,11 @@ function cleanup_expired_orders(int $batch = 200): int {
     $db      = get_db();
     $deleted = 0;
     do {
+        // Defense in depth: only delivered orders expire. Expiry is armed by
+        // delivery (and guarded extension); a preparing row must never be
+        // swept even if an expires_at leaked onto it.
         $expired = $db->query(
-            'SELECT id FROM orders WHERE expires_at IS NOT NULL AND expires_at <= NOW() LIMIT ' . max(1, $batch)
+            'SELECT id FROM orders WHERE status = "delivered" AND expires_at IS NOT NULL AND expires_at <= NOW() LIMIT ' . max(1, $batch)
         )->fetchAll();
 
         foreach ($expired as $row) {
@@ -136,7 +140,7 @@ function cleanup_expired_orders(int $batch = 200): int {
             $db->beginTransaction();
             try {
                 $lock = $db->prepare(
-                    'SELECT id, order_token FROM orders WHERE id = ? AND expires_at IS NOT NULL AND expires_at <= NOW() LIMIT 1 FOR UPDATE'
+                    'SELECT id, order_token FROM orders WHERE id = ? AND status = "delivered" AND expires_at IS NOT NULL AND expires_at <= NOW() LIMIT 1 FOR UPDATE'
                 );
                 $lock->execute([$oid]);
                 $locked = $lock->fetch();
@@ -154,9 +158,9 @@ function cleanup_expired_orders(int $batch = 200): int {
                 $db->commit();
 
                 _unlink_order_files($oid, $files);
-                log_err('Cleanup: deleted expired order #' . $oid);
+                log_info('cleanup_deleted', ['msg' => 'Cleanup: deleted expired order #' . $oid]);
                 $deleted++;
-            } catch (Exception $e) {
+            } catch (Throwable $e) {
                 if ($db->inTransaction()) {
                     $db->rollBack();
                 }

@@ -177,6 +177,17 @@ body.login-page {
 
 .sidebar-logout:hover { color: var(--error); }
 
+/* Logout is a POST form, not a link — reset button chrome to match */
+.sidebar-logout-form { margin: 0; }
+button.sidebar-logout {
+    background: none;
+    border: none;
+    border-top:  1px solid var(--border);
+    width: 100%;
+    text-align: left;
+    cursor: pointer;
+}
+
 /* ── Sidebar user info ───────────────────────────────────────────────────── */
 
 .sidebar-user {

@@ -30,7 +30,7 @@ ini_set('session.save_path', $session_dir);
 final class TExitSignal extends RuntimeException {
     public int $exitCode;
     public function __construct(int $exitCode) {
-        $this->exitCode = $exitCode; // no property promotion+readonly: must parse on PHP 8.0
+        $this->exitCode = $exitCode; // no property promotion: harness parses on PHP 8.2+
         parent::__construct('suite finished');
     }
 }

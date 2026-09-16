@@ -16,13 +16,19 @@ if ($sql === false) {
     fwrite(STDERR, "Cannot read setup.sql\n");
     exit(1);
 }
-$sql = str_replace('deaddrops', $name, $sql);
+// Replace only the database NAME where it is one: CREATE DATABASE / USE.
+// A blanket str_replace would also rewrite the word inside comments, labels,
+// or future string literals.
+$sql = preg_replace('/(CREATE DATABASE(?: IF NOT EXISTS)?\s+`?)deaddrops(`?(?:\s|;|$))/i', '$1' . $name . '$2', $sql);
+$sql = preg_replace('/(^|\n)(\s*USE\s+`?)deaddrops(`?(?:\s|;|$))/i', '$1$2' . $name . '$3', $sql);
 
 try {
     $pdo = new PDO("mysql:host=$host;port=$port;charset=utf8mb4", $user, $pass, [
         PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
         // setup.sql's PREPARE/EXECUTE guard blocks return result sets
-        PDO::MYSQL_ATTR_USE_BUFFERED_QUERY => true,
+        (defined('Pdo\\Mysql::ATTR_USE_BUFFERED_QUERY')
+            ? constant('Pdo\\Mysql::ATTR_USE_BUFFERED_QUERY')
+            : PDO::MYSQL_ATTR_USE_BUFFERED_QUERY) => true,
     ]);
 } catch (PDOException $e) {
     fwrite(STDERR, "DB connect failed: {$e->getMessage()}\n");

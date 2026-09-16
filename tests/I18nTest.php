@@ -59,4 +59,9 @@ $tout = tn('admin.settings.log_line', 3, ['n' => '<b>3</b>']);
 T::ok('tn param injection is escaped',
       str_contains($tout, '&lt;b&gt;') && !str_contains($tout, '<b>'));
 
+// i18n_load() never reaches the filesystem for non-allowlisted codes —
+// a future caller passing request data fails closed, not LFI.
+T::eq('unlisted language loads nothing', [], i18n_load('../config'));
+T::eq('empty language loads nothing', [], i18n_load(''));
+
 exit(T::done());

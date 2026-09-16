@@ -106,10 +106,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <div class="wordmark">DEAD DROP // ADMIN</div>
     <h1><?= t('admin.setup.h1') ?></h1>
     <?php if ($error): ?>
-    <div class="alert"><?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?></div>
+    <!-- t()-built: already HTML-safe, echo raw (see orders.php). -->
+    <div class="alert"><?= $error ?></div>
     <?php endif; ?>
     <?php if ($enrollment_note !== ''): ?>
-    <div class="alert"><?= htmlspecialchars($enrollment_note, ENT_QUOTES, 'UTF-8') ?></div>
+    <div class="alert"><?= $enrollment_note ?></div>
     <?php endif; ?>
     <p class="setup-explain"><?= t('admin.setup.explain') ?></p>
     <form method="POST" action="/admin/setup_password.php" autocomplete="off">

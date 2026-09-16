@@ -38,7 +38,8 @@ $csrf = generate_csrf();
         <div class="page-heading"><?= t('admin.new_order.title') ?></div>
 
         <?php if ($flash): ?>
-        <div class="flash <?= $flash_ok ? 'ok' : '' ?>"><?= htmlspecialchars($flash, ENT_QUOTES, 'UTF-8') ?></div>
+        <!-- t()-built flash: already HTML-safe, echo raw (see orders.php). -->
+        <div class="flash <?= $flash_ok ? 'ok' : '' ?>"><?= $flash ?></div>
         <?php endif; ?>
 
         <div class="form-panel centered-panel">

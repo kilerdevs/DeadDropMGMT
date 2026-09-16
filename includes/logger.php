@@ -39,29 +39,45 @@ function _log_req_id(): string {
 }
 
 // Read the trailing hash of the last complete JSON line. Caller holds LOCK_EX.
-// The size comes from an explicit seek-to-end: ftell() right after fopen('c+')
-// is always 0, which used to make EVERY entry anchor to GENESIS and the
-// following fwrite overwrite the log from byte zero — destroying both the
-// history and the tamper evidence the chain exists to provide.
+// Scans backwards in growing windows: a single entry larger than one window
+// must not anchor the next write to the second-to-last hash (which would
+// permanently alarm the chain on the following verify). Garbage lines inside
+// the view are still skipped (tolerance is test-pinned); only a possibly
+// window-truncated TAIL line triggers a wider re-read.
 function _log_last_hash($fh): string {
     fseek($fh, 0, SEEK_END);
     $size = ftell($fh);
     if ($size === 0) {
         return APP_LOG_GENESIS;
     }
-    $tail_len = (int)min(8192, $size);
-    fseek($fh, -$tail_len, SEEK_END);
-    $tail = fread($fh, $tail_len);
-    $lines = explode("\n", rtrim($tail));
-    for ($i = count($lines) - 1; $i >= 0; $i--) {
-        $line = trim($lines[$i]);
-        if ($line === '') {
-            continue;
+    $window = 8192;
+    while (true) {
+        $cover_all = $window >= $size;
+        $tail_len  = (int)($cover_all ? $size : $window);
+        fseek($fh, -$tail_len, SEEK_END);
+        $tail  = fread($fh, $tail_len);
+        $lines = explode("\n", rtrim($tail));
+        $last  = count($lines) - 1;
+        for ($i = $last; $i >= 0; $i--) {
+            $line = trim($lines[$i]);
+            if ($line === '') {
+                continue;
+            }
+            $rec = json_decode($line, true);
+            if (is_array($rec) && isset($rec['hash']) && is_string($rec['hash'])) {
+                return $rec['hash'];
+            }
+            // Unparseable tail line with unseen file above it: the entry is
+            // cut by the window edge, not garbage — widen and retry instead
+            // of anchoring to an older hash.
+            if ($i === $last && !$cover_all) {
+                break;
+            }
         }
-        $rec = json_decode($line, true);
-        if (is_array($rec) && isset($rec['hash']) && is_string($rec['hash'])) {
-            return $rec['hash'];
+        if ($cover_all) {
+            break;
         }
+        $window *= 8;
     }
     // File has content but no parseable last entry — treat as broken start
     return '';
@@ -84,7 +100,22 @@ function app_log(string $level, string $event, array $ctx = []): bool {
     if (!is_dir($dir)) {
         @mkdir($dir, 0750, true);
     }
-    _log_rotate_if_needed($path);
+
+    // Serialize rotation AND writing on a sidecar lock: rotating outside the
+    // lock let two processes at the 5 MiB boundary both rename (the second
+    // deleting the first's .1 generation outright) or append post-rotation
+    // entries to the renamed .1 file.
+    $lock = @fopen($path . '.lock', 'c');
+    if ($lock === false) {
+        return false;
+    }
+    flock($lock, LOCK_EX);
+    try {
+        _log_rotate_if_needed($path);
+    } finally {
+        flock($lock, LOCK_UN);
+        fclose($lock);
+    }
 
     $user = null;
     if (isset($_SESSION['user_name']) && is_string($_SESSION['user_name'])) {
@@ -108,7 +139,10 @@ function app_log(string $level, string $event, array $ctx = []): bool {
     ];
     unset($ctx['msg']);
     foreach ($ctx as $k => $v) {
-        if (!isset($rec[$k])) {
+        // array_key_exists, not isset: under CLI 'ip' is null and anonymous
+        // requests carry 'user' null — isset(null) would let a context value
+        // forge those fields. Base record always wins.
+        if (!array_key_exists($k, $rec)) {
             $rec[$k] = $v;
         }
     }
@@ -185,6 +219,8 @@ function verify_log_chain(?string $path = null): array {
     if ($fh === false) {
         return [false, 0, null, 'unreadable'];
     }
+    // Shared lock: a concurrent rotation must not move the file mid-read.
+    flock($fh, LOCK_SH);
     $prev      = APP_LOG_GENESIS;
     $n         = 0;
     while (($line = fgets($fh)) !== false) {
@@ -194,11 +230,15 @@ function verify_log_chain(?string $path = null): array {
         }
         $n++;
         $rec = json_decode($line, true);
-        if (!is_array($rec) || !isset($rec['hash'], $rec['prev'])) {
+        // A non-string 'hash' (planted/corrupt line) must fail verification,
+        // not TypeError inside hash_equals() and 500 the integrity page.
+        if (!is_array($rec) || !isset($rec['hash'], $rec['prev']) || !is_string($rec['hash'])) {
+            flock($fh, LOCK_UN);
             fclose($fh);
             return [false, $n, $n, 'malformed entry'];
         }
         if (!hash_equals($prev, (string)$rec['prev'])) {
+            flock($fh, LOCK_UN);
             fclose($fh);
             return [false, $n, $n, 'broken chain linkage'];
         }
@@ -212,11 +252,13 @@ function verify_log_chain(?string $path = null): array {
             $calc = hash_hmac('sha256', (string)$payload, _log_key_legacy());
         }
         if (!hash_equals($expected, $calc)) {
+            flock($fh, LOCK_UN);
             fclose($fh);
             return [false, $n, $n, 'hash mismatch (entry modified or forged)'];
         }
         $prev = $expected;
     }
+    flock($fh, LOCK_UN);
     fclose($fh);
     return [true, $n, null, null];
 }

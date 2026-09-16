@@ -15,7 +15,10 @@ $root = dirname(__DIR__);
 $cmd  = escapeshellarg(PHP_BINARY)
       . ' -d session.save_path=' . escapeshellarg(ini_get('session.save_path'))
       . " -S 127.0.0.1:$port -t " . escapeshellarg($root);
-$proc = proc_open($cmd, [['pipe', 'r'], ['file', 'NUL', 'w'], ['file', 'NUL', 'w']], $p);
+// Portable null device (same pattern as PublicFlow/StateRace): hardcoded NUL
+// would create a stray ./NUL file on Linux and stop suppressing output.
+$null = DIRECTORY_SEPARATOR === '\\' ? 'NUL' : '/dev/null';
+$proc = proc_open($cmd, [['pipe', 'r'], ['file', $null, 'w'], ['file', $null, 'w']], $p);
 register_shutdown_function(function () use ($proc): void {
     // Portable teardown: taskkill is Windows-only — on Linux an orphaned
     // php -S keeps the output pipe open and hangs the whole job.
@@ -40,7 +43,11 @@ function _az(string $method, string $url, ?array $f, string $ck): array {
     if ($f !== null) { $opts['http']['content'] = http_build_query($f); }
     $body = @file_get_contents($url, false, stream_context_create($opts));
     $status = 0; $sc = ''; $loc = '';
-    foreach ($http_response_header ?? [] as $h) {
+    // PHP 8.5 deprecates $http_response_header: new API where it exists.
+    $headers = function_exists('http_get_last_response_headers')
+        ? (http_get_last_response_headers() ?? [])
+        : ($http_response_header ?? []);
+    foreach ($headers as $h) {
         if (preg_match('#^HTTP/\S+\s+(\d{3})#', $h, $m)) { $status = (int)$m[1]; }
         if (stripos($h, 'Set-Cookie:') === 0) {
             $p = trim(explode(';', trim(substr($h, 11)))[0]);

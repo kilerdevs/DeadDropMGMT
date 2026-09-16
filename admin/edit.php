@@ -164,6 +164,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $db    = get_db();
                     $files = $_FILES['photos'];
                     $count = count($files['name']);
+                    $photo_errors = [];
                     for ($i = 0; $i < $count; $i++) {
                         $entry = [
                             'name'     => $files['name'][$i],
@@ -177,7 +178,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $db->prepare(
                                 'INSERT INTO order_photos (order_id, filename) VALUES (?, ?)'
                             )->execute([$id, $rel]);
+                        } else {
+                            // Raw name like create.php: t() escapes it once at
+                            // the sink — silent skips hid rejected uploads.
+                            $photo_errors[] = (string)$files['name'][$i];
                         }
+                    }
+                    if (!empty($photo_errors)) {
+                        $error = t('admin.new_order.flash.upload_errors', ['files' => implode(', ', $photo_errors)]);
                     }
                 }
 
@@ -244,8 +252,9 @@ $init_zoom = $has_pin ? 17 : 12;
             <?= t('admin.edit.title_prefix') ?> — <span class="token"><?= htmlspecialchars($order['order_token'], ENT_QUOTES, 'UTF-8') ?></span>
         </div>
 
-        <?php if ($error):   ?><div class="flash"><?= htmlspecialchars($error,   ENT_QUOTES, 'UTF-8') ?></div><?php endif; ?>
-        <?php if ($success): ?><div class="flash ok"><?= htmlspecialchars($success, ENT_QUOTES, 'UTF-8') ?></div><?php endif; ?>
+        <?php if ($error):   ?><div class="flash"><?= $error ?></div><?php endif; ?>
+        <?php if ($success): ?><div class="flash ok"><?= $success ?></div><?php endif; ?>
+        <!-- $error/$success are t()-built (HTML-safe); raw echo, like flashes. -->
 
         <!-- ── Quick delivered action ────────────────────────────────────── -->
         <?php if ($order['status'] === 'preparing'): ?>

@@ -86,7 +86,7 @@ function osm_fetch_via(string $url, ?string $proxy, int $timeout = 5): string|fa
 
     $body = curl_exec($ch);
     $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-    curl_close($ch);
+    unset($ch); // PHP 8.5 deprecates curl_close(); the handle frees on scope exit
 
     return ($code >= 200 && $code < 300 && is_string($body)) ? $body : false;
 }
@@ -281,6 +281,10 @@ const PROXY_ANONYMITY_JUDGES = [
 ];
 
 // Learn this server's public IP so the judge response can be scanned for it.
+// Privacy trade-off, stated openly: this makes a DIRECT clearnet connection
+// to ipify/httpbin, disclosing the server IP to exactly those two parties.
+// That is the price of verifying the pool hides it from everyone else (OSM);
+// the call happens only on owner-initiated discovery, never per request.
 function proxy_public_ip(): ?string {
     foreach (['https://api.ipify.org?format=text', 'http://httpbin.org/ip'] as $url) {
         $raw = @file_get_contents($url, false, stream_context_create(['http' => ['timeout' => 8]]));
@@ -292,18 +296,23 @@ function proxy_public_ip(): ?string {
     return null;
 }
 
-// Run one anonymity judge through a proxy. Returns true when the judge's
-// response does not contain our IP in any echoed header or origin field.
-function proxy_judge_anonymous(string $pxUrl, string $ourIp, int $timeout_s = 6): bool {
-    foreach (PROXY_ANONYMITY_JUDGES as $judge) {
+// Run one anonymity judge through a proxy. Returns true only when EVERY
+// reachable judge's response is clean: a leaking proxy may be visible to
+// just one judge (different judges echo different fields), so the first
+// clean answer must not accept the proxy. Unreachable judges are skipped;
+// when none are reachable the answer is false (could not verify — maximum
+// security means reject). $judges override exists for tests.
+function proxy_judge_anonymous(string $pxUrl, string $ourIp, int $timeout_s = 6, ?array $judges = null): bool {
+    $seen = false;
+    foreach ($judges ?? PROXY_ANONYMITY_JUDGES as $judge) {
         $body = osm_fetch_via($judge, $pxUrl, $timeout_s);
         if ($body === false) continue; // judge unreachable through this proxy — try next judge
+        $seen = true;
         if (str_contains($body, $ourIp)) {
             return false; // our IP leaked into the request as seen by the target
         }
-        return true;
     }
-    return false; // could not verify — maximum security means reject
+    return $seen;
 }
 
 // Pull candidates from public sources, then probe them in parallel against a
@@ -317,6 +326,9 @@ function proxy_judge_anonymous(string $pxUrl, string $ourIp, int $timeout_s = 6)
 //      a live judge check proving our IP stays out of the request headers;
 //      SOCKS is header-anonymous by protocol and rated lists are trusted.
 function proxy_discover(int $max_test = 400, int $timeout_s = 4): array {
+    // No cURL on this host: every probe below needs it. proxy_multi_probe()
+    // would fatal with an Error that callers only catch as Exception.
+    if (!function_exists('curl_init')) return [];
     $candidates = []; // url => ['rated' => bool, 'source' => list name]
 
     foreach (PROXY_DISCOVERY_SOURCES as $src) {
@@ -419,7 +431,7 @@ function proxy_discover(int $max_test = 400, int $timeout_s = 4): array {
 // round silently never ran. ProxyTest pins the decision table.
 function proxy_filter_anonymity(array $working, array $candidates, ?string $our_ip, array $judged): array {
     return array_values(array_filter($working, static fn(array $p): bool =>
-        $candidates[$p['url']]['rated'] !== false
+        ($candidates[$p['url']]['rated'] ?? false) !== false
         || !str_starts_with($p['url'], 'http://')
         || ($our_ip !== null && ($judged[$p['url']] ?? false))
     ));
@@ -458,7 +470,7 @@ function proxy_multi_probe(array $proxies, string $url, int $timeout_s, int $con
         $ms   = (int)round((float)curl_getinfo($ch, CURLINFO_TOTAL_TIME) * 1000);
         $out[$pxUrl] = [$code, $ms];
         curl_multi_remove_handle($mh, $ch);
-        curl_close($ch);
+        unset($ch); // PHP 8.5 deprecates curl_close(); removal + scope exit frees it
     }
     curl_multi_close($mh);
     return $out;

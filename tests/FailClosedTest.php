@@ -54,6 +54,17 @@ $_SERVER['HTTP_X_FORWARDED_PROTO'] = 'http';
 T::ok('trusted proxy XFP http NOT https', !request_is_https());
 putenv('DDMGMT_TRUST_PROXY=0');
 unset($_SERVER['HTTP_X_FORWARDED_PROTO']);
+
+// Multi-hop XFF behind a trusted peer: earlier entries are client-controlled
+// (the peer appends), so the last hop — the only one the client cannot forge
+// — is authoritative. Single-entry headers are untouched.
+putenv('DDMGMT_TRUST_PROXY=1');
+$_SERVER['HTTP_X_FORWARDED_FOR'] = '1.2.3.4, 5.6.7.8';
+T::eq('multi-hop XFF resolves to the peer-appended last hop', '5.6.7.8', get_client_ip());
+$_SERVER['HTTP_X_FORWARDED_FOR'] = '9.9.9.9';
+T::eq('single-entry XFF unchanged', '9.9.9.9', get_client_ip());
+unset($_SERVER['HTTP_X_FORWARDED_FOR']);
+putenv('DDMGMT_TRUST_PROXY=0');
 if ($origRemote === null) {
     unset($_SERVER['REMOTE_ADDR']);
 } else {
@@ -143,10 +154,12 @@ with_table_hidden('rate_limits', function (): void {
 T::ok('rate_limits table survived fail-closed probe',
       get_db()->query("SHOW TABLES LIKE 'rate_limits'")->fetch() !== false);
 
-// Reset is best-effort: silent on an unreadable counter
+// Reset is best-effort: silent on an unreadable counter, limiter stays
+// fail-closed throughout.
 with_table_hidden('rate_limits', function (): void {
     rl_reset('cov');
-    T::ok('rl_reset survives missing table silently', true);
+    T::ok('rl_reset survives missing table, limiter stays closed',
+          rl_status('cov')['blocked'] === true);
 });
 
 // ── Session failure buckets ──────────────────────────────────────────────────
@@ -195,10 +208,28 @@ with_table_hidden('users', function (): void {
     T::eq('login without users table answers fail', 'fail', admin_login('someone', 'whatever'));
 });
 
-// ── Wipe: unreadable audit table aborts the whole transaction ───────────────
-// (order_photos is deliberately NOT hidden here: its COUNT sits outside any
-// guard, so hiding it would escape as a raw PDOException before the
-// transaction even begins — a different, unguarded failure mode.)
+// A NULL expiry is a damaged row, not a perpetual credential: valid hash +
+// NULL expiry must deny. Positive control (future expiry) proves the query.
+$dbE = get_db();
+$dbE->prepare('DELETE FROM users WHERE username = ?')->execute(['fc_enroll_probe']);
+$knownSecret = enrollment_secret_generate();
+$dbE->prepare('INSERT INTO users (username, password_hash, role, enrollment_hash, enrollment_expires)
+               VALUES (?, "", "courier", ?, NOW() + INTERVAL 24 HOUR)')
+    ->execute(['fc_enroll_probe', enrollment_secret_hash($knownSecret)]);
+$probeId = (int)$dbE->lastInsertId();
+T::ok('live enrollment secret validates', enrollment_secret_valid($probeId, $knownSecret));
+$dbE->prepare('UPDATE users SET enrollment_expires = NULL WHERE id = ?')->execute([$probeId]);
+T::ok('NULL expiry denies even with the right secret', !enrollment_secret_valid($probeId, $knownSecret));
+$dbE->prepare('DELETE FROM users WHERE id = ?')->execute([$probeId]);
+
+// ── Wipe: every pre-transaction count is guarded ────────────────────────────
+// Hiding order_photos used to escape as a raw PDOException before the
+// transaction even began; now it reports -1 and the wipe still proceeds.
+with_table_hidden('order_photos', function (): void {
+    $rep = do_panic_wipe();
+    T::eq('unreadable photos table reports -1, wipe still runs', -1, $rep['photos']);
+    T::eq('wipe with hidden photos table destroys nothing else', 0, $rep['files_failed']);
+});
 with_table_hidden('audit_log', function (): void {
     $msg = '';
     try {
@@ -240,6 +271,22 @@ T::ok('tampered ciphertext rejects decryption',
 T::ok('open_payload rejects missing iv', open_payload(['ct' => base64_encode(str_repeat('a', 32))]) === false);
 T::ok('open_payload rejects undecodable ciphertext',
       open_payload(['ct' => '!!!not-base64!!!', 'iv' => str_repeat('a', 24)]) === false);
+// Length-correct but non-hex IVs: hex2bin() answers false there, and the
+// decryptors must reject — not TypeError inside openssl_decrypt().
+$ct = encrypt_location('hex-guard probe');
+T::ok('decrypt_location rejects 24-char non-hex IV',
+      decrypt_location($ct['ciphertext'], str_repeat('z', 24)) === false);
+T::ok('decrypt_secret rejects 24-char non-hex IV',
+      decrypt_secret(base64_encode(str_repeat('b', 20)), str_repeat('g', 24)) === false);
+T::ok('open_payload rejects 24-char non-hex IV',
+      open_payload(['ct' => base64_encode(str_repeat('c', 32)), 'iv' => str_repeat('q', 24)]) === false);
+// Invalid UTF-8 never reaches the ciphers as a false: loud failure instead.
+T::throws('encrypt_location_data rejects invalid UTF-8',
+          fn() => encrypt_location_data(['text' => "\xff\xfe invalid"]),
+          RuntimeException::class);
+T::throws('seal_payload rejects invalid UTF-8',
+          fn() => seal_payload(['text' => "\xff\xfe invalid"]),
+          RuntimeException::class);
 
 // ── Database options factory: TLS matrix without a TLS database ─────────────
 $base = db_options('', '', '', true);
@@ -247,19 +294,29 @@ T::eq('no CA means exactly the three base options', 3, count($base));
 T::ok('base options disable emulation', $base[PDO::ATTR_EMULATE_PREPARES] === false);
 
 $full = db_options('/ca.pem', '/client.pem', '/client.key', false);
-T::ok('CA option carried through', $full[PDO::MYSQL_ATTR_SSL_CA] === '/ca.pem');
-T::ok('client cert carried through', $full[PDO::MYSQL_ATTR_SSL_CERT] === '/client.pem');
-T::ok('client key carried through', $full[PDO::MYSQL_ATTR_SSL_KEY] === '/client.key');
-if (defined('PDO::MYSQL_ATTR_SSL_VERIFY_SERVER_CERT')) {
+$caKey = db_mysql_attr('SSL_CA');
+$certKey = db_mysql_attr('SSL_CERT');
+$keyKey = db_mysql_attr('SSL_KEY');
+T::ok('CA option carried through', $full[$caKey] === '/ca.pem');
+T::ok('client cert carried through', $full[$certKey] === '/client.pem');
+T::ok('client key carried through', $full[$keyKey] === '/client.key');
+if (defined('PDO::MYSQL_ATTR_SSL_VERIFY_SERVER_CERT') || defined('Pdo\\Mysql::ATTR_SSL_VERIFY_SERVER_CERT')) {
     T::ok('verify toggle carried through',
-          $full[PDO::MYSQL_ATTR_SSL_VERIFY_SERVER_CERT] === false);
+          $full[db_mysql_attr('SSL_VERIFY_SERVER_CERT')] === false);
 } else {
-    T::ok('verify constant absent - toggle correctly omitted', !isset($full[PDO::MYSQL_ATTR_SSL_VERIFY_SERVER_CERT]));
+    // Neither the legacy nor the driver constant exists: base 3 + CA/cert/key.
+    T::eq('verify toggle omitted when unsupported', 6, count($full));
 }
 
 $partial = db_options('/ca.pem', '', '', false);
-T::eq('CA-only setup adds no client cert', false, isset($partial[PDO::MYSQL_ATTR_SSL_CERT]));
-T::eq('CA-only setup adds no client key', false, isset($partial[PDO::MYSQL_ATTR_SSL_KEY]));
+T::eq('CA-only setup adds no client cert', false, isset($partial[$certKey]));
+T::eq('CA-only setup adds no client key', false, isset($partial[$keyKey]));
+T::throws('client cert without CA refuses plaintext fallback',
+          fn() => db_options('', '/client.pem', '', true),
+          RuntimeException::class);
+T::throws('client key without CA refuses plaintext fallback',
+          fn() => db_options('', '', '/client.key', true),
+          RuntimeException::class);
 
 // A refused connect surfaces as PDOException — the exact input get_db's
 // fail-closed catch receives (503 + die, exit-covered over HTTP smoke tests)
