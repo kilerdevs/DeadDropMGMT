@@ -2,7 +2,7 @@
 
 All notable changes to DeadDropMGMT are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is semver.
-## [Unreleased]
+## [1.3.0] - 2026-09-16
 
 ### Security
 - TOTP fails closed on weak secrets: an empty, undecodable, or truncated
