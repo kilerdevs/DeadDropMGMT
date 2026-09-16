@@ -132,6 +132,30 @@ jobs:
           echo "42af2954326f2f6f0c39e12eb0e1229b9e037297e2caec9a5db11d44e4f6cce1  phpstan.phar" | sha256sum -c -
           php phpstan.phar analyse --no-progress
 
+  # Automated formatting gate: the tree must already conform to
+  # .php-cs-fixer.php — the fixer runs read-only (--dry-run) and any
+  # violation fails the build. Fix locally before pushing:
+  #   php php-cs-fixer.phar fix
+  # Tool is version- AND hash-pinned like PHPStan: a compromised release
+  # must not rewrite — or wave through — this repo's code.
+  style:
+    runs-on: ubuntu-latest
+    name: Code style
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: '8.3'
+
+      - name: Run PHP-CS-Fixer (dry-run)
+        run: |
+          curl -fsSL -o php-cs-fixer.phar \
+            https://github.com/PHP-CS-Fixer/PHP-CS-Fixer/releases/download/v3.95.25/php-cs-fixer.phar
+          echo "80cad475fc5112fdbfab8bd66e51665ed78c1b849b918dab81fb63b7a7003b41  php-cs-fixer.phar" | sha256sum -c -
+          php php-cs-fixer.phar fix --config=.php-cs-fixer.php --dry-run --diff --show-progress=none
+
   # Line coverage over includes/ (the security-critical library code).
   # Separate job: needs pcov + the dev-only Composer dependency (ADR-001 keeps
   # runtime dependency-free; composer.json is tooling, never shipped).

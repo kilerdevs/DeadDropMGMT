@@ -182,7 +182,7 @@ $db->exec('SET SESSION sql_mode = ' . $db->quote($mode));
 T::ok('corrupt window status fails closed', rl_status($cscp)['blocked'] === true);
 T::ok('corrupt window spend fails closed', rl_hit($cscp)['blocked'] === true);
 T::eq('corrupt row is not reset by the probe', 2, (int)$db->query(
-    "SELECT count FROM rate_limits WHERE ip_address = " . $db->quote($ip) . " AND scope = '$cscp'")->fetchColumn());
+    'SELECT count FROM rate_limits WHERE ip_address = ' . $db->quote($ip) . " AND scope = '$cscp'")->fetchColumn());
 $db->prepare('DELETE FROM rate_limits WHERE ip_address = ? AND scope = ?')->execute([$ip, $cscp]);
 
 // Cleanup

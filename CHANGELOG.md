@@ -2,6 +2,20 @@
 
 All notable changes to DeadDropMGMT are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is semver.
+## [Unreleased]
+
+### Changed
+- Admin pages boot through a single service kernel
+  (`includes/kernel.php`): the per-page 4–8 line require blocks (32 pages,
+  169 lines) collapse to one require, and the service list lives in one
+  manifest instead of being pasted across every entry script. Services stay
+  plain functions with their own require guards, so tests, cron, and CLI
+  entry points load them directly as before — zero behaviour change
+- Automated formatting gate: `.php-cs-fixer.php` (conservative ruleset —
+  whitespace, quotes, short arrays, strict-types; brace placement and line
+  splitting deliberately out so the gate prevents drift without restyling
+  history) enforced by a new CI `style` job running the version- and
+  hash-pinned fixer phar in `--dry-run`
 ## [1.3.0] - 2026-09-16
 
 ### Security

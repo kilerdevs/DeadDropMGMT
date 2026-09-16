@@ -92,7 +92,7 @@ T::eq('routing disabled means direct fetch',
 
 // Enabled routing with an EMPTY pool must fail closed — never leak direct
 set_setting('osm_proxy_enabled', '1');
-$db->exec("DELETE FROM osm_proxies");
+$db->exec('DELETE FROM osm_proxies');
 T::ok('enabled + empty pool refuses to go direct', osm_fetch("http://127.0.0.1:$port/ok") === false);
 $staged = osm_last_via_stage();
 T::ok('empty-pool failure staged for badge', $staged !== null && $staged['failed'] === true && $staged['attempts'] === 0);
@@ -116,13 +116,13 @@ T::ok('failed attempts marked as fail', $markA !== false && $markA['last_status'
 
 // Winner path: the stub doubles as a fake HTTP proxy — curl sends it the
 // absolute-URI request line, the router answers 200, curl calls it a win.
-$db->exec("DELETE FROM osm_proxies");
+$db->exec('DELETE FROM osm_proxies');
 $db->exec("INSERT INTO osm_proxies (url, label, source, last_status) VALUES ('http://127.0.0.1:$port', 'selfstub', 'manual', 'new')");
 T::eq('working pool member wins', 'STUB-BODY-OK', osm_fetch("http://127.0.0.1:$port/ok"));
 $staged = osm_last_via_stage();
 T::ok('winner staged for badge', is_array($staged) && ($staged['failed'] ?? null) === false
     && ($staged['attempts'] ?? 0) === 1 && ($staged['via'] ?? '') === "http://127.0.0.1:$port");
-$db->exec("DELETE FROM osm_proxies");
+$db->exec('DELETE FROM osm_proxies');
 
 // Pool ordering: previously-ok proxies sort ahead of dead ones regardless of latency
 $pool = [
@@ -223,7 +223,7 @@ T::ok('HEAD-mode batch probe works',
 // fresh ones are left alone. The stub doubles as probe target AND working
 // forward proxy (absolute-URI request line, same as the winner test above);
 // 127.0.0.1:9 is a guaranteed-dead proxy (discard port, refused fast).
-$db->exec("DELETE FROM osm_proxies");
+$db->exec('DELETE FROM osm_proxies');
 $probe = "http://127.0.0.1:$port/ok";
 $db->prepare("INSERT INTO osm_proxies (url, label, source, last_status, last_checked) VALUES (?, 'w', 'test', 'new', NULL)")
    ->execute(["http://127.0.0.1:$port"]);
@@ -240,7 +240,7 @@ $m = $db->query("SELECT last_status, last_checked FROM osm_proxies WHERE url = '
 T::ok('dead entry demoted and timestamped', $m['last_status'] === 'fail' && $m['last_checked'] !== null);
 $m = $db->query("SELECT last_status FROM osm_proxies WHERE url = 'http://127.0.0.1:10'")->fetch();
 T::eq('fresh entry status preserved', 'ok', $m['last_status']);
-$db->exec("DELETE FROM osm_proxies");
+$db->exec('DELETE FROM osm_proxies');
 T::eq('empty pool revalidates to nothing', [], osm_proxy_revalidate_stale(10, 7, $probe));
 
 // Cleanup

@@ -45,7 +45,7 @@ $suiteOutput = [];
 
 foreach ($files as $file) {
     ob_start();
-    echo "=== " . basename($file) . " ===\n";
+    echo '=== ' . basename($file) . " ===\n";
     T::$pass = T::$fail = 0;
     T::$messages = [];
     $cc = $makeCoverage();
