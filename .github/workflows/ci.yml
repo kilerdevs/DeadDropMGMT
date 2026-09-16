@@ -321,7 +321,8 @@ jobs:
           docker compose up -d --build --quiet-pull
           timeout 90 bash -c 'until curl -fs http://127.0.0.1:2137/ >/dev/null; do sleep 2; done'
           curl -fs http://127.0.0.1:2137/ | grep -qi "<title>"
-          [ "$(curl -s http://127.0.0.1:2137/healthz.php)" = "ok" ]
+          hz_body="$(curl -s http://127.0.0.1:2137/healthz.php)"
+          [ "$hz_body" = "ok" ] || { echo "HEALTHZ MISMATCH:"; printf '%s\n' "$hz_body"; curl -si http://127.0.0.1:2137/healthz.php | head -12; exit 1; }
           docker compose exec -T app php docker/e2e_journey.php
           docker compose down -v
 
