@@ -106,6 +106,7 @@ return [
     'admin.bootstrap.explain'       => 'Es existiert noch kein Konto – dieser Server ist neu. Wählen Sie einen Benutzernamen: Er wird zum Owner-Konto mit voller Kontrolle. Das Passwort legen Sie auf dem nächsten Bildschirm fest.',
     'admin.bootstrap.submit_button' => 'Konto anlegen',
     'admin.bootstrap.error.initialized' => 'Auf diesem Server existiert bereits ein Konto – bitte anmelden.',
+    'admin.bootstrap.error.busy' => 'Jemand richtet diesen Server gerade ein — bitte einige Sekunden warten und erneut versuchen.',
     'admin.bootstrap.error.taken'       => 'Dieser Benutzername ist bereits vergeben.',
     'admin.bootstrap.error.create_failed' => 'Konto konnte nicht erstellt werden. Bitte erneut versuchen.',
     'admin.bootstrap.enrollment_note' => 'Wiederherstellungs-Enrollment-Code für Ihr Konto (einmalig sichtbar, 24 h gültig – sicher verwahren): {secret}',

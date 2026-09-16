@@ -93,6 +93,19 @@ $liveLines = file(APP_LOG_PATH, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?
 T::ok('log_info entry lands in the live log',
       str_contains((string)end($liveLines), 'logger_test_info_evt'));
 
+// The log's ip field is the TCP peer, never a proxy header: resolving the
+// client IP here would re-enter get_client_ip() -> log_warn() -> app_log().
+$_SERVER['REMOTE_ADDR'] = '198.51.100.99';
+$_SERVER['HTTP_X_FORWARDED_FOR'] = '203.0.113.5';
+putenv('DDMGMT_TRUST_PROXY=1');
+app_log('info', 'logger_test_peer_ip', ['msg' => 'peer, not header']);
+putenv('DDMGMT_TRUST_PROXY');
+unset($_SERVER['HTTP_X_FORWARDED_FOR'], $_SERVER['REMOTE_ADDR']);
+$liveLines = file(APP_LOG_PATH, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+$lastRec = json_decode((string)end($liveLines), true);
+T::eq('log ip is the TCP peer even behind a trusted proxy',
+      '198.51.100.99', is_array($lastRec) ? ($lastRec['ip'] ?? null) : null);
+
 // Legacy-key entries (pre key-separation history) still verify
 write_chain($p, [$r1, $r2]);
 $rec = ['ts' => '2026-08-26T00:00:03.000Z', 'level' => 'info', 'event' => 't_info', 'msg' => 'entry three'];

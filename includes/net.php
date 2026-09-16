@@ -17,36 +17,12 @@ declare(strict_types=1);
 function get_client_ip(): string {
     $peer = (string)($_SERVER['REMOTE_ADDR'] ?? '0.0.0.0');
     if (_secret('DDMGMT_TRUST_PROXY', '0') === '1') {
-        $cfg = trim(_secret('DDMGMT_TRUSTED_PROXIES', ''));
-        $proxies = $cfg === ''
-            ? ['127.0.0.0/8', '::1/128', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16']
-            : array_map('trim', explode(',', $cfg));
-        $trusted = false;
-        foreach ($proxies as $cidr) {
-            if ($cidr === '') {
-                continue;
-            }
-            // A misparsed range silently falls back to REMOTE_ADDR — safe,
-            // but invisible. Say so once per process instead.
-            if (!_cidr_valid($cidr)) {
-                static $bad_warned = [];
-                if (!isset($bad_warned[$cidr])) {
-                    $bad_warned[$cidr] = true;
-                    log_warn('proxy_cidr_invalid', ['msg' => 'DDMGMT_TRUSTED_PROXIES entry does not parse as IP[/bits] and is ignored', 'cidr' => $cidr]);
-                }
-                continue;
-            }
-            if (_ip_in_cidr($peer, $cidr)) {
-                $trusted = true;
-                break;
-            }
-        }
-        if (!$trusted) {
+        if (!_proxy_peer_trusted($peer)) {
             // Warn once per process: the flag says "behind a proxy" while
             // the connection plainly is not — either the app is reachable
-            // around its proxy or the env var is stale. Static guard breaks
-            // the get_client_ip() <-> app_log() call cycle (the logger asks
-            // this very function for the request IP).
+            // around its proxy or the env var is stale. (No log cycle here:
+            // app_log() records the TCP peer directly, never re-entering
+            // this function — see the note on the ip field in logger.php.)
             static $untrusted_warned = false;
             if (!$untrusted_warned) {
                 $untrusted_warned = true;
@@ -81,6 +57,59 @@ function get_client_ip(): string {
         }
     }
     return $peer;
+}
+
+// Single choke point for "may this request's proxy headers be believed".
+// Both get_client_ip() and request_is_https() answer through here, so a
+// directly-reachable app cannot have its client IP spoofed AND its scheme
+// flipped by the same forged headers. Unset DDMGMT_TRUSTED_PROXIES means
+// loopback + RFC1918 only (same-host nginx/Apache, private docker nets).
+function _proxy_peer_trusted(string $peer): bool {
+    if (_secret('DDMGMT_TRUST_PROXY', '0') !== '1') {
+        return false;
+    }
+    $cfg = trim(_secret('DDMGMT_TRUSTED_PROXIES', ''));
+    $proxies = $cfg === ''
+        ? ['127.0.0.0/8', '::1/128', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16']
+        : array_map('trim', explode(',', $cfg));
+    foreach ($proxies as $cidr) {
+        if ($cidr === '') {
+            continue;
+        }
+        // A misparsed range silently falls back to REMOTE_ADDR — safe,
+        // but invisible. Say so once per process instead.
+        if (!_cidr_valid($cidr)) {
+            static $bad_warned = [];
+            if (!isset($bad_warned[$cidr])) {
+                $bad_warned[$cidr] = true;
+                log_warn('proxy_cidr_invalid', ['msg' => 'DDMGMT_TRUSTED_PROXIES entry does not parse as IP[/bits] and is ignored', 'cidr' => $cidr]);
+            }
+            continue;
+        }
+        if (_ip_in_cidr($peer, $cidr)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// ── Request scheme detection (session cookie "secure" flag, HSTS) ────────────
+// Behind a TLS-terminating reverse proxy PHP sees plain HTTP, so $_SERVER
+//['HTTPS'] lies about the browser-side security context. With
+// DDMGMT_TRUST_PROXY=1 the X-Forwarded-Proto header decides (only the literal
+// "https" counts, first hop of a comma list) — but ONLY from a trusted proxy
+// peer (same _proxy_peer_trusted() gate as get_client_ip()): otherwise anyone
+// reaching the app directly could flip the scheme, planting a "secure" cookie
+// over plain HTTP that the browser then refuses to send back. Without proxy
+// trust PHP's own view wins.
+function request_is_https(): bool {
+    if (_proxy_peer_trusted((string)($_SERVER['REMOTE_ADDR'] ?? '0.0.0.0'))) {
+        $proto = strtolower(trim(explode(',', (string)($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? ''))[0]));
+        if ($proto !== '') {
+            return $proto === 'https';
+        }
+    }
+    return !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off';
 }
 
 // Syntax check for one DDMGMT_TRUSTED_PROXIES entry ("a.b.c.d" or

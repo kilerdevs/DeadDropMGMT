@@ -16,6 +16,9 @@ require_once BASE_DIR . '/includes/cleanup.php';
 
 try {
     $deleted = do_cleanup();
+    // Same maintenance slot as the pseudo-cron: re-probe the stalest pool
+    // entries (bounded, never throws). Available via includes/cleanup.php.
+    osm_proxy_revalidate_stale();
 
     // Sync the pseudo-cron timestamp so the next page visit doesn't double-run
     set_setting('last_cleanup', (string)time());

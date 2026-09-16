@@ -64,6 +64,7 @@ function order_receive_atomic(string $token): bool {
             $db->rollBack();
             return false;
         }
+        _delete_order_events($db, (int)$order['id'], $token);
 
         $db->commit();
         _unlink_order_files((int)$order['id'], $files);
@@ -101,6 +102,7 @@ function order_delete_atomic(int $id): ?array {
             $db->rollBack();
             return null;
         }
+        _delete_order_events($db, $id, is_string($token) ? $token : null);
 
         $db->commit();
         _unlink_order_files($id, $files);
@@ -117,45 +119,64 @@ function order_delete_atomic(int $id): ?array {
 // Expired → deleted, per order, under a row lock so cleanup can safely run
 // concurrently with itself, with receiving, or with revealing. Idempotent:
 // re-running deletes nothing extra and never resurrects partial failures.
-function cleanup_expired_orders(): int {
+// Bounded: one pass handles at most $batch rows (default 200), then the
+// caller repeats while the previous pass was full — a backlog after days
+// without cron stays a series of small transactions instead of one giant
+// SELECT + unbounded loop that max_execution_time kills halfway.
+function cleanup_expired_orders(int $batch = 200): int {
     $db      = get_db();
-    $expired = $db->query(
-        'SELECT id FROM orders WHERE expires_at IS NOT NULL AND expires_at <= NOW()'
-    )->fetchAll();
-
     $deleted = 0;
-    foreach ($expired as $row) {
-        $oid = (int)$row['id'];
-        $db->beginTransaction();
-        try {
-            $lock = $db->prepare(
-                'SELECT id FROM orders WHERE id = ? AND expires_at IS NOT NULL AND expires_at <= NOW() LIMIT 1 FOR UPDATE'
-            );
-            $lock->execute([$oid]);
-            if (!$lock->fetch()) {
-                $db->rollBack(); // someone else got it first — fine
-                continue;
+    do {
+        $expired = $db->query(
+            'SELECT id FROM orders WHERE expires_at IS NOT NULL AND expires_at <= NOW() LIMIT ' . max(1, $batch)
+        )->fetchAll();
+
+        foreach ($expired as $row) {
+            $oid = (int)$row['id'];
+            $db->beginTransaction();
+            try {
+                $lock = $db->prepare(
+                    'SELECT id, order_token FROM orders WHERE id = ? AND expires_at IS NOT NULL AND expires_at <= NOW() LIMIT 1 FOR UPDATE'
+                );
+                $lock->execute([$oid]);
+                $locked = $lock->fetch();
+                if (!$locked) {
+                    $db->rollBack(); // someone else got it first — fine
+                    continue;
+                }
+
+                $photos = $db->prepare('SELECT filename FROM order_photos WHERE order_id = ?');
+                $photos->execute([$oid]);
+                $files = $photos->fetchAll(PDO::FETCH_COLUMN);
+
+                $db->prepare('DELETE FROM orders WHERE id = ?')->execute([$oid]);
+                _delete_order_events($db, $oid, $locked['order_token'] ?? null);
+                $db->commit();
+
+                _unlink_order_files($oid, $files);
+                log_err('Cleanup: deleted expired order #' . $oid);
+                $deleted++;
+            } catch (Exception $e) {
+                if ($db->inTransaction()) {
+                    $db->rollBack();
+                }
+                log_err('Cleanup error on order #' . $oid . ': ' . $e->getMessage());
             }
-
-            $photos = $db->prepare('SELECT filename FROM order_photos WHERE order_id = ?');
-            $photos->execute([$oid]);
-            $files = $photos->fetchAll(PDO::FETCH_COLUMN);
-
-            $db->prepare('DELETE FROM orders WHERE id = ?')->execute([$oid]);
-            $db->commit();
-
-            _unlink_order_files($oid, $files);
-            log_err('Cleanup: deleted expired order #' . $oid);
-            $deleted++;
-        } catch (Exception $e) {
-            if ($db->inTransaction()) {
-                $db->rollBack();
-            }
-            log_err('Cleanup error on order #' . $oid . ': ' . $e->getMessage());
         }
-    }
+    } while (count($expired) === max(1, $batch));
 
     return $deleted;
+}
+
+// The order's own event rows die with it, in the same transaction: lookup /
+// unlock / reveal probes carry IPs and user agents, and keeping them after
+// the order is gone is a privacy liability with no operational value. Both
+// keys are matched — analytics rows sometimes carry only the token (no id).
+// A flow's own post-delete log_event() (e.g. 'received') lands AFTERWARDS,
+// so the deletion itself stays on record as a single terminal row.
+function _delete_order_events(PDO $db, int $order_id, ?string $token): void {
+    $db->prepare('DELETE FROM order_events WHERE order_id = ? OR order_token = ?')
+       ->execute([$order_id, $token]);
 }
 
 // Best-effort filesystem sweep AFTER the DB rows are gone. Filenames come
@@ -168,7 +189,9 @@ function _unlink_order_files(int $order_id, array $files): void {
         }
     }
     $dir = dirname(__DIR__) . '/uploads/' . $order_id . '/';
-    if (is_dir($dir) && count(glob($dir . '*')) === 0) {
+    // glob_list(): a bare glob() answers false on unreadable dirs, and
+    // count(false) is a TypeError on PHP 8+, crashing the whole deletion.
+    if (is_dir($dir) && count(glob_list($dir . '*')) === 0) {
         @rmdir($dir);
     }
 }

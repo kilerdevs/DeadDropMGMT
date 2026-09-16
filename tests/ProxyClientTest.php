@@ -207,6 +207,30 @@ $resHead = proxy_multi_probe(['http://127.0.0.1:1'], "http://127.0.0.1:$port/ok"
 T::ok('HEAD-mode batch probe works',
       isset($resHead['http://127.0.0.1:1']) && ($resHead['http://127.0.0.1:1'][0] ?? -1) === 0);
 
+// Stale-pool revalidation: never-checked and week-old entries get probed,
+// fresh ones are left alone. The stub doubles as probe target AND working
+// forward proxy (absolute-URI request line, same as the winner test above);
+// 127.0.0.1:9 is a guaranteed-dead proxy (discard port, refused fast).
+$db->exec("DELETE FROM osm_proxies");
+$probe = "http://127.0.0.1:$port/ok";
+$db->prepare("INSERT INTO osm_proxies (url, label, source, last_status, last_checked) VALUES (?, 'w', 'test', 'new', NULL)")
+   ->execute(["http://127.0.0.1:$port"]);
+$db->exec("INSERT INTO osm_proxies (url, label, source, last_status, last_checked)
+           VALUES ('http://127.0.0.1:9', 'd', 'test', 'ok', DATE_SUB(NOW(), INTERVAL 8 DAY))");
+$db->exec("INSERT INTO osm_proxies (url, label, source, last_status, last_checked)
+           VALUES ('http://127.0.0.1:10', 'f', 'test', 'ok', NOW())");
+$res = osm_proxy_revalidate_stale(10, 7, $probe);
+T::eq('stale sweep returns verdicts for due entries only', 2, count($res));
+T::ok('working entry re-marked ok', ($res["http://127.0.0.1:$port"] ?? null) === true);
+T::ok('dead entry re-marked fail', ($res['http://127.0.0.1:9'] ?? null) === false);
+T::ok('fresh entry untouched', !isset($res['http://127.0.0.1:10']));
+$m = $db->query("SELECT last_status, last_checked FROM osm_proxies WHERE url = 'http://127.0.0.1:9'")->fetch();
+T::ok('dead entry demoted and timestamped', $m['last_status'] === 'fail' && $m['last_checked'] !== null);
+$m = $db->query("SELECT last_status FROM osm_proxies WHERE url = 'http://127.0.0.1:10'")->fetch();
+T::eq('fresh entry status preserved', 'ok', $m['last_status']);
+$db->exec("DELETE FROM osm_proxies");
+T::eq('empty pool revalidates to nothing', [], osm_proxy_revalidate_stale(10, 7, $probe));
+
 // Cleanup
 $db->exec("DELETE FROM osm_proxies WHERE url LIKE 'http://127.0.0.1:%'");
 set_setting('osm_proxy_enabled', '0');

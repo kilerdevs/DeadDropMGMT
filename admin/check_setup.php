@@ -23,7 +23,7 @@ $limited = false;
 try {
     // Read-only probe: no state changes, so the CSRF token is verified but
     // not consumed — per-keystroke calls keep working from one page render.
-    if (!verify_csrf($_SERVER['HTTP_X_CSRF_TOKEN'] ?? '', rotate: false)) {
+    if (!verify_csrf_readonly($_SERVER['HTTP_X_CSRF_TOKEN'] ?? '')) {
         $limited = true; // indistinguishable slow-down for bad requests
     } else {
         $hit = rl_hit('admin_setup', 30);

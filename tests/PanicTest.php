@@ -14,9 +14,9 @@ foreach (['orders', 'order_photos', 'order_events', 'audit_log', 'rate_limits'] 
     $db->exec("DELETE FROM $t");
 }
 $db->exec('SET FOREIGN_KEY_CHECKS = 1');
-foreach (glob($up . '/*', GLOB_ONLYDIR) ?: [] as $d) { @chmod($d, 0770); }
-foreach (glob($up . '/*/*') ?: [] as $f) { @unlink($f); }
-foreach (glob($up . '/*', GLOB_ONLYDIR) ?: [] as $d) { @rmdir($d); }
+foreach (glob_list($up . '/*', GLOB_ONLYDIR) as $d) { @chmod($d, 0770); }
+foreach (glob_list($up . '/*/*') as $f) { @unlink($f); }
+foreach (glob_list($up . '/*', GLOB_ONLYDIR) as $d) { @rmdir($d); }
 
 $mkOrder = static function (string $token, string $status) use ($db): int {
     $delivered = $status === 'delivered' ? 'NOW()' : 'NULL';

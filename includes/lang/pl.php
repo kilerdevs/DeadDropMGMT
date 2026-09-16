@@ -106,6 +106,7 @@ return [
     'admin.bootstrap.explain'       => 'Nie istnieje jeszcze żadne konto — ten serwer jest świeży. Wybierz nazwę użytkownika: stanie się ona kontem właściciela z pełną kontrolą. Hasło wybierzesz na następnym ekranie.',
     'admin.bootstrap.submit_button' => 'Utwórz konto',
     'admin.bootstrap.error.initialized' => 'Na tym serwerze istnieje już konto — zaloguj się.',
+    'admin.bootstrap.error.busy' => 'Ktoś właśnie przejmuje ten serwer — odczekaj kilka sekund i spróbuj ponownie.',
     'admin.bootstrap.error.taken'       => 'Ta nazwa użytkownika jest już zajęta.',
     'admin.bootstrap.error.create_failed' => 'Nie udało się utworzyć konta. Spróbuj ponownie.',
     'admin.bootstrap.enrollment_note' => 'Zapasowy kod enrollmentu Twojego konta (pokazany raz, ważny 24 h — zapisz go w bezpiecznym miejscu): {secret}',

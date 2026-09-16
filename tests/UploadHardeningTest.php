@@ -165,12 +165,21 @@ imagejpeg($img, "$tmpdir/big.jpg", 90);
 imagedestroy($img);
 T::ok('exhausted JPEG reduce loop fails cleanly', _compress_image("$tmpdir/big.jpg", "$tmpdir/tiny.jpg", 'image/jpeg', 10) === false);
 
+// Pixel ceiling: a header-only PNG claiming 5000x5000 (25 MP over the 16 MP
+// cap) is refused before GD ever decodes — getimagesize reads the IHDR, so
+// the probe file is ~50 bytes and allocates nothing.
+$tmpBomb = "$tmpdir/bomb.png";
+$ihdr = pack('N', 13) . 'IHDR' . pack('N', 5000) . pack('N', 5000) . "\x08\x02\x00\x00\x00";
+file_put_contents($tmpBomb, "\x89PNG\r\n\x1a\n" . $ihdr . pack('N', crc32(substr($ihdr, 4))));
+$oid = 910099; _uh_track($oid);
+T::ok('over-cap pixel dimensions refused', save_uploaded_photo(_uh_entry($tmpBomb), $oid, 2 * 1024 * 1024) === false);
+
 // Cleanup: files + rows
 foreach ($orderIds as $oidDel) {
-    foreach (glob("$up/$oidDel/*") ?: [] as $f) { @unlink($f); }
+    foreach (glob_list("$up/$oidDel/*") as $f) { @unlink($f); }
     @rmdir("$up/$oidDel");
 }
-foreach (glob($tmpdir . '/*') ?: [] as $f) { @unlink($f); }
+foreach (glob_list($tmpdir . '/*') as $f) { @unlink($f); }
 @rmdir($tmpdir);
 
 exit(T::done());

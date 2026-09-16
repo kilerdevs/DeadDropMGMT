@@ -106,6 +106,7 @@ return [
     'admin.bootstrap.explain'       => 'Non esiste ancora nessun account: questo server è appena stato installato. Scegli un nome utente: diventerà l’account proprietario con controllo totale. Imposterai la password nella schermata successiva.',
     'admin.bootstrap.submit_button' => 'Crea account',
     'admin.bootstrap.error.initialized' => 'Su questo server esiste già un account: accedi.',
+    'admin.bootstrap.error.busy' => 'Qualcuno sta reclamando questo server — attendi qualche secondo e riprova.',
     'admin.bootstrap.error.taken'       => 'Questo nome utente è già in uso.',
     'admin.bootstrap.error.create_failed' => 'Impossibile creare l’account. Riprova.',
     'admin.bootstrap.enrollment_note' => 'Codice di registrazione di recupero per il tuo account (mostrato una sola volta, valido 24 h — conservalo in un posto sicuro): {secret}',

@@ -29,6 +29,20 @@ rl_increment($scope);
 $s = rl_status($scope);
 T::ok('blocked at limit', $s['blocked'] === true && $s['count'] === 3);
 
+// Boundary agreement between the read path and the spend path: stored >=
+// max and stored+1 > max are the SAME predicate for integer counts, so a
+// "blocked" cooldown never hides a remaining attempt (and vice versa).
+$bscope = 'test_boundary';
+$db->prepare('DELETE FROM rate_limits WHERE ip_address = ? AND scope = ?')->execute([$ip, $bscope]);
+rl_increment($bscope); rl_increment($bscope); // count = max-1
+T::ok('status allows at max-1', !rl_status($bscope)['blocked']);
+$last = rl_hit($bscope); // the max-th attempt still executes
+T::ok('hit executes the max-th attempt', !$last['blocked'] && $last['count'] === 3);
+T::ok('status blocks exactly at max', rl_status($bscope)['blocked']);
+$denied = rl_hit($bscope);
+T::ok('hit denies past max', $denied['blocked'] && $denied['count'] === 4);
+$db->prepare('DELETE FROM rate_limits WHERE ip_address = ? AND scope = ?')->execute([$ip, $bscope]);
+
 // Scope isolation: other surface unaffected by this budget
 rl_increment('test_admin_login');
 T::ok('separate scope has own budget', !rl_status('test_admin_login')['blocked']);
@@ -149,6 +163,25 @@ T::ok('broken limiter blocks (fail closed)', ($fc['blocked'] ?? false) === true)
 T::ok('fail-closed block carries a cooldown', (int)($fc['remaining'] ?? 0) > 0);
 $s = rl_status($scope);
 T::eq('rate_limits table restored after probe (data intact)', 2, rl_status($scope)['count']);
+
+// Corrupt window_start fails CLOSED: strtotime() answers false for values
+// the column should never hold (legacy zero-dates, damaged rows), and the
+// old code read that as "window started in 1970" — silently resetting the
+// budget so the row could never block. Zero-dates need a relaxed session
+// sql_mode to store (MySQL 8 rejects them strictly); the mode is captured
+// and restored so later suites in this process are unaffected.
+$cscp = 'test_corrupt';
+$db->prepare('DELETE FROM rate_limits WHERE ip_address = ? AND scope = ?')->execute([$ip, $cscp]);
+$mode = (string)$db->query('SELECT @@SESSION.sql_mode')->fetchColumn();
+$db->exec("SET SESSION sql_mode = ''");
+$db->prepare("INSERT INTO rate_limits (ip_address, scope, count, window_start) VALUES (?, ?, 2, '0000-00-00 00:00:00')")
+   ->execute([$ip, $cscp]);
+$db->exec('SET SESSION sql_mode = ' . $db->quote($mode));
+T::ok('corrupt window status fails closed', rl_status($cscp)['blocked'] === true);
+T::ok('corrupt window spend fails closed', rl_hit($cscp)['blocked'] === true);
+T::eq('corrupt row is not reset by the probe', 2, (int)$db->query(
+    "SELECT count FROM rate_limits WHERE ip_address = " . $db->quote($ip) . " AND scope = '$cscp'")->fetchColumn());
+$db->prepare('DELETE FROM rate_limits WHERE ip_address = ? AND scope = ?')->execute([$ip, $cscp]);
 
 // Cleanup
 $db->prepare('DELETE FROM rate_limits WHERE ip_address = ?')->execute([$ip]);

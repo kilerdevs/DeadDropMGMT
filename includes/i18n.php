@@ -70,7 +70,9 @@ function tn(string $key, int $n, array $params = []): string {
              ?? $enDict["{$key}.{$cat}"] ?? $enDict["{$key}.other"] ?? $key;
     $params['n'] = $params['n'] ?? $n;
     foreach ($params as $k => $v) {
-        $str = str_replace('{' . $k . '}', (string)$v, $str);
+        // Same sink-escaping as t(): tn() output renders into HTML, so a
+        // request-derived parameter must never carry markup through it.
+        $str = str_replace('{' . $k . '}', htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8'), $str);
     }
     return $str;
 }

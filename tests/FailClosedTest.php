@@ -31,13 +31,34 @@ $nonce_pub_https = set_security_headers();
 T::eq('public nonce decodes to 18 bytes', 18, strlen(base64_decode($nonce_pub_https, true) ?: ''));
 
 putenv('DDMGMT_TRUST_PROXY=1');
+$origRemote = $_SERVER['REMOTE_ADDR'] ?? null;
+$_SERVER['REMOTE_ADDR'] = '127.0.0.1';
 $_SERVER['HTTP_X_FORWARDED_PROTO'] = 'https';
 T::ok('trusted proxy XFP https detected', request_is_https());
 set_security_headers(); // HSTS via proxy-reported scheme
+
+// Same header from an untrusted peer must not flip the scheme (shared
+// _proxy_peer_trusted() gate with get_client_ip()). HTTPS is cleared here
+// so the assertion isolates the XFP path from PHP's own view below.
+$_SERVER['REMOTE_ADDR'] = '198.51.100.77';
+$httpsKept = $_SERVER['HTTPS'] ?? null;
+$_SERVER['HTTPS'] = '';
+T::ok('untrusted peer XFP https ignored', !request_is_https());
+if ($httpsKept === null) {
+    unset($_SERVER['HTTPS']);
+} else {
+    $_SERVER['HTTPS'] = $httpsKept;
+}
+$_SERVER['REMOTE_ADDR'] = '127.0.0.1';
 $_SERVER['HTTP_X_FORWARDED_PROTO'] = 'http';
 T::ok('trusted proxy XFP http NOT https', !request_is_https());
 putenv('DDMGMT_TRUST_PROXY=0');
 unset($_SERVER['HTTP_X_FORWARDED_PROTO']);
+if ($origRemote === null) {
+    unset($_SERVER['REMOTE_ADDR']);
+} else {
+    $_SERVER['REMOTE_ADDR'] = $origRemote;
+}
 
 $_SERVER['HTTPS'] = '';
 $nonce_admin = set_security_headers(true);

@@ -258,13 +258,15 @@ function save_uploaded_photo(array $file_entry, int $order_id, int $max_bytes = 
     }
 
     // Decompression-bomb guard: read the header only, refuse absurd pixel
-    // counts before GD ever decodes (a decoded 32-bit pixel buffer for the
-    // cap below would still be ~200 MB, anything larger is hostile).
+    // counts before GD ever decodes. 16 MP (4096x4096) is the ceiling: a
+    // decoded 32-bit buffer is already 64 MB, and GD holds several copies
+    // during resample — anything larger risks OOM on a 256 MB PHP limit
+    // while adding nothing to a re-encode capped at 12 MB.
     $dim = @getimagesize($file_entry['tmp_name']);
     if ($dim === false || $dim[0] <= 0 || $dim[1] <= 0) {
         return false;
     }
-    if ($dim[0] * (int)$dim[1] > 50_000_000) {
+    if ($dim[0] * (int)$dim[1] > 16_777_216) {
         return false;
     }
 
