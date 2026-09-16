@@ -75,6 +75,26 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   their dry-run transaction before exiting; `edit.php` surfaces per-photo
   upload errors like `create.php`; `user_action` password/2FA changes
   report failure when no row matched; deliver TTL clamps to 1-720 h
+- First-run screens: the intro paragraph keeps its spacing (the global
+  reset had glued it to the first form label), and the one-time recovery
+  enrollment code renders in an amber informational box instead of
+  error-red — red means something failed, this is something to keep.
+  The 64-char code also wraps instead of overflowing the column on
+  narrow screens
+- The enrollment code survives failed password attempts: it was consumed
+  from the session on first render, so a too-short or mismatched password
+  hid the only copy the creator would ever see. It now persists until the
+  password is set (or the setup window lapses), and is consumed on claim
+- Stale CSRF token on re-rendered setup/2FA forms: `verify_csrf()`
+  rotates the session token on success, but `setup_password.php` and
+  `verify_2fa.php` embedded the pre-rotation value captured at the top of
+  the script — so the submit AFTER any failed attempt died with "Invalid
+  CSRF token". Both re-capture the fresh token after a successful verify
+- Form, settings, 2FA and panic panels center on the screen, not on the
+  parent div (which sits right of center once the fixed sidebar takes its
+  share): desktop-only relative offset of half the sidebar width.
+  Relative, not transform, so `position:fixed` descendants stay
+  viewport-anchored; mobile (drawer sidebar, full-width content) untouched
 
 ### Changed
 - PHP 8.5 readiness: CI test matrix adds 8.5 (the shipped Docker images

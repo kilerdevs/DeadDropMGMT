@@ -635,7 +635,27 @@ input[type="range"]::-moz-range-track { height: 2px; background: var(--border); 
 
 /* ── Form panels ─────────────────────────────────────────────────────────── */
 
-.form-panel { border: 1px solid var(--border); padding: 36px; max-width: 680px; }
+.form-panel { border: 1px solid var(--border); padding: 36px; max-width: 680px; margin-inline: auto; }
+
+/* Viewport-centered panels: `margin-inline: auto` alone centers within
+   .main (the viewport minus the fixed 230px sidebar), so a "centered"
+   panel lands right of the true screen center. The relative offset pulls
+   it left by half the sidebar width. Relative positioning — not transform —
+   so position:fixed descendants (e.g. the settings .save-popup, appended
+   to body) stay viewport-anchored. Desktop only: on mobile the sidebar is
+   an off-canvas drawer and .main already spans the full width. Applies to
+   panels that are direct children of .main. */
+@media (min-width: 781px) {
+    .form-panel,
+    .settings-panel,
+    .totp-panel,
+    .centered-panel,
+    .panic-wrap,
+    .users-add-panel {
+        position: relative;
+        left: -115px; /* half the desktop sidebar width */
+    }
+}
 
 /* Centered panels for the settings and 2FA screens */
 .settings-panel { margin-inline: auto; }
@@ -668,6 +688,16 @@ label .hint {
     color:       var(--text-muted);
     line-height: 1.6;
     margin:      -18px 0 30px;
+}
+
+/* Intro paragraph on the first-run and set-password screens. The global
+   reset zeroes <p> margins, which used to glue this text to the first
+   form label with no breathing room at all. */
+.setup-explain {
+    font-size:     15px;
+    color:         var(--text);
+    line-height:   1.75;
+    margin-bottom: 28px;
 }
 
 input[type="text"],
@@ -792,6 +822,21 @@ input[type="file"]::file-selector-button:hover { background: var(--accent); colo
 }
 
 .flash.ok { border-left-color: var(--success); color: var(--success); }
+
+/* Informational notice — deliberately NOT error-red (see .alert above):
+   the one-time enrollment code is something to keep, not a failure.
+   Amber matches .expiry-timer.warning; the long secret must wrap instead
+   of overflowing the column (it is 64 unbroken hex chars). */
+.notice {
+    padding:        13px 18px;
+    border-left:    2px solid #e8a020;
+    color:          #e8a020;
+    font-family:    'IBM Plex Mono', monospace;
+    font-size:      12px;
+    letter-spacing: 0.05em;
+    margin-bottom:  24px;
+    overflow-wrap:  break-word;
+}
 
 .flash-link {
     color:           inherit;
@@ -1011,7 +1056,7 @@ h1 {
 
 /* ── Panic page ──────────────────────────────────────────────────────────── */
 
-.panic-wrap { max-width: 520px; }
+.panic-wrap { max-width: 520px; margin-inline: auto; }
 
 .panic-step {
     font-family:    'IBM Plex Mono', monospace;
@@ -1428,7 +1473,7 @@ h1 {
 
     /* ── Flash / alerts ──────────────────────────────────────────────── */
 
-    .flash, .alert { font-size: 11px; }
+    .flash, .alert, .notice { font-size: 11px; }
 
     /* ── Extend buttons row in edit ──────────────────────────────────── */
 

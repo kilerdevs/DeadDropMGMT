@@ -14,7 +14,7 @@ $pending_ts  = (int)($_SESSION['pending_setup_time']   ?? 0);
 
 // Pending state expires after 5 minutes — back to the login form.
 if ($pending_uid <= 0 || (time() - $pending_ts) > 300) {
-    unset($_SESSION['pending_setup_user_id'], $_SESSION['pending_setup_time']);
+    unset($_SESSION['pending_setup_user_id'], $_SESSION['pending_setup_time'], $_SESSION['enrollment_flash']);
     header('Location: /admin/index.php');
     exit;
 }
@@ -24,13 +24,19 @@ $error = '';
 // One-time: the enrollment secret issued at account creation (owner bootstrap
 // or courier creation). Shown here because this is the only screen the
 // creator is guaranteed to see before the secret's context scrolls away.
+// Deliberately NOT consumed on render: a failed attempt (too short,
+// mismatch, bad CSRF) must re-show the code — this screen holds the only
+// copy the creator will ever see. Consumed on the terminal paths below.
 $enrollment_note = (string)($_SESSION['enrollment_flash'] ?? '');
-unset($_SESSION['enrollment_flash']);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!verify_csrf($_POST['csrf_token'] ?? '')) {
         $error = t('admin.setup.error.csrf');
     } else {
+        // verify_csrf() rotates on success, invalidating the token captured
+        // at the top: an error re-render below must embed the fresh value,
+        // or the next submit dies with "Invalid CSRF token".
+        $csrf = generate_csrf();
         $pw1 = (string)($_POST['password']  ?? '');
         $pw2 = (string)($_POST['password2'] ?? '');
 
@@ -51,7 +57,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt->execute([password_hash($pw1, PASSWORD_BCRYPT, ['cost' => 12]), $pending_uid]);
 
                 if ($stmt->rowCount() === 0) {
-                    unset($_SESSION['pending_setup_user_id'], $_SESSION['pending_setup_time']);
+                    unset($_SESSION['pending_setup_user_id'], $_SESSION['pending_setup_time'], $_SESSION['enrollment_flash']);
                     $_SESSION['login_error'] = t('admin.setup.error.claimed');
                     header('Location: /admin/index.php');
                     exit;
@@ -69,7 +75,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         session_regenerate_id(true);
                         $_SESSION['pending_2fa_user_id'] = (int)$user['id'];
                         $_SESSION['pending_2fa_time']    = time();
-                        unset($_SESSION['csrf_token'], $_SESSION['pending_setup_user_id'], $_SESSION['pending_setup_time']);
+                        unset($_SESSION['csrf_token'], $_SESSION['pending_setup_user_id'], $_SESSION['pending_setup_time'], $_SESSION['enrollment_flash']);
                         header('Location: /admin/verify_2fa.php');
                         exit;
                     }
@@ -81,6 +87,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         false,
                         (string)($user['lang'] ?? 'en')
                     );
+                    // Password set: the enrollment secret is burned server-side
+                    // above, so its displayed copy is consumed here too.
+                    unset($_SESSION['enrollment_flash']);
                     header('Location: /admin/orders.php');
                     exit;
                 }
@@ -110,7 +119,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <div class="alert"><?= $error ?></div>
     <?php endif; ?>
     <?php if ($enrollment_note !== ''): ?>
-    <div class="alert"><?= $enrollment_note ?></div>
+    <!-- Informational, not an error: amber .notice, never the red .alert. -->
+    <div class="notice"><?= $enrollment_note ?></div>
     <?php endif; ?>
     <p class="setup-explain"><?= t('admin.setup.explain') ?></p>
     <form method="POST" action="/admin/setup_password.php" autocomplete="off">

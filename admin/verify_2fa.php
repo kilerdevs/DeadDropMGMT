@@ -28,6 +28,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!verify_csrf($_POST['csrf_token'] ?? '')) {
         $error = t('admin.verify2fa.error.csrf');
     } else {
+        // verify_csrf() rotates on success, invalidating the token captured
+        // at the top: a wrong-code re-render below must embed the fresh
+        // value, or the next attempt dies with "Invalid CSRF token".
+        $csrf = generate_csrf();
         $rl = rl_status('admin_2fa');
         if ($rl['blocked']) {
             $error = t('admin.verify2fa.error.rate_limited', ['min' => (int)ceil($rl['remaining'] / 60)]);
