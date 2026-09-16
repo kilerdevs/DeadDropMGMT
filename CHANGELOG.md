@@ -3,7 +3,7 @@
 All notable changes to DeadDropMGMT are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is semver.
 
-## [Unreleased]
+## [1.2.0] - 2026-09-16
 
 ### Security
 - `X-Forwarded-Proto` is now covered by the same trusted-peer gate as the IP
