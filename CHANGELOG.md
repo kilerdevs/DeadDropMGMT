@@ -5,6 +5,8 @@ All notable changes to DeadDropMGMT are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-09-16
+
 ### Added
 - Coverage climbs to ~88% overall across `includes/`: `net.php` hits 100%
   (CIDR/IP logic fully pinned), `cleanup.php` 89% (dice and sweep pass
