@@ -84,6 +84,32 @@ foreach ($others as $f) {
 }
 T::ok('non-admin entry points scanned', count($others) === 8);
 
+// ── No function collisions with the service layer ───────────────────────────
+// PHP function names are case-insensitive: an entry script defining T()
+// fatals against i18n's t() the moment the kernel loads it (silent 255
+// under display_errors=0 — this exact crash killed the CI container
+// journey). Every function an entry point defines must be unique across
+// the whole loaded set.
+$serviceFuncs = [];
+foreach (glob($root . '/includes/*.php') as $f) {
+    if (basename($f) === 'kernel.php') {
+        continue;
+    }
+    preg_match_all('/^function\s+(\w+)/mi', (string)file_get_contents($f), $m);
+    foreach ($m[1] as $n) {
+        $serviceFuncs[strtolower($n)] = basename($f);
+    }
+}
+$entryFiles = array_merge(glob($root . '/admin/*.php') ?: [], $others);
+foreach ($entryFiles as $f) {
+    preg_match_all('/^function\s+(\w+)/mi', (string)file_get_contents($f), $m);
+    foreach (array_unique($m[1]) as $n) {
+        $k = strtolower($n);
+        T::ok('entry ' . basename($f) . " defines $n() without service collision",
+            !isset($serviceFuncs[$k]));
+    }
+}
+
 exit(T::done());
 
 // Asserts one entry script loads services only via the kernel; returns 1
