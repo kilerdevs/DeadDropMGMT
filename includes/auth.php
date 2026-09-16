@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 require_once dirname(__DIR__) . '/config.php';
+require_once __DIR__ . '/net.php';
 
 // ── Session ───────────────────────────────────────────────────────────────────
 
@@ -20,7 +21,9 @@ function start_secure_session(): void {
 // ── Identity helpers ──────────────────────────────────────────────────────────
 
 function is_admin_logged_in(): bool {
-    return !empty($_SESSION['user_id']) && !empty($_SESSION['user_role']);
+    // isset, not !empty: the config-fallback owner authenticates with
+    // user_id 0 (no users row exists yet) and must stay logged in.
+    return isset($_SESSION['user_id']) && !empty($_SESSION['user_role']);
 }
 
 function is_owner(): bool {
@@ -137,10 +140,14 @@ function admin_login(string $username, string $password): string {
 
     // Accounts awaiting first login carry no password: the enrollment secret
     // issued at account creation is the claim credential — knowing only the
-    // username must never reach the setup step. Anything else just fails.
+    // username must never reach the setup step. Anything else just fails,
+    // after burning the same bcrypt cost as every other rejection so the
+    // empty-hash branch is not a timing oracle for "this account exists
+    // and awaits enrollment".
     if ($hash === '') {
         $enrollment = trim((string)($_POST['enrollment'] ?? ''));
         if ($password !== '' || $enrollment === '' || !enrollment_secret_valid((int)$user['id'], $enrollment)) {
+            password_verify($password, DUMMY_AUTH_HASH);
             return 'fail';
         }
         session_regenerate_id(true);
@@ -175,6 +182,12 @@ function admin_logout(): void {
             $p['path'], $p['domain'], $p['secure'], $p['httponly']);
     }
     session_destroy();
+    // Tell the browser to drop everything this origin kept: bfcache pages,
+    // localStorage, service workers. Server-side the session is already
+    // dead; this closes the shared-computer gap where a cached admin page
+    // could still be rendered from browser storage. No-op without a secure
+    // context, harmless otherwise.
+    header('Clear-Site-Data: "cache", "cookies", "storage"');
 }
 
 // ── CSRF ──────────────────────────────────────────────────────────────────────
@@ -187,10 +200,36 @@ function generate_csrf(): string {
     return $_SESSION['csrf_token'];
 }
 
-function verify_csrf(string $token): bool {
+function verify_csrf(string $token, bool $rotate = true): bool {
     start_secure_session();
     if (empty($_SESSION['csrf_token'])) return false;
-    return hash_equals($_SESSION['csrf_token'], $token);
+    if (!hash_equals($_SESSION['csrf_token'], $token)) {
+        return false;
+    }
+    // One token, one use: a token stolen by XSS (or leaked via referer/
+    // history) cannot be replayed for further state-changing requests —
+    // every successful verification mints a fresh value. Form flows pick
+    // the new token up on the next render; endpoints answering via fetch
+    // must include it in their JSON response so the caller can continue.
+    // Read-only probes ($rotate = false) reveal nothing an attacker could
+    // reuse, and skipping the churn there keeps high-frequency callers
+    // (per-keystroke setup checks) from desyncing their token.
+    if ($rotate) {
+        $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+    }
+    return true;
+}
+
+// JSON reply for fetch-called endpoints. Because verify_csrf() rotates the
+// session token on success, every state-changing AJAX response must hand the
+// caller its next token — otherwise the second request from a page that was
+// rendered once would fail CSRF forever.
+function json_out(array $payload, int $status = 200): never {
+    http_response_code($status);
+    header('Content-Type: application/json; charset=utf-8');
+    $payload += ['csrf' => generate_csrf()];
+    echo json_encode($payload, JSON_UNESCAPED_UNICODE);
+    exit;
 }
 
 // ── Security headers ──────────────────────────────────────────────────────────
@@ -285,14 +324,14 @@ function rl_status(string $scope = 'public'): array {
 // increment can be lost and two simultaneous visitors can never both see
 // "one attempt left". The returned 'blocked' verdict comes from the
 // post-increment count of that single state transition.
-function rl_hit(string $scope = 'public'): array {
+function rl_hit(string $scope = 'public', ?int $max_override = null, ?int $window_override = null): array {
     if (!rl_enabled()) {
         return ['blocked' => false, 'remaining' => 0, 'count' => 0];
     }
     require_once dirname(__DIR__) . '/includes/settings.php';
     $ip     = get_client_ip();
-    $max    = rl_max();
-    $window = rl_window_seconds();
+    $max    = $max_override ?? rl_max();
+    $window = $window_override ?? rl_window_seconds();
     $db     = get_db();
     try {
         $db->beginTransaction();

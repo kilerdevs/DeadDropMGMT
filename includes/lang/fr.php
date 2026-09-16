@@ -69,6 +69,7 @@ return [
     'public.receive.rate_limited'  => 'Trop de tentatives — attendez {min} min.',
     'public.receive.error.server'  => 'Erreur serveur. Veuillez réessayer.',
 
+    'public.receive.error.locked' => 'La confirmation de réception a expiré. Déverrouillez à nouveau la commande avec le mot de passe, puis confirmez.',
     'public.receive.error.invalid_state' => 'Cette commande ne peut pas être réceptionnée : elle n\'est pas prête ou l\'a déjà été.',
     'public.receive.title.done'    => 'Reçu',
     'public.receive.title.confirm' => 'Confirmer le retrait',

@@ -69,6 +69,7 @@ return [
     'public.receive.rate_limited'  => 'Zu viele Versuche — warten Sie {min} Min.',
     'public.receive.error.server'  => 'Serverfehler. Bitte versuchen Sie es erneut.',
 
+    'public.receive.error.locked' => 'Die Empfangsbestätigung ist abgelaufen. Entsperre die Bestellung erneut mit dem Abholpasswort und bestätige dann.',
     'public.receive.error.invalid_state' => 'Diese Bestellung kann nicht abgeholt werden – sie ist nicht zur Abholung freigegeben oder wurde bereits abgeholt.',
     'public.receive.title.done'    => 'Erhalten',
     'public.receive.title.confirm' => 'Abholung bestätigen',

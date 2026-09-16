@@ -12,15 +12,11 @@ start_secure_session();
 require_owner();
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    http_response_code(405);
-    echo json_encode(['error' => 'Method not allowed']);
-    exit;
+    json_out(['error' => 'Method not allowed'], 405);
 }
 
 if (!verify_csrf($_POST['csrf_token'] ?? '')) {
-    http_response_code(403);
-    echo json_encode(['error' => 'CSRF']);
-    exit;
+    json_out(['error' => 'CSRF'], 403);
 }
 
 $key   = $_POST['key']   ?? '';
@@ -39,9 +35,7 @@ $limits   = [
 $allowed  = array_merge(['site_name','extend_hours_options','default_lang'], $numeric, $booleans);
 
 if (!in_array($key, $allowed, true)) {
-    http_response_code(400);
-    echo json_encode(['error' => 'Invalid key']);
-    exit;
+    json_out(['error' => 'Invalid key'], 400);
 }
 
 if (in_array($key, $booleans, true)) {
@@ -50,9 +44,7 @@ if (in_array($key, $booleans, true)) {
     $n = in_array($key, $floats) ? round((float)$value, 2) : (int)$value;
     [$min, $max] = $limits[$key];
     if ($n < $min || $n > $max) {
-        http_response_code(422);
-        echo json_encode(['error' => t('admin.settings.js.range_error', ['min' => (string)$min, 'max' => (string)$max])]);
-        exit;
+        json_out(['error' => t('admin.settings.js.range_error', ['min' => (string)$min, 'max' => (string)$max])], 422);
     }
     $value = (string)$n;
 } elseif ($key === 'extend_hours_options') {
@@ -60,9 +52,7 @@ if (in_array($key, $booleans, true)) {
     foreach (explode(',', $value) as $part) {
         $n = (int)trim($part);
         if ($n <= 0) {
-            http_response_code(422);
-            echo json_encode(['error' => t('admin.settings.js.extend_hours_error')]);
-            exit;
+            json_out(['error' => t('admin.settings.js.extend_hours_error')], 422);
         }
     }
 } elseif ($key === 'site_name') {
@@ -74,19 +64,15 @@ if (in_array($key, $booleans, true)) {
     // Every other allowed key was handled above, so $key is 'default_lang'
     // here — validate the language and keep the raw (select-provided) value.
     if (!in_array($value, i18n_supported_langs(), true)) {
-        http_response_code(422);
-        echo json_encode(['error' => 'Invalid language']);
-        exit;
+        json_out(['error' => 'Invalid language'], 422);
     }
 }
 
 try {
     set_setting($key, $value);
     audit('setting_change', null, null, "{$key}={$value}");
-    echo json_encode(['ok' => true]);
+    json_out(['ok' => true]);
 } catch (Exception $e) {
     log_err('Setting auto-save: ' . $e->getMessage());
-    http_response_code(500);
-    echo json_encode(['error' => 'Save failed']);
+    json_out(['error' => 'Save failed'], 500);
 }
-exit;

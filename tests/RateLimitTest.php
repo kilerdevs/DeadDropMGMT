@@ -64,21 +64,78 @@ T::ok('re-enabled limiter sees existing count', ($s['count'] ?? -1) === 2);
 set_setting('rate_limit_enabled', '1');
 
 // Client IP resolution (config.php): proxy headers are ignored unless the
-// deployment opts in via DDMGMT_TRUST_PROXY=1 — a client must never be able
-// to spoof its way past the limiter by default.
+// deployment opts in via DDMGMT_TRUST_PROXY=1 AND the direct peer is a
+// trusted proxy. A spoofable header from an internet peer must never rotate
+// the limiter's idea of the client — flag or no flag.
 $_SERVER['HTTP_CF_CONNECTING_IP'] = '203.0.113.1';
 $_SERVER['HTTP_X_FORWARDED_FOR']  = '203.0.113.2';
 T::eq('proxy headers ignored without DDMGMT_TRUST_PROXY', $ip, get_client_ip());
 putenv('DDMGMT_TRUST_PROXY=1');
-T::eq('CF header wins when trusted', '203.0.113.1', get_client_ip());
+T::eq('public peer: headers ignored despite trust flag', $ip, get_client_ip());
+putenv('DDMGMT_TRUSTED_PROXIES=' . $ip);
+T::eq('explicitly listed peer: CF header wins', '203.0.113.1', get_client_ip());
 unset($_SERVER['HTTP_CF_CONNECTING_IP']);
 T::eq('XFF first entry wins next', '203.0.113.2', get_client_ip());
+putenv('DDMGMT_TRUSTED_PROXIES');
+T::eq('default list excludes public peer', $ip, get_client_ip());
 unset($_SERVER['HTTP_X_FORWARDED_FOR']);
-T::eq('REMOTE_ADDR is final fallback', $ip, get_client_ip());
-$_SERVER['HTTP_X_FORWARDED_FOR'] = 'not-an-ip, 203.0.113.9';
-T::eq('invalid header skipped, REMOTE_ADDR used', $ip, get_client_ip());
+
+$_SERVER['REMOTE_ADDR'] = '127.0.0.1';
+$_SERVER['HTTP_X_FORWARDED_FOR'] = '203.0.113.2';
+T::eq('loopback peer honored by default list', '203.0.113.2', get_client_ip());
+unset($_SERVER['HTTP_X_FORWARDED_FOR']);
+T::eq('REMOTE_ADDR fallback', '127.0.0.1', get_client_ip());
+$_SERVER['REMOTE_ADDR'] = '192.168.55.3';
+$_SERVER['HTTP_X_REAL_IP'] = '198.51.100.9';
+T::eq('RFC1918 peer: X-Real-IP honored', '198.51.100.9', get_client_ip());
+unset($_SERVER['HTTP_X_REAL_IP']);
+$_SERVER['REMOTE_ADDR'] = '::1';
+$_SERVER['HTTP_CF_CONNECTING_IP'] = 'not-an-ip';
+T::eq('invalid header skipped, v6 loopback used', '::1', get_client_ip());
+$_SERVER['HTTP_CF_CONNECTING_IP'] = '2001:db8::7';
+T::eq('v6 loopback peer: header honored', '2001:db8::7', get_client_ip());
+unset($_SERVER['HTTP_CF_CONNECTING_IP']);
+
+// A malformed proxy entry must stay safe AND visible: it is skipped (the
+// peer falls back to REMOTE_ADDR) and warned about once per process.
+$_SERVER['REMOTE_ADDR'] = $ip;
+putenv('DDMGMT_TRUSTED_PROXIES=10.0.0.0/abc, ' . $ip);
+$_SERVER['HTTP_CF_CONNECTING_IP'] = '203.0.113.1';
+T::eq('bad CIDR skipped, listed peer still trusted', '203.0.113.1', get_client_ip());
+putenv('DDMGMT_TRUSTED_PROXIES=10.0.0.0/abc,,');
+T::eq('all-bad list with empty entry falls back to peer', $ip, get_client_ip());
+putenv('DDMGMT_TRUSTED_PROXIES');
+
+// Multi-hop XFF from a trusted peer: first entry wins, loudly.
+$_SERVER['REMOTE_ADDR'] = '127.0.0.1';
+unset($_SERVER['HTTP_CF_CONNECTING_IP']);
+$_SERVER['HTTP_X_FORWARDED_FOR'] = '203.0.113.2, 70.41.3.18';
+T::eq('multihop XFF uses first entry', '203.0.113.2', get_client_ip());
 unset($_SERVER['HTTP_X_FORWARDED_FOR']);
 putenv('DDMGMT_TRUST_PROXY');
+
+// CIDR syntax gate backing the trusted-proxy decision
+T::ok('cidr-valid: bare v4', _cidr_valid('10.0.0.1'));
+T::ok('cidr-valid: v4 range', _cidr_valid('10.0.0.0/8'));
+T::ok('cidr-valid: v6 range', _cidr_valid('2001:db8::/32'));
+T::ok('cidr-valid: rejects garbage', !_cidr_valid('not-a-cidr'));
+T::ok('cidr-valid: rejects bad bits', !_cidr_valid('10.0.0.0/abc'));
+T::ok('cidr-valid: rejects oversized bits', !_cidr_valid('10.0.0.0/33'));
+T::ok('cidr-valid: rejects bad net', !_cidr_valid('999.1.1.1/24'));
+
+// CIDR matcher backing the trusted-proxy decision
+T::ok('cidr: /24 range hit',            _ip_in_cidr('10.1.2.3', '10.1.2.0/24'));
+T::ok('cidr: /24 range miss',          !_ip_in_cidr('10.1.3.3', '10.1.2.0/24'));
+T::ok('cidr: bare address exact match', _ip_in_cidr('192.168.0.9', '192.168.0.9'));
+T::ok('cidr: family mismatch refused', !_ip_in_cidr('::1', '127.0.0.0/8'));
+T::ok('cidr: mapped v4 normalized',     _ip_in_cidr('::ffff:10.1.2.3', '10.1.2.0/24'));
+T::ok('cidr: /25 boundary hit',         _ip_in_cidr('10.1.2.5', '10.1.2.0/25'));
+T::ok('cidr: /25 boundary miss',       !_ip_in_cidr('10.1.2.129', '10.1.2.0/25'));
+T::ok('cidr: /32 single host',          _ip_in_cidr('10.1.2.3', '10.1.2.3/32'));
+T::ok('cidr: /0 matches all v4',        _ip_in_cidr('8.8.8.8', '0.0.0.0/0'));
+T::ok('cidr: invalid ip refused',      !_ip_in_cidr('not-an-ip', '10.0.0.0/8'));
+T::ok('cidr: invalid range refused',   !_ip_in_cidr('10.1.2.3', '10.1.2.0/abc'));
+$_SERVER['REMOTE_ADDR'] = $ip;
 
 // Fail-closed: if the limiter subsystem breaks (table gone), pickup/login
 // must be DENIED, never silently unblocked (child process = fresh settings

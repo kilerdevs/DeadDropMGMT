@@ -13,15 +13,11 @@ start_secure_session();
 require_owner();
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    http_response_code(405);
-    echo json_encode(['error' => 'Method not allowed']);
-    exit;
+    json_out(['error' => 'Method not allowed'], 405);
 }
 
 if (!verify_csrf($_POST['csrf_token'] ?? '')) {
-    http_response_code(403);
-    echo json_encode(['error' => 'CSRF']);
-    exit;
+    json_out(['error' => 'CSRF'], 403);
 }
 
 $action = $_POST['action'] ?? '';
@@ -32,49 +28,39 @@ switch ($action) {
     case 'add': {
         $url = osm_proxy_normalize((string)($_POST['url'] ?? ''));
         if ($url === null) {
-            http_response_code(422);
-            echo json_encode(['error' => t('admin.proxies.flash.invalid_url')]);
-            exit;
+            json_out(['error' => t('admin.proxies.flash.invalid_url')], 422);
         }
         try {
             $db = get_db();
             $dup = $db->prepare('SELECT id FROM osm_proxies WHERE url = ? LIMIT 1');
             $dup->execute([$url]);
             if ($dup->fetch()) {
-                http_response_code(409);
-                echo json_encode(['error' => t('admin.proxies.flash.duplicate')]);
-                exit;
+                json_out(['error' => t('admin.proxies.flash.duplicate')], 409);
             }
             $db->prepare('INSERT INTO osm_proxies (url, source) VALUES (?, "manual")')->execute([$url]);
             audit('proxy_add', null, null, $url);
-            echo json_encode(['ok' => true]);
+            json_out(['ok' => true]);
         } catch (Exception $e) {
             log_err('Proxy add: ' . $e->getMessage());
-            http_response_code(500);
-            echo json_encode(['error' => t('admin.proxies.flash.save_failed')]);
+            json_out(['error' => t('admin.proxies.flash.save_failed')], 500);
         }
-        exit;
     }
 
     // ── Remove one proxy ─────────────────────────────────────────────────────
     case 'delete': {
         $id = (int)($_POST['id'] ?? 0);
         if ($id <= 0) {
-            http_response_code(422);
-            echo json_encode(['error' => t('admin.common.invalid_request')]);
-            exit;
+            json_out(['error' => t('admin.common.invalid_request')], 422);
         }
         try {
             $stmt = get_db()->prepare('DELETE FROM osm_proxies WHERE id = ?');
             $stmt->execute([$id]);
             audit('proxy_delete', null, null, "id={$id}");
-            echo json_encode(['ok' => true]);
+            json_out(['ok' => true]);
         } catch (Exception $e) {
             log_err('Proxy delete: ' . $e->getMessage());
-            http_response_code(500);
-            echo json_encode(['error' => t('admin.proxies.flash.save_failed')]);
+            json_out(['error' => t('admin.proxies.flash.save_failed')], 500);
         }
-        exit;
     }
 
     // ── Auto-discover anonymity-focused proxies and store the working ones ───
@@ -95,20 +81,16 @@ switch ($action) {
                 if ($ins->rowCount() === 1) $added++; // 2 = updated existing row
             }
             audit('proxy_discover', null, null, 'working=' . count($found));
-            echo json_encode([
+            json_out([
                 'ok'      => true,
                 'added'   => $added,
                 'working' => count($found),
             ]);
         } catch (Exception $e) {
             log_err('Proxy discover: ' . $e->getMessage());
-            http_response_code(500);
-            echo json_encode(['error' => t('admin.proxies.flash.discover_failed')]);
+            json_out(['error' => t('admin.proxies.flash.discover_failed')], 500);
         }
-        exit;
     }
 }
 
-http_response_code(400);
-echo json_encode(['error' => t('admin.common.invalid_request')]);
-exit;
+json_out(['error' => t('admin.common.invalid_request')], 400);

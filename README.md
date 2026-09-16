@@ -70,7 +70,9 @@ The author provides this software **"as is," without warranty of any kind**, and
 
 ### Operations
 - IP-based rate limiting, configurable and togglable per surface (pickup guessing, admin login, 2FA codes)
-- Pseudo-cron cleanup on each page visit (throttled to 1×/hour)
+- Pseudo-cron cleanup on each page visit (throttled to 1x/hour; the DB check
+  itself fires probabilistically - 1-in-100 requests - so busy sites pay
+  almost nothing per hit)
 - Real cron endpoint (`cron/cleanup.php`) for server-side scheduling
 - Secure file wipe: overwrites with null bytes before `unlink()`
 
@@ -149,7 +151,7 @@ Browser ──[TLS, external]── Web server / PHP
 | Account takeover | TOTP 2FA (RFC 6238) — self-service per account, secret GCM-encrypted at rest. Passwordless accounts are claimed only with a single-use enrollment secret, never by username alone | S5 | A1, A2 |
 | Location data at rest | AES-256-GCM (authenticated), random nonce per record; keys are HKDF purpose-subkeys of the master key — locations, TOTP secrets, reveal payloads and the log chain each use their own (ADR-016). Legacy CBC rows and raw-master rows are rejected at runtime — migrate with `tools/migrate_cbc_to_gcm.php` then `tools/separate_keys.php`. Master key lives only in `config.php` or env (`DDMGMT_AES_KEY_HEX`), never in DB | S1, S4 | A4 |
 | Pickup password guessing | Dual budget enforced together: IP-based limiter (**fail-closed**: if the limiter DB is down, pickup and login are denied, not waved through) **and** a per-session failure bucket — whoever trips either is blocked; ≥64-bit generated passphrases (6 words + 4-digit + symbol), hash-only at rest, equalized-cost responses for unknown tokens | S2 | A1 |
-| Rate-limit bypass via spoofed `X-Forwarded-For` | Proxy headers are honored only when `DDMGMT_TRUST_PROXY=1` (opt-in for reverse-proxy/CDN installs); header values are validated as literal IPs and `REMOTE_ADDR` is the default source of truth | S2 | A1 |
+| Rate-limit bypass via spoofed `X-Forwarded-For` | Proxy headers are honored only when `DDMGMT_TRUST_PROXY=1` (opt-in for reverse-proxy/CDN installs) **and** the direct peer matches `DDMGMT_TRUSTED_PROXIES` (default: loopback + RFC1918); header values are validated as literal IPs and `REMOTE_ADDR` is the default source of truth | S2 | A1 |
 | Token enumeration | 16-char alphanumeric random tokens (~95 bits); unknown-token answers burn the same bcrypt cost and return the same body as wrong passwords when a credential was submitted; receipt requires the delivered state atomically | S3 | A1 |
 | Session fixation / theft | `session_regenerate_id(true)` on login; `httponly`, `samesite=Strict`, `secure` when HTTPS | S5 | A1, A2 |
 | CSRF | 64-byte random token in session, `hash_equals()` on every POST | S5, S7 | A2 |
@@ -175,9 +177,12 @@ What remains after mitigations — stated plainly:
 - **OSM embed iframe** sends the *recipient's* IP to OpenStreetMap when viewing
   a delivered order's location — browser-side, outside app control. Zero
   third-party contact requires a self-hosted tile server.
-- **Legacy CBC rows are rejected at runtime.** Run
-  `php tools/migrate_cbc_to_gcm.php` after upgrading (dry-run first); until
-  you do, pre-GCM orders are unreadable by the app — loudly, not silently.
+- **Legacy rows are rejected at runtime — both kinds.** Pre-GCM AES-CBC rows
+  and rows encrypted under the raw master key (pre-HKDF, ADR-016) are both
+  refused. Run `php tools/migrate_cbc_to_gcm.php` (only if pre-GCM rows may
+  exist) and then `php tools/separate_keys.php` after upgrading, dry-run
+  first; until both complete, old orders and TOTP secrets are unreadable by
+  the app — loudly, not silently.
 - **Pickup passwords are hash-only.** Generated credentials appear exactly
   once (creation flash message) and can be replaced in the order editor, but
   never displayed again. `php tools/purge_pickup_password_recovery.php`
@@ -235,24 +240,38 @@ php tests/run_all.php         # runs every tests/*Test.php, exits non-zero on fa
 
 The suite never touches your real database: `tests/bootstrap.php` forces
 `DDMGMT_DB_NAME=deaddrops_test` and points the app at TCP loopback unless you
-say otherwise. Covered: AES-256-GCM roundtrip + tamper rejection + CBC
-rejection/migration (`CryptoTest`), login/2FA/session-fixation/logout (`AuthTest`),
-CSRF tokens (`CsrfTest`), RFC 4648 base32 + RFC 6238 vectors (`TotpTest`),
-rate-limit budgets/scopes/window-expiry/kill-switch (`RateLimitTest`),
-owner-vs-courier authorization (`AuthorizationTest`) and expiry cleanup with
-photo-file shredding (`CleanupTest`), and an end-to-end public-flow suite
-(`PublicFlowTest`) driving a real HTTP server: token lookup, password
-unlock, PRG reveal, receipt confirmation, rate limiting and the per-session
-failure bucket. Runs automatically in GitHub Actions
+say otherwise. Covered: AES-256-GCM roundtrip + tamper rejection + CBC/raw-key
+rejection + HKDF key separation (`CryptoTest`), login/2FA/session-fixation/logout
+(`AuthTest`), CSRF tokens (`CsrfTest`), RFC 4648 base32 + RFC 6238 vectors
+(`TotpTest`), rate-limit budgets/scopes/window-expiry/kill-switch/concurrency
+(`RateLimitTest`), owner-vs-courier authorization (`AuthorizationTest`), the
+proxy anonymity gate (`ProxyTest`), expiry cleanup with photo-file shredding
+(`CleanupTest`), atomic state transitions under contention
+(`StateTransitionTest`), panic wipe (`PanicTest`), upload hardening
+(`UploadHardeningTest`), fail-closed branches of every guard, limiter, wipe
+and decrypt path plus the DB TLS option matrix (`FailClosedTest`) and an
+end-to-end public-flow and authorization suite over real HTTP
+(`PublicFlowTest`, `AuthorizationHttpTest`, `StateRaceTest`,
+`RateLimitConcurrencyTest`) driving a live server: token lookup, password
+unlock, PRG reveal, receipt confirmation, rate limiting, the per-session
+failure bucket, IDOR/destructive-IDOR probes and concurrent state races. Runs
+automatically in GitHub Actions
 (`.github/workflows/ci.yml`, MariaDB 11 service container) across PHP
 8.2–8.4 plus MySQL 8, with smoke tests, CVE gates and SBOMs for all three Docker stacks.
 
 **Coverage.** A separate CI job runs the suite under `pcov` and reports line
-coverage over `includes/` — the security-critical library code (crypto,
-auth, TOTP, rate limiting, logger, cleanup). The summary lands in the job
-summary; a browsable HTML report is uploaded as an artifact for 14 days.
-Locally: `composer install && php tests/coverage_runner.php` — Composer is
-dev-only tooling, the application itself never touches it.
+coverage over `includes/` - the security-critical library code (crypto,
+auth, TOTP, rate limiting, logger, proxy client, i18n, settings). The job
+enforces floors: 85% on every security-critical file (80% for `db.php`,
+whose residual lines are the connect-failure `die()` itself) and 85%
+overall across `includes/`, plus per-file pins where hermetic gains were
+hard-won (`net.php` 100, `logger.php` 92, `cleanup.php` 89, `proxy.php` 63 -
+live proxy discovery stays external by design) - any regression from the
+measured baseline fails the build. The summary lands in
+the job summary; a browsable HTML report is uploaded as an artifact for
+14 days. Locally:
+`composer install && php tests/coverage_runner.php` - Composer is dev-only
+tooling, the application itself never touches it.
 
 ---
 
@@ -308,6 +327,7 @@ DeadDropMGMT/
 │
 ├── index.php                 Public order lookup & location reveal
 ├── receive.php               Delivery confirmation endpoint
+├── healthz.php               Container/monitor health probe
 ├── public.js, gallery.js     Public-facing JS (lookup flow, photo gallery)
 ├── style.css                 Public CSS
 ├── favicon.svg               Green dead-drop pin on dark tile
@@ -320,6 +340,8 @@ DeadDropMGMT/
 ├── admin/                    Admin panel (owner + courier roles)
 │   ├── index.php             Login wall
 │   ├── login.php             Credential check → 2FA if enabled
+│   ├── bootstrap.php         Zero-config first run: creates the owner account
+│   ├── check_setup.php       Login-form helper: does this username still await enrollment?
 │   ├── verify_2fa.php        TOTP code prompt (login step 2)
 │   ├── set_lang.php          Per-account UI language switcher (AJAX)
 │   ├── 2fa.php               Self-service 2FA enroll / disable (QR + manual)
@@ -415,6 +437,16 @@ the audit log see the real client address from `CF-Connecting-IP` /
 otherwise any client could spoof its IP and sidestep the limiter. Only enable
 it when the proxy overwrites (not appends to) these headers.
 
+The flag alone is not enough: headers are honored only when the **direct
+connection peer** (`REMOTE_ADDR`) matches `DDMGMT_TRUSTED_PROXIES` — a
+comma-separated list of IPs or CIDR ranges. Unset, it defaults to loopback and
+RFC1918 space (`127.0.0.0/8`, `::1`, `10/8`, `172.16/12`, `192.168/16`), which
+fits same-host nginx/Apache and private docker networks. If your proxy connects
+from public addresses, list them explicitly. A request whose peer is not on the
+list gets its proxy headers ignored (and logs one warning) even with the flag
+set — so a stale flag on an app that is directly reachable cannot be turned
+into free IP rotation by whoever finds it.
+
 #### Rotating the AES key
 
 Rotate when the key may have been exposed (leaked backup, departed admin,
@@ -507,6 +539,10 @@ chown www-data:www-data logs/ uploads/
 ```
 
 ### 7. Cron (optional but recommended)
+
+On anything with real traffic, install the hourly cron — pseudo-cron only
+guarantees *eventual* expiry sweeps, and real cron takes the page-hit path
+out of the latency budget entirely:
 
 ```cron
 0 * * * * curl -s https://yourdomain.com/cron/cleanup.php > /dev/null

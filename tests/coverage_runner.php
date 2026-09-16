@@ -16,8 +16,9 @@ if (!file_exists(dirname(__DIR__) . '/vendor/autoload.php')) {
 use SebastianBergmann\CodeCoverage\CodeCoverage;
 use SebastianBergmann\CodeCoverage\Driver\Selector;
 use SebastianBergmann\CodeCoverage\Filter;
-use SebastianBergmann\CodeCoverage\Report\Html\Html as HtmlReport;
+use SebastianBergmann\CodeCoverage\Report\Html\Facade as HtmlReport;
 use SebastianBergmann\CodeCoverage\Report\Text as TextReport;
+use SebastianBergmann\CodeCoverage\Report\Thresholds;
 
 require_once dirname(__DIR__) . '/vendor/autoload.php';
 
@@ -25,7 +26,10 @@ define('T_INPROCESS', 1);
 require_once __DIR__ . '/bootstrap.php';
 
 $filter = new Filter();
-$filter->includeDirectory(dirname(__DIR__) . '/includes');
+// php-code-coverage 11.0.12 removed includeDirectory() — enumerate the
+// library files explicitly. composer.json pins this exact version so the
+// API cannot drift under us again (a silent minor bump broke this once).
+$filter->includeFiles(glob(dirname(__DIR__) . '/includes/*.php') ?: []);
 
 $makeCoverage = static fn(): CodeCoverage => new CodeCoverage(
     (new Selector())->forLineCoverage($filter),
@@ -37,8 +41,10 @@ sort($files);
 
 $totalPass = $totalFail = 0;
 $coverages = [];
+$suiteOutput = [];
 
 foreach ($files as $file) {
+    ob_start();
     echo "=== " . basename($file) . " ===\n";
     T::$pass = T::$fail = 0;
     T::$messages = [];
@@ -53,10 +59,17 @@ foreach ($files as $file) {
         }
     }
     $cc->stop();
+    // Buffer and hold EVERY suite output: once anything flushes, PHP considers
+    // headers sent and the next suite's session_start() fatals (15 suites of
+    // banners eventually overflow the default output buffer). Everything is
+    // printed after the last suite, when no session will start again.
+    $suiteOutput[] = ob_get_clean();
     $totalPass += T::$pass;
     $totalFail += T::$fail;
     $coverages[] = $cc;
 }
+
+echo implode('', $suiteOutput);
 
 // Merge per-suite collections into one report
 /** @var CodeCoverage $merged */
@@ -66,7 +79,7 @@ foreach ($coverages as $cc) {
 }
 
 echo "\n" . str_repeat('=', 60) . "\n";
-echo (new TextReport(70, 95, false, false))->process($merged, false);
+echo (new TextReport(Thresholds::from(70, 95)))->process($merged);
 
 if ($htmlDir = getopt('', ['html:'])['html'] ?? null) {
     (new HtmlReport())->process($merged, $htmlDir);
@@ -75,11 +88,23 @@ if ($htmlDir = getopt('', ['html:'])['html'] ?? null) {
 
 // ── Coverage floors: an explicit answer to "did security quality regress?" ───
 // The job fails when overall includes/ coverage drops below --min-overall,
-// or when any security-critical file drops below --min-critical. Floors are
-// printed even on success so drift stays visible.
-$opts        = getopt('', ['html:', 'min-overall:', 'min-critical:']);
+// when any security-critical file drops below --min-critical, or below a
+// per-file --min-file=name:pct override. Floors are printed even on success
+// so drift stays visible. Per-file overrides exist for files whose residual
+// lines are structurally untestable in this single-process runner (e.g. the
+// DB connect-failure die()) — the override documents that decision.
+$opts        = getopt('', ['html:', 'min-overall:', 'min-critical:', 'min-file:']);
 $minOverall  = isset($opts['min-overall'])  ? (float)$opts['min-overall']  : 0.0;
 $minCritical = isset($opts['min-critical']) ? (float)$opts['min-critical'] : 0.0;
+$minFile     = [];
+foreach ((array)($opts['min-file'] ?? []) as $spec) {
+    $parts = explode(':', (string)$spec);
+    if (count($parts) !== 2 || !is_numeric($parts[1])) {
+        fwrite(STDERR, "Bad --min-file spec (want name:pct): {$spec}\n");
+        exit(1);
+    }
+    $minFile[$parts[0]] = (float)$parts[1];
+}
 
 if ($minOverall > 0 || $minCritical > 0) {
     // Files where a coverage regression is a security event, not a stats blip.
@@ -89,7 +114,7 @@ if ($minOverall > 0 || $minCritical > 0) {
     $sumExe  = 0;
     $sumRun  = 0;
     $walk = static function ($node) use (&$walk, &$perFile, &$sumExe, &$sumRun): void {
-        foreach ($node->filesAndDirectories() as $child) {
+        foreach ($node->children() as $child) {
             if ($child instanceof \SebastianBergmann\CodeCoverage\Node\Directory) {
                 $walk($child);
                 continue;
@@ -118,15 +143,20 @@ if ($minOverall > 0 || $minCritical > 0) {
         }
     }
 
-    if ($minCritical > 0) {
+    if ($minCritical > 0 || $minFile !== []) {
         echo "Floor check — security-critical files:\n";
-        foreach ($critical as $f) {
-            $pct = $perFile[$f] ?? 0.0;
-            printf("  %-20s %6.2f%% (floor %.2f%%)\n", $f, $pct, $minCritical);
-            if ($pct < $minCritical) {
+        $watched = array_unique(array_merge(
+            $minCritical > 0 ? $critical : [],
+            array_keys($minFile)
+        ));
+        foreach ($watched as $f) {
+            $floor = $minFile[$f] ?? $minCritical;
+            $pct   = $perFile[$f] ?? 0.0;
+            printf("  %-20s %6.2f%% (floor %.2f%%)\n", $f, $pct, $floor);
+            if ($pct < $floor) {
                 fwrite(STDERR, sprintf(
                     "COVERAGE FLOOR VIOLATION: %s at %.2f%% is below the %.2f%% floor.\n",
-                    $f, $pct, $minCritical
+                    $f, $pct, $floor
                 ));
                 $fail = true;
             }

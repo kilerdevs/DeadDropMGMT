@@ -50,9 +50,11 @@ if (!$up) { exit(T::done()); }
 $db   = get_db();
 $tokD  = 'PFTOKENDELIVER01';
 $tokD2 = 'PFTOKENDELIVER02';
+$tokD3 = 'PFTOKENDELIVER03';
+$tokD4 = 'PFTOKENDELIVER04';
 $tokP  = 'PFTOKENPREPARIN2';
 $pass  = 'RevealPass1!';
-foreach ([$tokD, $tokD2, $tokP] as $t) { $db->prepare('DELETE FROM orders WHERE order_token = ?')->execute([$t]); }
+foreach ([$tokD, $tokD2, $tokD3, $tokD4, $tokP] as $t) { $db->prepare('DELETE FROM orders WHERE order_token = ?')->execute([$t]); }
 $enc = encrypt_location_data([
     'text'         => 'PUBLICFLOWTEST skrzynka pod trzecią ławą',
     'lat'          => 52.2297,
@@ -66,6 +68,8 @@ $ins  = $db->prepare(
 );
 $ins->execute([$tokD, $hash, $enc['ciphertext'], $enc['iv'], 'delivered', date('Y-m-d H:i:s'), 'notka dla odbiorcy']);
 $ins->execute([$tokD2, $hash, $enc['ciphertext'], $enc['iv'], 'delivered', date('Y-m-d H:i:s'), '']);
+$ins->execute([$tokD3, $hash, $enc['ciphertext'], $enc['iv'], 'delivered', date('Y-m-d H:i:s'), '']);
+$ins->execute([$tokD4, $hash, $enc['ciphertext'], $enc['iv'], 'delivered', date('Y-m-d H:i:s'), '']);
 $ins->execute([$tokP, $hash, $enc['ciphertext'], $enc['iv'], 'preparing', null, '']);
 
 set_setting('rate_limit_max', '3');
@@ -151,31 +155,109 @@ T::ok('order deleted from DB',
     !$db->query("SELECT 1 FROM orders WHERE order_token = '$token'")->fetch());
 
 // 9b. Replaying the receipt is a safe failure — nothing resurrects, no oracle
-// (fresh budget first so the block below comes from STATE, not the limiter)
+// (fresh budget first so the block below comes from STATE, not the limiter).
+// CSRF rotation retires the spent token, so the replay is bounced to / —
+// equally harmless, and the order stays gone either way.
 set_setting('rate_limit_max', '50');
 $db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
-[, $bodyReplay] = _pf_post(
+[$stReplay, $bodyReplay] = _pf_post(
     "http://127.0.0.1:$port/receive.php",
     ['csrf_token' => $csrf2, 'order_token' => $token, 'step' => '2'],
     $cookie
 );
-T::ok('replayed receipt shows a safe error', str_contains((string)$bodyReplay, 'class="alert"'));
+T::ok('replayed receipt is refused',
+      $stReplay === 302 || str_contains((string)$bodyReplay, 'class="alert"'));
 T::ok('replayed receipt does not resurrect the order',
     !$db->query("SELECT 1 FROM orders WHERE order_token = '$token'")->fetch());
 
-// 9c. A PREPARING order cannot even reach the confirmation page
+// 9d. A session that NEVER authenticated gets no CSRF token for the
+// destructive flow at all — nothing will arm or accept its confirmation.
+// (With a valid CSRF but no unlock the gate itself is proven in 9e.)
+set_setting('rate_limit_max', '50');
+$db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
+[, $bodyNoUnlock, $cookieNoUnlock] = _pf_get("http://127.0.0.1:$port/");
+T::ok('never-unlocked session is not handed a destructive-flow CSRF token',
+    preg_match('/name="csrf_token"/', $bodyNoUnlock) !== 1);
+[$stNoUnlock] = _pf_post(
+    "http://127.0.0.1:$port/receive.php",
+    ['csrf_token' => '', 'order_token' => $tokD3, 'step' => '2'],
+    $cookieNoUnlock
+);
+T::eq('token-only destruction attempt bounced (redirect)', 302, $stNoUnlock);
+T::ok('order survives token-only deletion attempt',
+    (bool)$db->query("SELECT 1 FROM orders WHERE order_token = '$tokD3'")->fetch());
+
+// 9e. THE CORE INVARIANT: even a fully valid session (own CSRF, completed
+// unlock of tokD3) may only destroy the token it unlocked. The receipt
+// capability is sealed, bound to that one token, and single-use.
+set_setting('rate_limit_max', '50');
+$db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
+$cookieE = '';
+_pf_post("http://127.0.0.1:$port/", ['order_token' => $tokD3], $cookieE);
+[$stE, , $cookieE] = _pf_post("http://127.0.0.1:$port/", ['order_token' => $tokD3, 'pickup_password' => $pass], $cookieE);
+T::eq('unlock arms the receipt capability (redirect)', 302, $stE);
+[, $bodyE, $cookieE] = _pf_get("http://127.0.0.1:$port/", $cookieE);
+preg_match('/name="csrf_token"\s*value="([0-9a-f]{64})"/', $bodyE, $mE);
+[, $bodyCross] = _pf_post(
+    "http://127.0.0.1:$port/receive.php",
+    ['csrf_token' => $mE[1] ?? '', 'order_token' => $tokD4, 'step' => '2'],
+    $cookieE
+);
+T::ok('capability for another token is rejected (cross-token attack)',
+    str_contains((string)$bodyCross, 'class="alert"'));
+T::ok('cross-token target survives',
+    (bool)$db->query("SELECT 1 FROM orders WHERE order_token = '$tokD4'")->fetch());
+// The denied attempt still consumed the single-use capability:
+T::ok('order intact after denied cross-token attempt',
+    (bool)$db->query("SELECT 1 FROM orders WHERE order_token = '$tokD3'")->fetch());
+
+// Fresh unlock re-arms the capability: own-token receipt now completes.
+_pf_post("http://127.0.0.1:$port/", ['order_token' => $tokD3], $cookieE);
+[, , $cookieE] = _pf_post("http://127.0.0.1:$port/", ['order_token' => $tokD3, 'pickup_password' => $pass], $cookieE);
+[, $bodyOwn, $cookieE] = _pf_get("http://127.0.0.1:$port/", $cookieE);
+preg_match('/name="csrf_token"\s*value="([0-9a-f]{64})"/', $bodyOwn, $mO);
+[, $bodyOwn2] = _pf_post(
+    "http://127.0.0.1:$port/receive.php",
+    ['csrf_token' => $mO[1] ?? '', 'order_token' => $tokD3, 'step' => '2'],
+    $cookieE
+);
+T::ok('own-token receipt completes after re-unlock',
+    str_contains((string)$bodyOwn2, 'status-badge delivered'));
+T::ok('unlocked order deleted by its own capability',
+    !$db->query("SELECT 1 FROM orders WHERE order_token = '$tokD3'")->fetch());
+
+// 9c. A PREPARING order cannot be confirmed or destroyed over HTTP, even by
+// a fully valid session holding fresh tokens. CSRF rotation retires tokens
+// after every successful POST, so each step harvests a live one from a
+// delivered-order session; the preparing target is then refused by the
+// fail-closed layers (capability binding / state gate — the state rule
+// itself is pinned in StateTransitionTest::receive refuses preparing).
+$pf_csrf_after_unlock = static function (string $tok, string $pw, string &$ck) use ($port): string {
+    [, , $ck] = _pf_post("http://127.0.0.1:$port/", ['order_token' => $tok], $ck);
+    [, , $ck] = _pf_post("http://127.0.0.1:$port/", ['order_token' => $tok, 'pickup_password' => $pw], $ck);
+    [, $b, $ck] = _pf_get("http://127.0.0.1:$port/", $ck);
+    preg_match('/name="csrf_token"\s*value="([0-9a-f]{64})"/', $b, $m);
+    return $m[1] ?? '';
+};
+set_setting('rate_limit_max', '50');
+$db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
+$cookieP = '';
+$pc1 = $pf_csrf_after_unlock($tokD4, $pass, $cookieP);
+T::ok('delivered unlock hands out a live token (test setup)', $pc1 !== '');
 [$stPrep] = _pf_post(
     "http://127.0.0.1:$port/receive.php",
-    ['csrf_token' => $csrf2, 'order_token' => $tokP, 'step' => '1'],
-    $cookie
+    ['csrf_token' => $pc1, 'order_token' => $tokP, 'step' => '1'],
+    $cookieP
 );
 T::eq('preparing order bounced from confirmation (redirect)', 302, $stPrep);
-[$stPrep2] = _pf_post(
+$pc2 = $pf_csrf_after_unlock($tokD4, $pass, $cookieP);
+[$stPrep2, $bodyPrep2] = _pf_post(
     "http://127.0.0.1:$port/receive.php",
-    ['csrf_token' => $csrf2, 'order_token' => $tokP, 'step' => '2'],
-    $cookie
+    ['csrf_token' => $pc2, 'order_token' => $tokP, 'step' => '2'],
+    $cookieP
 );
-T::ok('preparing order cannot be destroyed via step 2', $stPrep2 === 200);
+T::ok('preparing order cannot be destroyed via step 2',
+      $stPrep2 === 200 && str_contains((string)$bodyPrep2, 'class="alert"'));
 T::ok('preparing order still exists after attack',
     (bool)$db->query("SELECT 1 FROM orders WHERE order_token = '$tokP'")->fetch());
 
@@ -230,7 +312,7 @@ T::ok('order survives blocked deletion attempt',
     (bool)$db->query("SELECT 1 FROM orders WHERE order_token = '$tokD2'")->fetch());
 
 // Cleanup
-$db->prepare('DELETE FROM orders WHERE order_token IN (?, ?, ?)')->execute([$tokD, $tokD2, $tokP]);
+$db->prepare('DELETE FROM orders WHERE order_token IN (?, ?, ?, ?, ?)')->execute([$tokD, $tokD2, $tokD3, $tokD4, $tokP]);
 $db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
 
 exit(T::done());

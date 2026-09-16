@@ -71,45 +71,10 @@ ini_set('display_errors', '0');
 ini_set('log_errors',     '1');
 ini_set('error_log',       ERROR_LOG_PATH);
 
-// ── Client IP resolution (used by rate limiting, audit log) ────────────────
-// Proxy headers (CF-Connecting-IP, X-Forwarded-For, X-Real-IP) are trusted
-// ONLY when the deployment says so: set DDMGMT_TRUST_PROXY=1 when the app
-// runs behind a reverse proxy or CDN that OVERWRITES these headers. Without
-// it, any client could spoof its address and sidestep IP rate limiting or
-// poison the audit log. Values are always validated as literal IPs; without
-// proxy trust the TCP peer address (REMOTE_ADDR) is the only truth.
-function get_client_ip(): string {
-    if (_secret('DDMGMT_TRUST_PROXY', '0') === '1') {
-        $candidates = [
-            'HTTP_CF_CONNECTING_IP',
-            'HTTP_X_FORWARDED_FOR',
-            'HTTP_X_REAL_IP',
-        ];
-        foreach ($candidates as $key) {
-            if (!empty($_SERVER[$key])) {
-                $raw = trim((string)$_SERVER[$key]);
-                // Multi-hop XFF: a proxy that APPENDS leaves earlier entries
-                // client-controlled, so "first entry" is then attacker-chosen.
-                // This deployment contract expects an OVERWRITING proxy — say
-                // so loudly when the header looks multi-hop. The static flag
-                // breaks the get_client_ip() <-> app_log() call cycle (the
-                // logger asks this very function for the request IP).
-                if ($key === 'HTTP_X_FORWARDED_FOR' && str_contains($raw, ',')) {
-                    static $multihop_warned = false;
-                    if (!$multihop_warned) {
-                        $multihop_warned = true;
-                        log_warn('xff_multihop', ['msg' => 'X-Forwarded-For carries multiple hops; first entry used — verify the proxy overwrites (not appends) this header']);
-                    }
-                }
-                $ip = trim(explode(',', $raw)[0]);
-                if (filter_var($ip, FILTER_VALIDATE_IP)) {
-                    return $ip;
-                }
-            }
-        }
-    }
-    return (string)($_SERVER['REMOTE_ADDR'] ?? '0.0.0.0');
-}
+// ── Client IP resolution ───────────────────────────────────────────────────
+// get_client_ip() / _ip_in_cidr() live in includes/net.php — this file is for
+// deployment constants only, so a hand-edited config cannot weaken proxy-
+// header validation. See DDMGMT_TRUST_PROXY / DDMGMT_TRUSTED_PROXIES there.
 
 // ── Request scheme detection (session cookie "secure" flag, HSTS) ────────────
 // Behind a TLS-terminating reverse proxy PHP sees plain HTTP, so $_SERVER

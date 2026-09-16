@@ -51,6 +51,45 @@ T::ok('overwrite_and_unlink removes the file', !is_file($tmp));
 T::ok('overwrite_and_unlink tolerates missing path', true);
 overwrite_and_unlink($tmp . '-does-not-exist');
 
+// ── Pseudo-cron plumbing: dice and pass are directly testable halves ──────
+T::ok('dice always runs at 1.0', _cleanup_roll(1.0) === true);
+T::ok('dice never runs at 0.0', _cleanup_roll(0.0) === false);
+T::ok('dice never runs when negative', _cleanup_roll(-0.5) === false);
+T::ok('dice answers boolean in between', is_bool(_cleanup_roll(0.01)));
+
+$stampOf = static function () use ($db): int {
+    return (int)$db->query("SELECT value FROM settings WHERE key_name = 'last_cleanup'")->fetchColumn();
+};
+// A skipped roll touches nothing and does NOT consume the process one-shot
+// (deliberately chance 0.0 here — CleanupTest must not arm the wrapper's
+// guard or SettingsTest's sweep assertion in the shared coverage process
+// would starve).
+set_setting('last_cleanup', (string)(time() - 7200));
+$before = $stampOf();
+run_cleanup_if_due(0.0);
+T::eq('skipped roll leaves a stale stamp alone', $before, $stampOf());
+
+// A broken store cannot turn a pass into a crash (cold settings cache +
+// hidden table forces the real DB read to throw into the catch).
+$cache = &_settings_store();
+$cache = null;
+$db->exec('RENAME TABLE settings TO settings_cl_bak');
+try {
+    _run_cleanup_pass();
+    T::ok('broken store cannot crash a pass', true);
+} finally {
+    $db->exec('RENAME TABLE settings_cl_bak TO settings');
+}
+
+// The pass itself sweeps when due...
+set_setting('last_cleanup', (string)(time() - 7200));
+_run_cleanup_pass();
+$after = $stampOf();
+T::ok('direct pass stamps and sweeps when due', $after > $before);
+// ...and stays quiet when the throttle holds.
+_run_cleanup_pass();
+T::eq('direct pass respects the hourly throttle', $after, $stampOf());
+
 // Cleanup
 $db->prepare('DELETE FROM orders WHERE order_token LIKE "clstoken%"')->execute();
 

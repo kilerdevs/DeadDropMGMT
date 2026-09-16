@@ -16,7 +16,7 @@ base; supply-chain surface must be near zero, hosting must work on cheap
 shared PHP hosting.
 
 **Decision.** No Composer, no framework, no runtime libraries. Everything is
-hand-written PHP 8.0+ files. Dev-only tooling (code coverage) lives behind
+hand-written PHP 8.2+ files. Dev-only tooling (code coverage) lives behind
 `composer.json` but never ships in the image.
 
 **Consequences.** Every dependency we *don't* have can't be compromised via

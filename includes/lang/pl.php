@@ -69,6 +69,7 @@ return [
     'public.receive.rate_limited'  => 'Zbyt wiele prób — odczekaj {min} min.',
     'public.receive.error.server'  => 'Błąd serwera. Spróbuj ponownie.',
 
+    'public.receive.error.locked' => 'Potwierdzenie odbioru wygasło. Odblokuj zamówienie hasłem do odbioru jeszcze raz, a następnie potwierdź.',
     'public.receive.error.invalid_state' => 'Nie można odebrać tego zamówienia — nie jest gotowe do odbioru lub zostało już odebrane.',
     'public.receive.title.done'    => 'Odebrano',
     'public.receive.title.confirm' => 'Potwierdzenie odbioru',

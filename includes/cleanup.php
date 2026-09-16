@@ -13,11 +13,34 @@ function do_cleanup(): int {
 }
 
 // Pseudo-cron wrapper — throttled to at most once per hour, called on each page visit.
-function run_cleanup_if_due(): void {
-    static $ran = false;
-    if ($ran) return;
-    $ran = true;
+//
+// $chance gates the DB lookup itself: on a busy site the once-per-hour check
+// still meant one extra settings read per request. Each request now rolls a
+// 1-in-100 die BEFORE touching the database; combined with the hourly
+// throttle the sweep still runs promptly (a site with any real traffic rolls
+// the die hundreds of times an hour), while a quiet site pays at most one
+// cheap read per request it already makes. Pass 1.0 to force evaluation in
+// tests. High-volume deployments should install real cron anyway —
+// cron/cleanup.php calls do_cleanup() directly and bypasses all gating.
+// Pure dice roll for the pseudo-cron gate: 1.0+ always runs, 0/negative
+// never runs, anything in between runs with probability $chance. Kept pure
+// so the probability decision is unit-testable without touching the
+// process-level one-shot guard below.
+function _cleanup_roll(float $chance): bool {
+    if ($chance >= 1.0) {
+        return true;
+    }
+    if ($chance <= 0.0) {
+        return false;
+    }
+    return random_int(1, max(1, (int)round(1 / $chance))) === 1;
+}
 
+// One expiry-sweep pass: stamp first (blocks concurrent duplicate runs),
+// then sweep. The sweep is idempotent, so a crashed run merely delays the
+// next one by an hour. Split out so the guarded wrapper stays trivial and
+// the pass itself is directly testable (stale stamp, broken store).
+function _run_cleanup_pass(): void {
     try {
         $last = (int)get_setting('last_cleanup', '0');
         if ((time() - $last) < 3600) return;
@@ -30,4 +53,14 @@ function run_cleanup_if_due(): void {
     } catch (Throwable $e) {
         log_err('Cleanup error: ' . $e->getMessage());
     }
+}
+
+function run_cleanup_if_due(float $chance = 0.01): void {
+    static $ran = false;
+    if ($ran) return;
+    // A lost die roll does NOT consume the one-shot: skipping the DB check
+    // on this visit must not silence the sweep for the rest of the process.
+    if (!_cleanup_roll($chance)) return;
+    $ran = true;
+    _run_cleanup_pass();
 }

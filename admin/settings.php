@@ -441,6 +441,7 @@ function s_label(array $s, string $key): string {
         fetch('/admin/save_setting.php', { method: 'POST', body: fd })
             .then(function (r) { return r.json(); })
             .then(function (d) {
+                if (d.csrf) csrf = d.csrf; // token rotated server-side on each save
                 if (d.ok) {
                     showPopup('✓ ' + I.saved, false);
                     setTimeout(function () { location.reload(); }, 600);
@@ -497,7 +498,7 @@ function s_label(array $s, string $key): string {
         fd.append('action', action);
         if (extra) Object.keys(extra).forEach(function (k) { fd.append(k, extra[k]); });
         return fetch('/admin/proxy_action.php', { method: 'POST', body: fd })
-            .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+            .then(function (r) { return r.json().then(function (j) { if (j.csrf) csrf = j.csrf; return { ok: r.ok, j: j }; }); })
             .catch(function () { return { ok: false, j: { error: I.connection_error } }; });
     }
 
@@ -555,6 +556,7 @@ function s_label(array $s, string $key): string {
             fetch('/admin/log_verify.php', { method: 'POST', body: fd })
                 .then(function (r) { return r.json(); })
                 .then(function (j) {
+                    if (j.csrf) csrf = j.csrf;
                     if (j.valid) {
                         vResult.textContent = I.log_verify_ok.replace('{n}', j.checked);
                     } else {

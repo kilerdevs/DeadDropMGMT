@@ -69,6 +69,7 @@ return [
     'public.receive.rate_limited'  => 'Demasiados intentos — espere {min} min.',
     'public.receive.error.server'  => 'Error del servidor. Inténtelo de nuevo.',
 
+    'public.receive.error.locked' => 'La confirmación de recepción ha caducado. Desbloquea el pedido de nuevo con la contraseña y confirma.',
     'public.receive.error.invalid_state' => 'Este pedido no puede recibirse: no está listo para recogida o ya fue recibido.',
     'public.receive.title.done'    => 'Recibido',
     'public.receive.title.confirm' => 'Confirmar recogida',

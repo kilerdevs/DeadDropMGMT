@@ -83,13 +83,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && $loc_data === null && !$correct_prep
 
 // ── Handle POST ───────────────────────────────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    // Enforce whichever budget trips first: the IP's or this session cookie's.
-    $rl  = rl_status('public');
+    // Spend-and-decide is ONE atomic transition on a row lock: concurrent
+    // requests can never both act on the same stale pre-increment count.
+    // A non-failure outcome refunds the spend below, so the IP budget keeps
+    // counting failed guesses — not legitimate traffic.
+    $hit = rl_hit('public');
     $bkt = bucket_status('public', rl_max());
 
-    if ($rl['blocked'] || $bkt['blocked']) {
+    if ($hit['blocked'] || $bkt['blocked']) {
         $blocked       = true;
-        $cooldown_secs = max($rl['remaining'], bucket_remaining('public'));
+        $cooldown_secs = max($hit['remaining'], bucket_remaining('public'));
     } else {
         $raw_token = trim($_POST['order_token'] ?? '');
         $password  = (string)($_POST['pickup_password'] ?? '');
@@ -122,6 +125,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $order_status  = $order['status'];
                     $prefill_token = $raw_token;
                     $show_pw_step  = true;
+                    rl_reset('public'); // a lookup is not a guess — refund the spend
                 } else {
                     if (verify_password($password, $order['pickup_password_hash'])) {
                         bucket_clear('public');
@@ -160,20 +164,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     ]),
                                     'ts' => time(),
                                 ];
+                                // Receipt authority is SEPARATE from the reveal:
+                                // possession of the order token merely leads to
+                                // the password gate — only a verified password
+                                // may ever arm the destructive confirmation.
+                                // Sealed like the reveal, bound to this one
+                                // token, short-lived, single-use (consumed by
+                                // receive.php step 2 on presentation).
+                                $_SESSION['receipt'] = [
+                                    'sealed' => seal_payload(['token' => $raw_token]),
+                                    'ts'     => time(),
+                                ];
                                 header('Location: /');
                                 exit;
                             }
                         }
                     } else {
-                        // Spend + verdict in one atomic transition; a full
-                        // budget denies the NEXT attempt right here, not on
-                        // some later request.
-                        $hit = rl_hit('public');
+                        // The budget was already spent atomically on entry;
+                        // a wrong password additionally burns a session-bucket
+                        // failure, so an attacker must rotate IP AND cookie.
+                        // (A tripped budget answers with the cooldown card
+                        // above — this branch only runs when budget remains.)
                         bucket_fail('public');
                         log_event('unlock_fail', (int)$order['id'], $raw_token);
-                        $error = $hit['blocked']
-                            ? t('public.index.error.rate_limited', ['min' => (int)ceil($hit['remaining'] / 60)])
-                            : t('public.index.error.invalid_credentials');
+                        $error = t('public.index.error.invalid_credentials');
                     }
                 }
             } catch (Exception $e) {

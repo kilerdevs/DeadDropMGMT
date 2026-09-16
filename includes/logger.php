@@ -39,7 +39,12 @@ function _log_req_id(): string {
 }
 
 // Read the trailing hash of the last complete JSON line. Caller holds LOCK_EX.
+// The size comes from an explicit seek-to-end: ftell() right after fopen('c+')
+// is always 0, which used to make EVERY entry anchor to GENESIS and the
+// following fwrite overwrite the log from byte zero — destroying both the
+// history and the tamper evidence the chain exists to provide.
 function _log_last_hash($fh): string {
+    fseek($fh, 0, SEEK_END);
     $size = ftell($fh);
     if ($size === 0) {
         return APP_LOG_GENESIS;

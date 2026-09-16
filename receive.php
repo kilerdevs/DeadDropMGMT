@@ -17,7 +17,19 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     exit;
 }
 
-if (!verify_csrf($_POST['csrf_token'] ?? '')) {
+// Token enumeration is limited on every public surface, not just the
+// destructive one: the confirmation probe burns budget like anything else.
+// rl_hit is one atomic state transition — spend + verdict — so concurrent
+// requests can never both slip through on a stale count. It runs BEFORE the
+// CSRF check deliberately: a flood of forged requests must drain its own
+// budget (self-throttling), and an already-blocked visitor gets the cooldown
+// card instead of being waved to a redirect that leaks nothing anyway.
+$rl = rl_hit('public');
+$error = $rl['blocked']
+    ? t('public.receive.rate_limited', ['min' => (int)ceil($rl['remaining'] / 60)])
+    : '';
+
+if ($error === '' && !verify_csrf($_POST['csrf_token'] ?? '')) {
     header('Location: /');
     exit;
 }
@@ -25,21 +37,25 @@ if (!verify_csrf($_POST['csrf_token'] ?? '')) {
 $raw_token = trim($_POST['order_token'] ?? '');
 $step      = (int)($_POST['step'] ?? 0);
 $deleted   = false;
-$error     = '';
 $csrf      = generate_csrf();
-
-// Token enumeration is limited on every public surface, not just the
-// destructive one: the confirmation probe burns budget like anything else.
-// rl_hit is one atomic state transition — spend + verdict — so concurrent
-// requests can never both slip through on a stale count.
-$rl = rl_hit('public');
-if ($rl['blocked']) {
-    $error = t('public.receive.rate_limited', ['min' => (int)ceil($rl['remaining'] / 60)]);
-}
 
 if (strlen($raw_token) !== 16 || !ctype_alnum($raw_token)) {
     header('Location: /');
     exit;
+}
+
+// A receipt capability is armed ONLY inside index.php after a verified
+// pickup-password unlock, sealed with the same AES key as reveal payloads,
+// bound to the unlocked token, and single-use. Possession of the order token
+// alone therefore reaches the password gate — never the destructive step.
+const RECEIPT_MAX_AGE = 600; // seconds a confirmed receipt stays confirmable
+
+function receipt_capability_valid(?array $cap, string $token): bool {
+    if (!is_array($cap) || (time() - ($cap['ts'] ?? 0)) >= RECEIPT_MAX_AGE) {
+        return false;
+    }
+    $dec = open_payload($cap['sealed'] ?? []);
+    return is_array($dec) && ($dec['token'] ?? '') === $token;
 }
 
 // ── Step 1 — show confirmation page ──────────────────────────────────────────
@@ -66,20 +82,28 @@ if ($step === 1 && $error === '') {
 }
 
 // ── Step 2 — execute receipt (blocked budget already set $error above) ───────
-// The deletion itself is atomic (token + terminal state checked inside one
-// transaction under a row lock): a replayed or out-of-order request changes
-// nothing and reports a safe failure.
+// Two independent secrets must line up before anything is destroyed: a valid
+// CSRF token AND a fresh post-unlock receipt capability for THIS token. The
+// capability is consumed on presentation — win or lose — so it can never be
+// replayed, and a tampered/stale/foreign one fails closed to an error page.
 if ($step === 2 && $error === '') {
-    try {
-        $deleted = order_receive_atomic($raw_token);
-        if (!$deleted) {
-            $error = t('public.receive.error.invalid_state');
-        } else {
-            log_event('received', null, $raw_token);
+    $cap = $_SESSION['receipt'] ?? null;
+    unset($_SESSION['receipt']); // single-use: consume before deciding
+
+    if (!receipt_capability_valid($cap, $raw_token)) {
+        $error = t('public.receive.error.locked');
+    } else {
+        try {
+            $deleted = order_receive_atomic($raw_token);
+            if (!$deleted) {
+                $error = t('public.receive.error.invalid_state');
+            } else {
+                log_event('received', null, $raw_token);
+            }
+        } catch (Exception $e) {
+            log_err('Receive step2: ' . $e->getMessage());
+            $error = t('public.receive.error.server');
         }
-    } catch (Exception $e) {
-        log_err('Receive step2: ' . $e->getMessage());
-        $error = t('public.receive.error.server');
     }
 }
 ?>
