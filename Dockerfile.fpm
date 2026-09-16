@@ -3,7 +3,7 @@
 # The whole docroot stays in the image so a named volume can be populated from
 # it once and shared read-only with nginx/Caddy for static files.
 
-FROM php:8.3-fpm
+FROM php:8.5-fpm
 
 RUN apt-get update \
  && apt-get upgrade -y \
