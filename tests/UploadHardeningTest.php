@@ -123,6 +123,48 @@ if (function_exists('imagecreatetruecolor') && function_exists('imagewebp')) {
     }
 }
 
+// 9 ── early rejects + compressor edge paths (defensive branches)
+// a broken upload short-circuits before anything is touched
+$badErr = _uh_entry($tmp);
+$badErr['error'] = UPLOAD_ERR_NO_FILE;
+T::ok('upload error rejected', save_uploaded_photo($badErr, 910010, 1024) === false);
+
+// absurd size rejected before sniffing (the tmp path is never touched)
+$huge = _uh_entry($tmp);
+$huge['size'] = 101 * 1024 * 1024;
+$huge['tmp_name'] = $tmpdir . '/does-not-exist.jpg';
+T::ok('oversize rejected pre-sniff', save_uploaded_photo($huge, 910011, 1024) === false);
+
+// PNG magic but no parseable header: sniffed as image, dimensions unreadable
+$trunc = "$tmpdir/trunc.png";
+file_put_contents($trunc, "\x89PNG\r\n\x1a\n" . str_repeat("\x00", 40));
+T::ok('headerless PNG rejected', save_uploaded_photo(_uh_entry($trunc), 910012, 1024) === false);
+
+// valid header, truncated body: getimagesize passes, GD decode fails
+$noBody = "$tmpdir/nobody.png";
+file_put_contents($noBody, "\x89PNG\r\n\x1a\n" . $chunk('IHDR', pack('N', 8) . pack('N', 8) . "\x08\x02\x00\x00\x00") . $chunk('IDAT', 'x'));
+$oid = 910013; _uh_track($oid);
+T::ok('undecodable PNG rejected', save_uploaded_photo(_uh_entry($noBody), $oid, 1024) === false);
+
+// unknown loader refused without touching GD
+T::ok('unknown mime has no loader', _compress_image($tmp, "$tmpdir/none.jpg", 'image/bmp', 1024) === false);
+
+// impossibly small byte budget forces the reduce loop to exhaustion:
+// PNG walks the scale-down rung (with alpha preservation)…
+$img = imagecreatetruecolor(40, 40);
+imagefill($img, 0, 0, imagecolorallocate($img, 90, 120, 200));
+imagepng($img, "$tmpdir/big.png");
+imagedestroy($img);
+T::ok('exhausted PNG reduce loop fails cleanly', _compress_image("$tmpdir/big.png", "$tmpdir/tiny.png", 'image/png', 10) === false);
+T::ok('failed compression leaves no artifact', !is_file("$tmpdir/tiny.png"));
+
+// …JPEG walks the quality-reduction rung first, then scales down too
+$img = imagecreatetruecolor(40, 40);
+imagefill($img, 0, 0, imagecolorallocate($img, 200, 90, 120));
+imagejpeg($img, "$tmpdir/big.jpg", 90);
+imagedestroy($img);
+T::ok('exhausted JPEG reduce loop fails cleanly', _compress_image("$tmpdir/big.jpg", "$tmpdir/tiny.jpg", 'image/jpeg', 10) === false);
+
 // Cleanup: files + rows
 foreach ($orderIds as $oidDel) {
     foreach (glob("$up/$oidDel/*") ?: [] as $f) { @unlink($f); }

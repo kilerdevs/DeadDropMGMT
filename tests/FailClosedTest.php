@@ -72,6 +72,32 @@ $_SESSION['user_role'] = 'courier';
 T::ok('courier fails is_owner', !is_owner());
 unset($_SERVER['SCRIPT_NAME']);
 
+// The ownership predicate fails closed when the orders table is unreadable
+// (deny, never assume ownership on error):
+$_SESSION['user_id'] = 4242;
+with_table_hidden('orders', static function (): void {
+    T::ok('courier_owns_order false on DB failure', !courier_owns_order(1));
+});
+
+// Config-fallback owner login: on a fresh install (users table absent) the
+// owner authenticates against ADMIN_* constants with user_id 0 — and must
+// STAY logged in (isset, not !empty, in is_admin_logged_in).
+if (!defined('ADMIN_USERNAME')) {
+    define('ADMIN_USERNAME', 'fallback_owner');
+}
+if (!defined('ADMIN_PASSWORD_HASH')) {
+    define('ADMIN_PASSWORD_HASH', password_hash('fallback-pass-1', PASSWORD_BCRYPT));
+}
+$_SESSION = [];
+start_secure_session();
+with_table_hidden('users', static function (): void {
+    T::eq('fallback owner login ok without users table', 'ok', admin_login('fallback_owner', 'fallback-pass-1'));
+    T::ok('fallback owner stays logged in with id 0', is_admin_logged_in() && current_user_id() === 0);
+    T::eq('wrong fallback password fails', 'fail', admin_login('fallback_owner', 'nope'));
+    T::eq('unknown user fails without users table', 'fail', admin_login('nobody', 'nope'));
+});
+$_SESSION = [];
+
 // ── Rate limiter: disabled short-circuit + fail-closed branches ─────────────
 set_setting('rate_limit_enabled', '0');
 T::eq('rl_status disabled short-circuit',

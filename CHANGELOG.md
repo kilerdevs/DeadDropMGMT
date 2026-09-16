@@ -5,6 +5,15 @@ All notable changes to DeadDropMGMT are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Coverage climbs to ~88% overall across `includes/`: `net.php` hits 100%
+  (CIDR/IP logic fully pinned), `cleanup.php` 89% (dice and sweep pass
+  split into directly testable halves), `crypto.php` 93% (compressor reduce
+  loops, undecodable-image and early-reject paths), `logger.php` 93%,
+  `proxy.php` 63% (stub server doubles as a fake HTTP proxy for winner and
+  judge paths). CI floors rise accordingly: 85% overall, per-file pins for
+  net/logger/cleanup/proxy; the temporary `crypto.php` override is gone
+
 ### Security
 - CSRF tokens are single-use now: every successful verification mints a
   fresh value, so a token stolen by XSS or leakage cannot be replayed for
@@ -35,7 +44,9 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   validation; config files stay constants-only
 - Pseudo-cron cleanup gates its settings-table read behind a 1-in-100
   probability (tests pass an explicit chance); busy deployments should
-  install real cron, which bypasses all gating
+  install real cron, which bypasses all gating. A lost die roll no longer
+  consumes the process one-shot, and the dice (`_cleanup_roll`) plus the
+  sweep pass (`_run_cleanup_pass`) are split out for direct testing
 
 ### Security
 - Proxy-header trust is now bound to the connection peer: with

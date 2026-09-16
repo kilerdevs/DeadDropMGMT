@@ -72,6 +72,27 @@ file_put_contents($p, implode('', $lines));
 [$valid, , , $reason] = verify_log_chain($p);
 T::ok('forged entry detected by hash mismatch', $valid === false && str_contains((string)$reason, 'hash mismatch'));
 
+// Blank lines are skipped, not treated as corruption — in both directions:
+// verification walks past them, and the tail scan anchors past a blank line
+// sitting between an entry and trailing garbage.
+write_chain($p, [$r1, $r2, $r3]);
+file_put_contents($p, "\n", FILE_APPEND);
+T::eq('blank line inside chain verifies', [true, 3, null, null], verify_log_chain($p));
+file_put_contents($p, "\nbroken-tail\n", FILE_APPEND);
+$fh = fopen($p, 'c+');
+T::eq('tail scan skips blank and garbage to last hash', $r3['hash'], _log_last_hash($fh));
+fclose($fh);
+
+// Request id is stable within the process (and 8 hex chars)
+T::eq('request id stable per process', _log_req_id(), _log_req_id());
+T::ok('request id is 8 hex chars', (bool)preg_match('/^[0-9a-f]{8}$/', _log_req_id()));
+
+// log_info writes through like its siblings (void return — verify the entry)
+log_info('logger_test_info_evt', ['msg' => 'info smoke']);
+$liveLines = file(APP_LOG_PATH, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+T::ok('log_info entry lands in the live log',
+      str_contains((string)end($liveLines), 'logger_test_info_evt'));
+
 // Legacy-key entries (pre key-separation history) still verify
 write_chain($p, [$r1, $r2]);
 $rec = ['ts' => '2026-08-26T00:00:03.000Z', 'level' => 'info', 'event' => 't_info', 'msg' => 'entry three'];

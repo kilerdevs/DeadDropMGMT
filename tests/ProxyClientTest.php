@@ -88,7 +88,7 @@ T::ok('dead proxy returns false', osm_fetch_via("http://127.0.0.1:$port/ok", 'ht
 // Disabled routing goes direct even when a pool exists
 $db->exec("INSERT INTO osm_proxies (url, label, source, last_status) VALUES ('http://127.0.0.1:1', 'dead', 'manual', 'new')");
 T::eq('routing disabled means direct fetch',
-      'STUB-BODY-OK', osm_fetch_via("http://127.0.0.1:$port/ok", null));
+      'STUB-BODY-OK', osm_fetch("http://127.0.0.1:$port/ok"));
 
 // Enabled routing with an EMPTY pool must fail closed — never leak direct
 set_setting('osm_proxy_enabled', '1');
@@ -97,18 +97,32 @@ T::ok('enabled + empty pool refuses to go direct', osm_fetch("http://127.0.0.1:$
 $staged = osm_last_via_stage();
 T::ok('empty-pool failure staged for badge', $staged !== null && $staged['failed'] === true && $staged['attempts'] === 0);
 
-// Enabled routing over a dead pool: fail closed, every attempt recorded
+// Enabled routing over a dead pool: fail closed, every attempt recorded.
+// Three statuses exercise the fastest-first comparator fully (ok beats new
+// beats fail; equal ranks fall through to the latency tiebreak).
 $db->exec("INSERT INTO osm_proxies (url, label, source, last_status, latency_ms) VALUES
     ('http://127.0.0.1:1', 'deadA', 'manual', 'fail', 500),
-    ('http://127.0.0.1:2', 'deadB', 'manual', 'ok',   100)");
+    ('http://127.0.0.1:2', 'deadB', 'manual', 'ok',   100),
+    ('http://127.0.0.1:3', 'deadC', 'manual', 'new',  NULL),
+    ('http://127.0.0.1:4', 'deadD', 'manual', 'fail', 100)");
 $rowIds = [];
 foreach ($db->query('SELECT id, url FROM osm_proxies')->fetchAll() as $r) { $rowIds[$r['url']] = (int)$r['id']; }
 T::ok('all-dead pool fails closed', osm_fetch("http://127.0.0.1:$port/ok") === false);
 $staged = osm_last_via_stage();
 T::ok('dead-pool attempt bookkeeping', is_array($staged) && ($staged['failed'] ?? null) === true
-    && ($staged['attempts'] ?? 0) === 2 && count($staged['skipped'] ?? []) === 2);
+    && ($staged['attempts'] ?? 0) === 4 && count($staged['skipped'] ?? []) === 4);
 $markA = $db->query('SELECT last_status FROM osm_proxies WHERE id = ' . $rowIds['http://127.0.0.1:1'])->fetch();
 T::ok('failed attempts marked as fail', $markA !== false && $markA['last_status'] === 'fail');
+
+// Winner path: the stub doubles as a fake HTTP proxy — curl sends it the
+// absolute-URI request line, the router answers 200, curl calls it a win.
+$db->exec("DELETE FROM osm_proxies");
+$db->exec("INSERT INTO osm_proxies (url, label, source, last_status) VALUES ('http://127.0.0.1:$port', 'selfstub', 'manual', 'new')");
+T::eq('working pool member wins', 'STUB-BODY-OK', osm_fetch("http://127.0.0.1:$port/ok"));
+$staged = osm_last_via_stage();
+T::ok('winner staged for badge', is_array($staged) && ($staged['failed'] ?? null) === false
+    && ($staged['attempts'] ?? 0) === 1 && ($staged['via'] ?? '') === "http://127.0.0.1:$port");
+$db->exec("DELETE FROM osm_proxies");
 
 // Pool ordering: previously-ok proxies sort ahead of dead ones regardless of latency
 $pool = [
@@ -156,11 +170,24 @@ T::ok('flush wrote badge info to session',
       ($_SESSION['osm_last_via']['via'] ?? '') === 'http://marked.proxy:8080');
 T::ok('stage consumed after flush', osm_last_via_stage() === null);
 
+// Flush with a closed session re-opens it just long enough to write
+osm_last_via_set(['via' => 'http://closed.proxy:8080', 'failed' => false, 'attempts' => 0]);
+session_write_close();
+osm_last_via_flush();
+T::ok('flush consumes stage on closed session', osm_last_via_stage() === null);
+start_secure_session();
+T::ok('badge landed despite closed session',
+      ($_SESSION['osm_last_via']['via'] ?? '') === 'http://closed.proxy:8080');
+
 // Anonymity judge logic against stub judges through a fake proxy channel:
 // judge bodies come via osm_fetch_via(judge, proxyUrl) — point the "proxy"
 // straight at the stub so the judge body is fully controlled.
 T::eq('judge fails closed when unreachable',
       false, proxy_judge_anonymous('http://127.0.0.1:1', '203.0.113.99'));
+T::ok('judge passes when echo is clean',
+      proxy_judge_anonymous("http://127.0.0.1:$port", '10.255.255.1') === true);
+T::ok('judge fails when echo leaks our IP',
+      proxy_judge_anonymous("http://127.0.0.1:$port", 'default-body') === false);
 
 // Batch probing: every candidate answers [code, ms], dead ones with code 0
 $res = proxy_multi_probe(

@@ -263,10 +263,13 @@ automatically in GitHub Actions
 coverage over `includes/` - the security-critical library code (crypto,
 auth, TOTP, rate limiting, logger, proxy client, i18n, settings). The job
 enforces floors: 85% on every security-critical file (80% for `db.php`,
-whose residual lines are the connect-failure `die()` itself) and 80%
-overall across `includes/` - any regression from the measured baseline
-fails the build. The summary lands in the job summary; a browsable HTML
-report is uploaded as an artifact for 14 days. Locally:
+whose residual lines are the connect-failure `die()` itself) and 85%
+overall across `includes/`, plus per-file pins where hermetic gains were
+hard-won (`net.php` 100, `logger.php` 92, `cleanup.php` 89, `proxy.php` 63 -
+live proxy discovery stays external by design) - any regression from the
+measured baseline fails the build. The summary lands in
+the job summary; a browsable HTML report is uploaded as an artifact for
+14 days. Locally:
 `composer install && php tests/coverage_runner.php` - Composer is dev-only
 tooling, the application itself never touches it.
 
