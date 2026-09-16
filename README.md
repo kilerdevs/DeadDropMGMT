@@ -265,7 +265,7 @@ auth, TOTP, rate limiting, logger, proxy client, i18n, settings). The job
 enforces floors: 85% on every security-critical file (80% for `db.php`,
 whose residual lines are the connect-failure `die()` itself) and 85%
 overall across `includes/`, plus per-file pins where hermetic gains were
-hard-won (`net.php` 100, `logger.php` 92, `cleanup.php` 89, `proxy.php` 63 -
+hard-won (`net.php` 100, `logger.php` 92, `cleanup.php` 85, `proxy.php` 63 -
 live proxy discovery stays external by design) - any regression from the
 measured baseline fails the build. The summary lands in
 the job summary; a browsable HTML report is uploaded as an artifact for
@@ -317,6 +317,8 @@ All fetched from GitHub raw by the server (never the browser) when the owner cli
 **Anonymity judges.** HTTP proxies without a source-provided rating are verified live: the server fetches a header-echo page *through* the candidate proxy and rejects it if the echo contains the server's own IP in the origin or any forwarded header (`Via`, `X-Forwarded-For`, …). Judges used, in order: `httpbin.org/get`, `azenv.net/` (plain HTTP so the check also works through CONNECT-less proxies). If the server's own public IP cannot be determined first, all unrated HTTP candidates are dropped rather than trusted. SOCKS proxies are never header-injecting by protocol design and skip this check.
 
 **What this means for your server's exposure:** clicking Auto-discover makes your server's IP visible to GitHub (list fetch, direct — not proxied), to every candidate proxy probed, and to the judge services. OSM itself is only contacted through accepted proxies while routing is enabled.
+
+**Stale entries are re-probed automatically.** A manually added proxy is only format-checked at insert, so a typo'd-but-well-formed URL would sit at `new` forever. Every cleanup pass (hourly pseudo-cron, or real cron) re-probes the 3 stalest entries — never checked, or not checked in 7 days — against a real OSM tile and updates their status, so the pool display reflects reality even for proxies live traffic never exercises.
 
 ---
 

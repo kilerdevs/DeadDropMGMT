@@ -36,7 +36,7 @@ $makeCoverage = static fn(): CodeCoverage => new CodeCoverage(
     $filter
 );
 
-$files = glob(__DIR__ . '/*Test.php');
+$files = glob(__DIR__ . '/*Test.php') ?: [];
 sort($files);
 
 $totalPass = $totalFail = 0;

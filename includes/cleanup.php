@@ -2,6 +2,7 @@
 declare(strict_types=1);
 require_once dirname(__DIR__) . '/includes/db.php';
 require_once dirname(__DIR__) . '/includes/order_state.php';
+require_once dirname(__DIR__) . '/includes/proxy.php';
 
 // Core deletion logic — single source of truth used by both pseudo-cron and CLI cron.
 // The actual work lives in order_state.php: per-order transactions with row
@@ -50,6 +51,10 @@ function _run_cleanup_pass(): void {
         // expiry sweep itself is idempotent.
         set_setting('last_cleanup', (string)time());
         do_cleanup();
+        // Same hourly slot re-probes the stalest pool entries (bounded,
+        // never throws): proxies nobody exercised must not keep a fresh
+        // 'ok' forever. Real-cron installs get this via cron/cleanup.php.
+        osm_proxy_revalidate_stale();
     } catch (Throwable $e) {
         log_err('Cleanup error: ' . $e->getMessage());
     }

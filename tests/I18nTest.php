@@ -53,4 +53,10 @@ $probeKey = 'test.plural.probe';
 // tn() against missing keys degrades to the bare key without exploding
 T::eq('tn missing key yields key', $probeKey, tn($probeKey, 5));
 
+// tn() escapes params exactly like t() — request data through a plural
+// string must never carry markup into the page.
+$tout = tn('admin.settings.log_line', 3, ['n' => '<b>3</b>']);
+T::ok('tn param injection is escaped',
+      str_contains($tout, '&lt;b&gt;') && !str_contains($tout, '<b>'));
+
 exit(T::done());

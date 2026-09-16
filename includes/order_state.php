@@ -189,9 +189,9 @@ function _unlink_order_files(int $order_id, array $files): void {
         }
     }
     $dir = dirname(__DIR__) . '/uploads/' . $order_id . '/';
-    // glob() answers false (not []) when the directory is unreadable — and
+    // glob_list(): a bare glob() answers false on unreadable dirs, and
     // count(false) is a TypeError on PHP 8+, crashing the whole deletion.
-    if (is_dir($dir) && count(glob($dir . '*') ?: []) === 0) {
+    if (is_dir($dir) && count(glob_list($dir . '*')) === 0) {
         @rmdir($dir);
     }
 }

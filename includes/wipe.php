@@ -66,8 +66,8 @@ function do_panic_wipe(): array {
             _panic_unlink(dirname(__DIR__) . '/uploads/' . $fn, $report);
         }
     }
-    foreach (glob(dirname(__DIR__) . '/uploads/*', GLOB_ONLYDIR) ?: [] as $dir) {
-        foreach (glob($dir . '/*') ?: [] as $f) {
+    foreach (glob_list(dirname(__DIR__) . '/uploads/*', GLOB_ONLYDIR) as $dir) {
+        foreach (glob_list($dir . '/*') as $f) {
             _panic_unlink($f, $report);
         }
         @rmdir($dir);

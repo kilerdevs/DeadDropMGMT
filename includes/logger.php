@@ -163,6 +163,15 @@ function log_info(string $event, array $ctx = []): void {
     app_log('info', $event, $ctx);
 }
 
+// glob() answers false — not [] — when the directory is missing or
+// unreadable, and count(false) is a TypeError on PHP 8+. Every directory
+// listing in the codebase goes through here so the next sweep/delete/probe
+// cannot reintroduce that crash by reaching for glob() directly.
+function glob_list(string $pattern, int $flags = 0): array {
+    $hits = glob($pattern, $flags);
+    return $hits === false ? [] : $hits;
+}
+
 // ── Chain verification ────────────────────────────────────────────────────────
 // Returns [valid(bool), checked(int), broken_line(int|null), reason(string|null)]
 // broken_line is the 1-based file line of the first bad entry.

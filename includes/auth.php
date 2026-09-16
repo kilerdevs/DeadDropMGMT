@@ -220,6 +220,15 @@ function verify_csrf(string $token, bool $rotate = true): bool {
     return true;
 }
 
+// Read-only probes (setup check, log verification) must not rotate: with
+// rotation, a high-frequency caller would mint a token its page never picks
+// up and desync itself. The named wrapper exists so call sites state that
+// intent — a bare verify_csrf(..., rotate: false) is how the next read-only
+// endpoint silently breaks its callers.
+function verify_csrf_readonly(string $token): bool {
+    return verify_csrf($token, rotate: false);
+}
+
 // JSON reply for fetch-called endpoints. Because verify_csrf() rotates the
 // session token on success, every state-changing AJAX response must hand the
 // caller its next token — otherwise the second request from a page that was
@@ -308,12 +317,25 @@ function rl_status(string $scope = 'public'): array {
         log_err('Rate limit status failed (fail closed): ' . $e->getMessage());
         return ['blocked' => true, 'remaining' => $window, 'count' => 0];
     }
-    if (!$row || (time() - strtotime($row['window_start'])) >= $window) {
+    if (!$row) {
+        return ['blocked' => false, 'remaining' => $window, 'count' => 0];
+    }
+    // Corrupt timestamps fail CLOSED: strtotime() answers false for values
+    // the database should never hold, and legacy zero-dates parse to year 0
+    // — both would otherwise read as "window started ages ago", silently
+    // resetting the budget so a damaged row could never block. A garbage
+    // counter denies (loudly) rather than waving traffic through.
+    $started = strtotime((string)$row['window_start']);
+    if ($started === false || $started <= 0) {
+        log_err('Rate limit status: unparseable window_start, failing closed');
+        return ['blocked' => true, 'remaining' => $window, 'count' => 0];
+    }
+    if ((time() - $started) >= $window) {
         return ['blocked' => false, 'remaining' => $window, 'count' => 0];
     }
     return [
         'blocked'   => (int)$row['count'] >= $max,
-        'remaining' => max(0, $window - (time() - strtotime($row['window_start']))),
+        'remaining' => max(0, $window - (time() - $started)),
         'count'     => (int)$row['count'],
     ];
 }
@@ -341,7 +363,16 @@ function rl_hit(string $scope = 'public', ?int $max_override = null, ?int $windo
         $stmt->execute([$ip, $scope]);
         $row = $stmt->fetch();
 
-        $stale = !$row || (time() - strtotime($row['window_start'])) >= $window;
+        // Unparseable window_start fails CLOSED (see rl_status): rolling back
+        // and denying beats resetting the budget on a damaged row.
+        $started = $row ? strtotime((string)$row['window_start']) : time();
+        if ($started === false || $started <= 0) {
+            $db->rollBack();
+            log_err('Rate limit increment: unparseable window_start, failing closed');
+            return ['blocked' => true, 'remaining' => $window, 'count' => 0];
+        }
+
+        $stale = !$row || (time() - $started) >= $window;
         if ($stale) {
             $db->prepare(
                 'INSERT INTO rate_limits (ip_address, scope, count, window_start) VALUES (?, ?, 1, UTC_TIMESTAMP())
@@ -351,7 +382,7 @@ function rl_hit(string $scope = 'public', ?int $max_override = null, ?int $windo
             $window_start = time();
         } else {
             $count = (int)$row['count'] + 1;
-            $window_start = (int)strtotime($row['window_start']);
+            $window_start = $started;
             $db->prepare('UPDATE rate_limits SET count = count + 1 WHERE ip_address = ? AND scope = ?')
                ->execute([$ip, $scope]);
         }

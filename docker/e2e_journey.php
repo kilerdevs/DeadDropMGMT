@@ -164,7 +164,7 @@ T((int)$db->query("SELECT COUNT(*) FROM order_photos WHERE order_id = '$orderId'
 T((int)$db->query("SELECT COUNT(*) FROM order_events WHERE order_token = '$token'")->fetchColumn() >= 1,
     'event log recorded the lifecycle');
 $uploadsDir = dirname(__DIR__) . '/uploads/' . $orderId;
-T(!is_dir($uploadsDir) || count(glob($uploadsDir . '/*')) === 0, 'no orphaned upload files');
+T(!is_dir($uploadsDir) || count(glob_list($uploadsDir . '/*')) === 0, 'no orphaned upload files');
 [$st, $html] = _j_post("$base/", ['order_token' => $token], '');
 T(str_contains($html, 'class="alert"'), 'public lookup now reports the order unknown');
 

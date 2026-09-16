@@ -103,6 +103,50 @@ function osm_proxy_mark(int $id, bool $ok, ?int $latency_ms = null): void {
     }
 }
 
+// ── Stale-pool revalidation ─────────────────────────────────────────────────
+// A manually added proxy is only format-checked at insert, and a stored one
+// is only re-probed when live traffic happens to exercise it. Entries nobody
+// exercises — routing disabled, or an earlier pool member always winning —
+// keep their stale 'ok'/'new' forever, including typo'd-but-well-formed
+// URLs. The cleanup passes re-probe the stalest few so the settings page
+// never shows a healthy pool that is actually dead.
+//
+// Bounded: at most $max entries per pass, oldest-unchecked first, one
+// parallel probe round with short timeouts. Never throws; an empty pool is
+// one cheap SELECT, no network.
+function osm_proxy_revalidate_stale(int $max = 3, int $stale_days = 7, ?string $probe_url = null): array {
+    if (!function_exists('curl_init')) return [];
+    try {
+        $db = get_db();
+        $stmt = $db->prepare(
+            'SELECT id, url FROM osm_proxies
+             WHERE last_checked IS NULL OR last_checked < DATE_SUB(NOW(), INTERVAL ? DAY)
+             ORDER BY last_checked IS NOT NULL, last_checked ASC
+             LIMIT ' . max(1, $max)
+        );
+        $stmt->execute([$stale_days]);
+        $due = $stmt->fetchAll();
+        if (!$due) return [];
+        $urls = [];
+        foreach ($due as $row) {
+            $urls[(int)$row['id']] = (string)$row['url'];
+        }
+        $probe = $probe_url ?? 'https://a.tile.openstreetmap.org/13/4051/2749.png';
+        $res = proxy_multi_probe(array_values($urls), $probe, 3, 2);
+        $out = [];
+        foreach ($urls as $id => $url) {
+            [$code, $ms] = $res[$url] ?? [0, 0];
+            $ok = $code >= 200 && $code < 300;
+            osm_proxy_mark($id, $ok, $ms);
+            $out[$url] = $ok;
+        }
+        return $out;
+    } catch (Throwable $e) {
+        log_err('Proxy revalidate: ' . $e->getMessage());
+        return [];
+    }
+}
+
 // Fetch an OSM resource honouring the osm_proxy_enabled setting. Tries each
 // pool member fastest-first; gives up (returns false) if all fail while
 // routing is enabled — that is the point of fail-closed.

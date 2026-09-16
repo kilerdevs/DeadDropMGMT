@@ -6,6 +6,20 @@ All notable changes to DeadDropMGMT are documented here. The format follows
 ## [1.2.0] - 2026-09-16
 
 ### Security
+- Rate limiter fails closed on an unparseable `window_start`: `strtotime()`
+  returning false used to read as "window started in 1970", silently
+  resetting the budget so a damaged row could never block. Both the read
+  path and the atomic spend path now deny (loudly) instead
+- `tn()` HTML-escapes its parameters, matching `t()`: plural-string output
+  renders into HTML, so request-derived values can no longer carry markup
+  through it
+- Photo pixel ceiling drops from 50 MP to 16 MP (4096x4096): a decoded
+  32-bit buffer at the old cap was already ~200 MB, with GD holding several
+  copies during resample — an OOM away from the 256 MB PHP limit
+- Stale proxy pool entries are re-probed on cleanup passes (hourly
+  pseudo-cron and real cron, 3 oldest-unchecked per pass): manually added
+  proxies were only format-checked, and entries nobody exercised kept a
+  stale 'ok'/'new' forever
 - `X-Forwarded-Proto` is now covered by the same trusted-peer gate as the IP
   headers: `request_is_https()` moved to `includes/net.php` behind the shared
   `_proxy_peer_trusted()` check, so a forged proto from a direct connection
@@ -35,6 +49,10 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   validated by the in-container lifecycle journey
 - Trivy replaced by Grype (Anchore scan-action) + Syft SBOMs with identical
   gate semantics: HIGH/CRITICAL with a fix available fail the build
+- Filesystem listings go through a shared `glob_list()` helper (bare
+  `glob()` answers false on unreadable directories, and `count(false)` is a
+  TypeError on PHP 8+); read-only CSRF checks use the named
+  `verify_csrf_readonly()` wrapper instead of a bare `rotate: false` flag
 
 ## [1.1.0] - 2026-09-16
 

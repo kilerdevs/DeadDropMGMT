@@ -35,6 +35,13 @@ $stable = generate_csrf();
 T::ok('non-rotating verification accepts', verify_csrf($stable, rotate: false));
 T::ok('non-rotating verification keeps token valid', verify_csrf($stable, rotate: false));
 
+// Named read-only wrapper: same no-rotation guarantee, stated intent at the
+// call site (this is what check_setup.php and log_verify.php use).
+$ro = generate_csrf();
+T::ok('readonly wrapper accepts', verify_csrf_readonly($ro));
+T::ok('readonly wrapper keeps token valid', verify_csrf_readonly($ro));
+T::eq('readonly wrapper leaves session token untouched', $ro, generate_csrf());
+
 // No token in session yet → everything rejected
 unset($_SESSION['csrf_token']);
 T::ok('missing session token rejects verification', !verify_csrf($token));
