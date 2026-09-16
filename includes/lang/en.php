@@ -106,6 +106,7 @@ return [
     'admin.bootstrap.explain'       => 'No accounts exist yet — this server is brand new. Pick a username: it becomes the owner account with full control. You will choose a password on the next screen.',
     'admin.bootstrap.submit_button' => 'Create account',
     'admin.bootstrap.error.initialized' => 'An account already exists on this server — please log in.',
+    'admin.bootstrap.error.busy' => 'Someone else is claiming this server right now - please wait a few seconds and try again.',
     'admin.bootstrap.error.taken'       => 'That username is already taken.',
     'admin.bootstrap.error.create_failed' => 'Could not create the account. Please try again.',
     'admin.bootstrap.enrollment_note' => "Recovery enrollment code for your account (shown once, valid 24 h — store it somewhere safe): {secret}",

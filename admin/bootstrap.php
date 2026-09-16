@@ -42,7 +42,12 @@ try {
     // requests — two simultaneous claimants can no longer both observe zero
     // users and both proceed to INSERT.
     if (!$db->query("SELECT GET_LOCK('deaddrop_owner_bootstrap', 5)")->fetchColumn()) {
-        _bootstrap_back(t('admin.bootstrap.error.initialized'));
+        // Lost the race for the lock — but that does NOT mean the instance
+        // is claimed. A second claimant timing out here used to be told
+        // "already initialized" while the table was still empty; check.
+        $claimed = (int)$db->query('SELECT COUNT(*) FROM users')->fetchColumn() !== 0;
+        _bootstrap_back(t($claimed ? 'admin.bootstrap.error.initialized'
+                                   : 'admin.bootstrap.error.busy'));
     }
     try {
         if ((int)$db->query('SELECT COUNT(*) FROM users')->fetchColumn() !== 0) {

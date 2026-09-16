@@ -106,6 +106,7 @@ return [
     'admin.bootstrap.explain'       => 'Aún no existe ninguna cuenta: este servidor es nuevo. Elija un nombre de usuario: se convertirá en la cuenta de propietario con control total. La contraseña la establecerá en la siguiente pantalla.',
     'admin.bootstrap.submit_button' => 'Crear cuenta',
     'admin.bootstrap.error.initialized' => 'Ya existe una cuenta en este servidor: inicie sesión.',
+    'admin.bootstrap.error.busy' => 'Alguien está reclamando este servidor ahora mismo — espera unos segundos e inténtalo de nuevo.',
     'admin.bootstrap.error.taken'       => 'Ese nombre de usuario ya está en uso.',
     'admin.bootstrap.error.create_failed' => 'No se pudo crear la cuenta. Inténtelo de nuevo.',
     'admin.bootstrap.enrollment_note' => 'Código de inscripción de recuperación para su cuenta (se muestra una vez, válido 24 h — guárdelo en lugar seguro): {secret}',

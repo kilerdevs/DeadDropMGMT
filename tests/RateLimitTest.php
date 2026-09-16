@@ -29,6 +29,20 @@ rl_increment($scope);
 $s = rl_status($scope);
 T::ok('blocked at limit', $s['blocked'] === true && $s['count'] === 3);
 
+// Boundary agreement between the read path and the spend path: stored >=
+// max and stored+1 > max are the SAME predicate for integer counts, so a
+// "blocked" cooldown never hides a remaining attempt (and vice versa).
+$bscope = 'test_boundary';
+$db->prepare('DELETE FROM rate_limits WHERE ip_address = ? AND scope = ?')->execute([$ip, $bscope]);
+rl_increment($bscope); rl_increment($bscope); // count = max-1
+T::ok('status allows at max-1', !rl_status($bscope)['blocked']);
+$last = rl_hit($bscope); // the max-th attempt still executes
+T::ok('hit executes the max-th attempt', !$last['blocked'] && $last['count'] === 3);
+T::ok('status blocks exactly at max', rl_status($bscope)['blocked']);
+$denied = rl_hit($bscope);
+T::ok('hit denies past max', $denied['blocked'] && $denied['count'] === 4);
+$db->prepare('DELETE FROM rate_limits WHERE ip_address = ? AND scope = ?')->execute([$ip, $bscope]);
+
 // Scope isolation: other surface unaffected by this budget
 rl_increment('test_admin_login');
 T::ok('separate scope has own budget', !rl_status('test_admin_login')['blocked']);

@@ -96,7 +96,13 @@ function app_log(string $level, string $event, array $ctx = []): bool {
         'level' => $level,
         'event' => $event,
         'msg'   => isset($ctx['msg']) ? $ctx['msg'] : '',
-        'ip'    => function_exists('get_client_ip') ? get_client_ip() : ($_SERVER['REMOTE_ADDR'] ?? null),
+        // TCP peer on purpose, NOT get_client_ip(): the logger resolving the
+        // client IP would call log_warn() on untrusted peers, which calls
+        // back into app_log() — a call cycle held together only by a static
+        // once-guard. The authoritative client IP belongs in audit_log /
+        // order_events (written explicitly by the flows); this field says
+        // who actually connected.
+        'ip'    => ($_SERVER['REMOTE_ADDR'] ?? null),
         'user'  => $user,
         'req'   => PHP_SAPI === 'cli' ? 'cli' : _log_req_id(),
     ];

@@ -5,10 +5,36 @@ All notable changes to DeadDropMGMT are documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+- `X-Forwarded-Proto` is now covered by the same trusted-peer gate as the IP
+  headers: `request_is_https()` moved to `includes/net.php` behind the shared
+  `_proxy_peer_trusted()` check, so a forged proto from a direct connection
+  can no longer plant a `secure` session cookie over plain HTTP
+- Order event rows die with their order (same transaction, matched by id or
+  token): lookup/unlock probes no longer accumulate IPs and user agents after
+  the order is gone. A flow's own post-delete event (e.g. `received`) still
+  lands afterwards as a single terminal row
+- Panic wipe shreds the on-disk logs with `overwrite_and_unlink()` instead
+  of truncating them, matching the photo-file treatment
+- The log chain's `ip` field records the TCP peer directly instead of
+  resolving through `get_client_ip()`: the logger no longer calls back into
+  the function that logs through it (the old static once-guard was the only
+  thing standing between that cycle and a stack overflow)
+
+### Fixed
+- `count(glob(...))` TypeError on PHP 8+ when the uploads directory is
+  unreadable during order deletion — glob failure now degrades to "not empty"
+- Misleading bootstrap error: losing the named-lock race while the users
+  table is still empty now says "busy, retry" instead of "already initialized"
+- Expiry sweep is bounded (200 rows per pass, repeat while full) instead of
+  loading every expired order into one process
+
 ### Changed
 - CI supply chain refreshed (checkout v7, setup-php 2.37.2,
   upload-artifact v7, ZAP baseline pin); Docker images run PHP 8.5,
   validated by the in-container lifecycle journey
+- Trivy replaced by Grype (Anchore scan-action) + Syft SBOMs with identical
+  gate semantics: HIGH/CRITICAL with a fix available fail the build
 
 ## [1.1.0] - 2026-09-16
 

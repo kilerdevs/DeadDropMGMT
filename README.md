@@ -445,7 +445,10 @@ fits same-host nginx/Apache and private docker networks. If your proxy connects
 from public addresses, list them explicitly. A request whose peer is not on the
 list gets its proxy headers ignored (and logs one warning) even with the flag
 set — so a stale flag on an app that is directly reachable cannot be turned
-into free IP rotation by whoever finds it.
+into free IP rotation by whoever finds it. The same peer gate covers
+`X-Forwarded-Proto` (HTTPS detection for the session cookie `secure` flag and
+HSTS): a forged proto from an untrusted peer cannot plant a `secure` cookie
+over plain HTTP.
 
 #### Rotating the AES key
 

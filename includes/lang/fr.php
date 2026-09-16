@@ -106,6 +106,7 @@ return [
     'admin.bootstrap.explain'       => 'Aucun compte n’existe encore — ce serveur est tout neuf. Choisissez un nom d’utilisateur : il deviendra le compte propriétaire avec un contrôle total. Vous définirez le mot de passe à l’étape suivante.',
     'admin.bootstrap.submit_button' => 'Créer le compte',
     'admin.bootstrap.error.initialized' => 'Un compte existe déjà sur ce serveur — connectez-vous.',
+    'admin.bootstrap.error.busy' => 'Ce serveur est en cours de réclamation — patientez quelques secondes et réessayez.',
     'admin.bootstrap.error.taken'       => 'Ce nom d’utilisateur est déjà pris.',
     'admin.bootstrap.error.create_failed' => 'Impossible de créer le compte. Veuillez réessayer.',
     'admin.bootstrap.enrollment_note' => 'Code d’inscription de récupération pour votre compte (affiché une fois, valable 24 h — conservez-le en lieu sûr) : {secret}',

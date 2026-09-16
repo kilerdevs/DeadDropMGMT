@@ -48,8 +48,12 @@ T::ok('refused receive leaves the order intact',
 
 // 3 ── receive AFTER delivery: exactly once
 $idDel = $mk('sttreceive0003', 'delivered');
+$db->prepare("INSERT INTO order_events (order_id, order_token, event_type, ip_address) VALUES (?, 'sttreceive0003', 'unlock_success', '198.51.100.7')")->execute([$idDel]);
+$db->prepare("INSERT INTO order_events (order_id, order_token, event_type, ip_address) VALUES (NULL, 'sttreceive0003', 'lookup', '198.51.100.7')")->execute();
 T::ok('receive accepts a delivered order', order_receive_atomic('sttreceive0003'));
 T::ok('received order is gone', !$db->query('SELECT 1 FROM orders WHERE id = ' . $idDel)->fetch());
+T::ok('receive takes the order events with it',
+    (int)$db->query("SELECT COUNT(*) FROM order_events WHERE order_token = 'sttreceive0003' OR order_id = $idDel")->fetchColumn() === 0);
 T::ok('repeated receive fails harmlessly', !order_receive_atomic('sttreceive0003'));
 T::ok('unknown token receives nothing', !order_receive_atomic('sttnope00000000'));
 

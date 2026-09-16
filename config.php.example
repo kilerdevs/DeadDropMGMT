@@ -76,21 +76,10 @@ ini_set('error_log',       ERROR_LOG_PATH);
 // deployment constants only, so a hand-edited config cannot weaken proxy-
 // header validation. See DDMGMT_TRUST_PROXY / DDMGMT_TRUSTED_PROXIES there.
 
-// ── Request scheme detection (session cookie "secure" flag, HSTS) ────────────
-// Behind a TLS-terminating reverse proxy PHP sees plain HTTP, so $_SERVER
-//['HTTPS'] lies about the browser-side security context. With
-// DDMGMT_TRUST_PROXY=1 the X-Forwarded-Proto header decides (only the literal
-// "https" counts, first hop of a comma list). Without proxy trust PHP's own
-// view wins — never set the cookie "secure"-less on a proxy you trust.
-function request_is_https(): bool {
-    if (_secret('DDMGMT_TRUST_PROXY', '0') === '1') {
-        $proto = strtolower(trim(explode(',', (string)($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? ''))[0]));
-        if ($proto !== '') {
-            return $proto === 'https';
-        }
-    }
-    return !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off';
-}
+// ── Request scheme detection ───────────────────────────────────────────────────
+// request_is_https() lives in includes/net.php next to get_client_ip(): both
+// trust proxy headers only from a peer in DDMGMT_TRUSTED_PROXIES, and a
+// hand-edited config must not be able to weaken either check.
 
 // Best-effort destructive unlink: null bytes are written over the file
 // contents before removal. This is NOT a guarantee of secure deletion —

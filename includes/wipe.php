@@ -73,10 +73,13 @@ function do_panic_wipe(): array {
         @rmdir($dir);
     }
 
-    // On-disk logs carry IPs and tokens — destroyed along with everything else.
+    // On-disk logs carry IPs and tokens — destroyed along with everything
+    // else. Same overwrite treatment as photo files (finding: truncation
+    // alone leaves the old blocks recoverable); both daemons reopen their
+    // logs per write, so unlinking under them is safe.
     foreach ([ERROR_LOG_PATH, APP_LOG_PATH] as $log_path) {
         if (is_file($log_path)) {
-            @file_put_contents($log_path, '');
+            overwrite_and_unlink($log_path);
         }
     }
 

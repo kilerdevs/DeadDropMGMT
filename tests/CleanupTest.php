@@ -90,6 +90,25 @@ T::ok('direct pass stamps and sweeps when due', $after > $before);
 _run_cleanup_pass();
 T::eq('direct pass respects the hourly throttle', $after, $stampOf());
 
+// ── Batched sweep, per-order event cleanup, unreadable-dir safety ──────────
+$b1 = $mk('clstoken000011', 'NOW() - INTERVAL 3 HOUR');
+$b2 = $mk('clstoken000012', 'NOW() - INTERVAL 3 HOUR');
+$b3 = $mk('clstoken000013', 'NOW() - INTERVAL 3 HOUR');
+$db->prepare("INSERT INTO order_events (order_id, order_token, event_type, ip_address) VALUES (?, 'clstoken000011', 'unlock_success', '198.51.100.8')")->execute([$b1]);
+$db->prepare("INSERT INTO order_events (order_id, order_token, event_type, ip_address) VALUES (NULL, 'clstoken000012', 'lookup', '198.51.100.8')")->execute();
+// An untracked file keeps the directory alive: the sweep must not rmdir it
+$strayDir = "$up/$b1/";
+if (!is_dir($strayDir)) { mkdir($strayDir, 0770, true); }
+file_put_contents($strayDir . 'stray.bin', 'not-in-db');
+T::eq('three expired orders swept across batches of two', 3, cleanup_expired_orders(2));
+T::ok('swept orders are gone',
+    !$db->query("SELECT 1 FROM orders WHERE order_token LIKE 'clstoken00001%'")->fetch());
+T::ok('swept orders take their events with them',
+    (int)$db->query("SELECT COUNT(*) FROM order_events WHERE order_token LIKE 'clstoken00001%' OR order_id IN ($b1, $b2, $b3)")->fetchColumn() === 0);
+T::ok('non-empty directory survives the sweep', is_file($strayDir . 'stray.bin') && is_dir($strayDir));
+@unlink($strayDir . 'stray.bin');
+@rmdir($strayDir);
+
 // Cleanup
 $db->prepare('DELETE FROM orders WHERE order_token LIKE "clstoken%"')->execute();
 
