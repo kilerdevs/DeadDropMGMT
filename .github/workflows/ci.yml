@@ -264,7 +264,7 @@ jobs:
       # Grype (via the Anchore actions, both SHA-pinned) replaces Trivy here:
       # same gate semantics, SBOMs from Syft in the same step family.
       - name: Scan Apache image (Grype)
-        uses: anchore/scan-action@1638637db639e0ade3258b51db49a9a137574c3e # v6
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
         with:
           image: deaddrop:apache
           severity-cutoff: high
@@ -273,7 +273,7 @@ jobs:
           output-format: table
 
       - name: Scan FPM image (Grype)
-        uses: anchore/scan-action@1638637db639e0ade3258b51db49a9a137574c3e # v6
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
         with:
           image: deaddrop:fpm
           severity-cutoff: high
@@ -284,14 +284,14 @@ jobs:
       # SBOM (CycloneDX) for both images — the inventory that makes the CVE
       # scans auditable and gives downstream deployers something to diff.
       - name: Generate Apache SBOM (CycloneDX)
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
           image: deaddrop:apache
           output-format: cyclonedx-json
           output-file: sbom-apache.cdx.json
 
       - name: Generate FPM SBOM (CycloneDX)
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
           image: deaddrop:fpm
           output-format: cyclonedx-json
