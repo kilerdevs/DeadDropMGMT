@@ -43,10 +43,10 @@ jobs:
     steps:
       # Third-party actions are pinned to commit SHAs, not moving tags: a
       # hijacked tag must not be able to run code in this repo.
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup PHP
-        uses: shivammathur/setup-php@bf6b4fbd49ca58e4608c9c89fba0b8d90bd2a39f # 2.35.5
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
         with:
           php-version: ${{ matrix.php }}
           extensions: pdo_mysql, openssl, gd, fileinfo
@@ -89,10 +89,10 @@ jobs:
       DDMGMT_DB_PASS: root
       DDMGMT_TEST_DB: deaddrops_test
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup PHP
-        uses: shivammathur/setup-php@bf6b4fbd49ca58e4608c9c89fba0b8d90bd2a39f # 2.35.5
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
         with:
           php-version: '8.3'
           extensions: pdo_mysql, openssl, gd, fileinfo
@@ -113,10 +113,10 @@ jobs:
     runs-on: ubuntu-latest
     name: PHPStan
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup PHP
-        uses: shivammathur/setup-php@bf6b4fbd49ca58e4608c9c89fba0b8d90bd2a39f # 2.35.5
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
         with:
           php-version: '8.3'
           extensions: pdo_mysql, openssl, gd, fileinfo
@@ -158,10 +158,10 @@ jobs:
       DDMGMT_DB_PASS: root
       DDMGMT_TEST_DB: deaddrops_test
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup PHP
-        uses: shivammathur/setup-php@bf6b4fbd49ca58e4608c9c89fba0b8d90bd2a39f # 2.35.5
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
         with:
           php-version: '8.3'
           extensions: pdo_mysql, openssl, gd, fileinfo
@@ -205,7 +205,7 @@ jobs:
             { read pct; echo "### Line coverage: ${pct}%" >> $GITHUB_STEP_SUMMARY; } || true
 
       - name: Upload HTML report
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-html
           path: coverage-html
@@ -221,7 +221,7 @@ jobs:
       DDMGMT_DB_USER: deaddrop
       DDMGMT_DB_PASS: deaddrop-db
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Build Apache image
         run: docker build -t deaddrop:apache .
@@ -256,7 +256,7 @@ jobs:
         run: trivy image --format cyclonedx --output sbom-fpm.cdx.json deaddrop:fpm
 
       - name: Upload SBOMs
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sbom
           path: sbom-*.cdx.json
@@ -316,7 +316,7 @@ jobs:
           timeout 90 bash -c 'until curl -fs http://127.0.0.1:2137/healthz.php >/dev/null; do sleep 2; done'
 
       - name: ZAP baseline scan (gated)
-        uses: zaproxy/action-baseline@6c5a007541891231cd9e0ddec25d4f25c59c9874 # v0.15.0
+        uses: zaproxy/action-baseline@de8ad967d3548d44ef623df22cf95c3b0baf8b25 # v0.15.0
         with:
           target: 'http://127.0.0.1:2137/'
           cmd_options: '-I -a -c /zap/wrk/docker/zap-rules.tsv'
