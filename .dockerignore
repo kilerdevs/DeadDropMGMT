@@ -1,11 +1,19 @@
 .git
 .github
-tests
+# Tests stay out of the image — except schema_loader.php, which the Dockerfiles
+# COPY explicitly for first-boot schema setup. NOTE: a file cannot be
+# re-included from under an excluded parent directory, so the directory is
+# excluded by contents (tests/*), not as a whole.
+tests/*
 !tests/schema_loader.php
 config.php
 logs/*
 uploads/*
 cache/*
+# Dev-only Composer tooling (php-code-coverage) must never ship: it is a
+# supply-chain surface with no runtime purpose (ADR-001).
+vendor/
+composer.lock
 *.md
 prompt.txt
 docker-compose*.yml

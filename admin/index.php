@@ -31,10 +31,11 @@ $bootstrap = ($user_count === 0);
 
 $csrf  = generate_csrf();
 $nonce = set_security_headers(false);
-$lerr  = htmlspecialchars($_SESSION['login_error'] ?? '', ENT_QUOTES, 'UTF-8');
+$lerr  = (string)($_SESSION['login_error'] ?? '');
 if (isset($_GET['timeout'])) {
-    $lerr = htmlspecialchars(t('admin.login.error.session_expired'), ENT_QUOTES, 'UTF-8');
+    $lerr = t('admin.login.error.session_expired');
 }
+// login_error producers are all t()-built (HTML-safe); raw echo below.
 unset($_SESSION['login_error']);
 ?>
 <!DOCTYPE html>

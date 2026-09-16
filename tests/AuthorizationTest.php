@@ -42,8 +42,10 @@ $_SESSION = ['user_id' => $courierId, 'user_role' => 'superadmin'];
 T::ok('unknown role is not owner or courier', !is_owner() && !is_courier());
 $_SESSION = [];
 T::ok('no order access without session', !courier_owns_order($ownOrder));
-T::ok('nonexistent order denied for courier',
-    ($_SESSION = ['user_id' => $courierId, 'user_role' => 'courier']) || !courier_owns_order(99999999));
+// The assertion must CALL the function: an assignment inside || would be
+// truthy and short-circuit, passing even when the check is broken.
+$_SESSION = ['user_id' => $courierId, 'user_role' => 'courier'];
+T::ok('nonexistent order denied for courier', !courier_owns_order(99999999));
 
 // Cleanup
 $db->prepare('DELETE FROM orders WHERE id IN (?, ?)')->execute([$ownOrder, $orphanOrder]);

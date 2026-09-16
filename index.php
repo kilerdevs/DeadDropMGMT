@@ -44,11 +44,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && !empty($_SESSION['reveal'])) {
     if ((time() - ($rv['ts'] ?? 0)) < REVEAL_MAX_AGE && ($rv['type'] ?? '') === 'delivered') {
         $dec = open_payload($rv['sealed'] ?? []);
         if (is_array($dec) && isset($dec['token']) && is_string($dec['token'])) {
-            $loc_data         = $dec;
-            $order_notes      = (string)($dec['notes'] ?? '');
-            $order_expires_ts = (int)($dec['expires'] ?? 0);
-            $photos           = is_array($dec['photos'] ?? null) ? $dec['photos'] : [];
-            $current_token    = $dec['token'];
+            // The sealed blob alone is not enough: an owner panic between
+            // unlock and this GET deletes the row, and the reveal must die
+            // with it instead of rendering a deleted order for 180 s.
+            try {
+                $chk = get_db()->prepare('SELECT 1 FROM orders WHERE order_token = ? LIMIT 1');
+                $chk->execute([$dec['token']]);
+                $alive = (bool)$chk->fetchColumn();
+            } catch (Exception $e) {
+                $alive = false; // unreadable registry reveals nothing
+            }
+            if ($alive) {
+                $loc_data         = $dec;
+                $order_notes      = (string)($dec['notes'] ?? '');
+                $order_expires_ts = (int)($dec['expires'] ?? 0);
+                $photos           = is_array($dec['photos'] ?? null) ? $dec['photos'] : [];
+                $current_token    = $dec['token'];
+            }
         }
         // Tampered/expired/unopenable payload → nothing is revealed at all.
     } elseif ((time() - ($rv['ts'] ?? 0)) < REVEAL_MAX_AGE && ($rv['type'] ?? '') === 'preparing') {
@@ -245,7 +257,8 @@ $csrf_public = generate_csrf();
 <?php else: ?>
 
     <?php if ($error): ?>
-    <div class="alert"><?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?></div>
+    <!-- $error is t()-built (HTML-safe); raw echo (see admin/orders.php). -->
+    <div class="alert"><?= $error ?></div>
     <?php endif; ?>
 
     <?php if ($correct_preparing): ?>

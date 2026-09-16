@@ -16,6 +16,12 @@ function i18n_lang_names(): array {
 function i18n_load(string $lang): array {
     static $cache = [];
     if (isset($cache[$lang])) return $cache[$lang];
+    // Belt and braces: the path below interpolates $lang into a require, so
+    // only allowlisted codes ever reach it — a future caller passing request
+    // data must fail closed, not LFI.
+    if (!in_array($lang, i18n_supported_langs(), true)) {
+        return [];
+    }
     $file = __DIR__ . "/lang/{$lang}.php";
     $cache[$lang] = is_file($file) ? require $file : [];
     return $cache[$lang];
@@ -34,6 +40,11 @@ function current_lang(): string {
 }
 
 function t(string $key, array $params = []): string {
+    // CONTRACT: the return value is fully HTML-safe (static trusted text +
+    // escaped params) — echo it raw. Never htmlspecialchars() t()/tn() output
+    // at the display site, and never pre-escape values passed as $params:
+    // either mistake double-escapes (a generated password containing & once
+    // rendered as &amp;amp;, locking the recipient out).
     $lang = current_lang();
     $str  = i18n_load($lang)[$key] ?? i18n_load('en')[$key] ?? $key;
     foreach ($params as $k => $v) {

@@ -28,6 +28,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!verify_csrf($_POST['csrf_token'] ?? '')) {
         $error = t('admin.verify2fa.error.csrf');
     } else {
+        // verify_csrf() rotates on success, invalidating the token captured
+        // at the top: a wrong-code re-render below must embed the fresh
+        // value, or the next attempt dies with "Invalid CSRF token".
+        $csrf = generate_csrf();
         $rl = rl_status('admin_2fa');
         if ($rl['blocked']) {
             $error = t('admin.verify2fa.error.rate_limited', ['min' => (int)ceil($rl['remaining'] / 60)]);
@@ -81,7 +85,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <div class="wordmark">DEAD DROP // ADMIN</div>
     <h1><?= t('admin.verify2fa.h1') ?></h1>
     <?php if ($error): ?>
-    <div class="alert"><?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?></div>
+    <!-- $error is t()-built (HTML-safe); raw echo (see admin/orders.php). -->
+    <div class="alert"><?= $error ?></div>
     <?php endif; ?>
     <form method="POST" action="/admin/verify_2fa.php" autocomplete="off">
         <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
@@ -92,7 +97,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </div>
         <div class="form-actions">
             <button type="submit" class="btn"><?= t('admin.verify2fa.verify_button') ?></button>
-            <a href="/admin/logout.php" class="btn-cancel"><?= t('admin.verify2fa.cancel_button') ?></a>
+            <!-- Logout is POST-only (CSRF): formaction re-targets this form's
+                 POST (with its CSRF token) at logout.php — no nested form. -->
+            <button type="submit" formaction="/admin/logout.php" class="btn-cancel"><?= t('admin.verify2fa.cancel_button') ?></button>
         </div>
     </form>
 </div>

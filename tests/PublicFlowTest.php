@@ -311,6 +311,17 @@ T::ok('blocked budget refuses even the destructive confirmation', str_contains($
 T::ok('order survives blocked deletion attempt',
     (bool)$db->query("SELECT 1 FROM orders WHERE order_token = '$tokD2'")->fetch());
 
+// Reveal dies with the row: unlock, then an owner panic deletes the order
+// before the consuming GET — the sealed blob alone must reveal nothing.
+$db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
+$cookieR = '';
+[$stR, , $cookieR] = _pf_post("http://127.0.0.1:$port/", ['order_token' => $tokD2, 'pickup_password' => $pass], $cookieR);
+T::eq('reveal-after-delete setup unlock redirects', 302, $stR);
+$db->prepare('DELETE FROM orders WHERE order_token = ?')->execute([$tokD2]);
+[, $bodyR] = _pf_get("http://127.0.0.1:$port/", $cookieR);
+T::ok('deleted order reveals nothing after unlock',
+    !str_contains($bodyR, 'reveal-value') && !str_contains($bodyR, 'PUBLICFLOWTEST skrzynka'));
+
 // Cleanup
 $db->prepare('DELETE FROM orders WHERE order_token IN (?, ?, ?, ?, ?)')->execute([$tokD, $tokD2, $tokD3, $tokD4, $tokP]);
 $db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
@@ -345,7 +356,11 @@ function _pf_req(string $url, ?array $fields, string $cookie): array {
     $body = @file_get_contents($url, false, stream_context_create($opts));
     $status = 0;
     $setCookie = '';
-    foreach ($http_response_header ?? [] as $h) {
+    // PHP 8.5 deprecates $http_response_header: new API where it exists.
+    $headers = function_exists('http_get_last_response_headers')
+        ? (http_get_last_response_headers() ?? [])
+        : ($http_response_header ?? []);
+    foreach ($headers as $h) {
         if (preg_match('#^HTTP/\S+\s+(\d{3})#', $h, $m)) { $status = (int)$m[1]; }
         if (stripos($h, 'Set-Cookie:') === 0) {
             $pair = trim(explode(';', trim(substr($h, 11)))[0]);

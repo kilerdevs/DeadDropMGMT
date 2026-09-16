@@ -107,7 +107,9 @@ try {
             ];
             $rel = save_uploaded_photo($entry, $order_id, max_photo_bytes());
             if ($rel === false) {
-                $photo_errors[] = htmlspecialchars($files['name'][$i], ENT_QUOTES, 'UTF-8');
+                // Raw name: t() escapes params at the sink (see orders.php) —
+                // pre-escaping here would double-escape it in the flash.
+                $photo_errors[] = (string)$files['name'][$i];
             } else {
                 $db->prepare('INSERT INTO order_photos (order_id, filename) VALUES (?, ?)')
                    ->execute([$order_id, $rel]);

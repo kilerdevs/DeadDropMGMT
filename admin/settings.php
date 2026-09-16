@@ -131,8 +131,9 @@ function s_label(array $s, string $key): string {
     <?php require __DIR__ . '/totp_banner.php'; ?>
         <div class="page-heading"><?= t('admin.settings.title') ?></div>
 
-        <?php if ($error):   ?><div class="flash"><?= htmlspecialchars($error,   ENT_QUOTES, 'UTF-8') ?></div><?php endif; ?>
-        <?php if ($success): ?><div class="flash ok"><?= htmlspecialchars($success, ENT_QUOTES, 'UTF-8') ?></div><?php endif; ?>
+        <?php if ($error):   ?><div class="flash"><?= $error ?></div><?php endif; ?>
+        <?php if ($success): ?><div class="flash ok"><?= $success ?></div><?php endif; ?>
+        <!-- Flash mirrors t()-built session values; raw echo (see orders.php). -->
 
         <div class="form-panel settings-panel">
             <div autocomplete="off">
@@ -364,13 +365,13 @@ function s_label(array $s, string $key): string {
     var timers     = {};
     var popupTimer = null;
 
-    // Validation limits (mirrors server-side)
+    // Validation limits (mirrors server-side save_setting.php $limits)
     var limits = {
-        order_ttl_hours:       [1,  720],
-        rate_limit_max:        [1,  100],
-        rate_limit_window_min: [1, 1440],
-        admin_session_hours:   [1,   72],
-        max_photo_mb:          [1,  100],
+        order_ttl_hours:       [12,  72],
+        rate_limit_max:        [3,   10],
+        rate_limit_window_min: [5,   60],
+        admin_session_hours:   [0.5,  5],
+        max_photo_mb:          [0.1,  5],
     };
 
     // ── Popup ─────────────────────────────────────────────────────────────────

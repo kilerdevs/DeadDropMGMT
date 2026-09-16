@@ -40,14 +40,20 @@ function get_client_ip(): string {
                 $raw = trim((string)$_SERVER[$key]);
                 // Multi-hop XFF: a proxy that APPENDS leaves earlier entries
                 // client-controlled, so "first entry" is then attacker-chosen.
-                // This deployment contract expects an OVERWRITING proxy — say
-                // so loudly when the header looks multi-hop.
+                // The peer (trusted — checked above) appends its entry LAST,
+                // so the last hop is the only one the client cannot forge:
+                // under an overwriting proxy there is a single entry anyway
+                // (first == last), under an appending proxy the last entry is
+                // what the peer actually saw. Single-entry headers are
+                // untouched by this.
                 if ($key === 'HTTP_X_FORWARDED_FOR' && str_contains($raw, ',')) {
                     static $multihop_warned = false;
                     if (!$multihop_warned) {
                         $multihop_warned = true;
-                        log_warn('xff_multihop', ['msg' => 'X-Forwarded-For carries multiple hops; first entry used — verify the proxy overwrites (not appends) this header']);
+                        log_warn('xff_multihop', ['msg' => 'X-Forwarded-For carries multiple hops; last entry used (peer-appended) — verify the proxy appends rather than passing client input through']);
                     }
+                    $hops = array_map('trim', explode(',', $raw));
+                    $raw  = end($hops);
                 }
                 $ip = trim(explode(',', $raw)[0]);
                 if (filter_var($ip, FILTER_VALIDATE_IP)) {

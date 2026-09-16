@@ -29,13 +29,14 @@ RUN chmod +x /usr/local/bin/entrypoint.sh \
  && chown -R www-data:www-data /var/www/html/logs /var/www/html/uploads /var/www/html/cache /config
 
 WORKDIR /var/www/html
-# php-fpm speaks FastCGI, not HTTP — there is no in-container way to ask it to
-# serve /healthz.php, so the container-level check is honest process liveness
-# (the FPM master is alive). The REAL end-to-end health signal lives one layer
-# up: nginx/Caddy smoke tests in CI and any external load balancer should
-# target /healthz.php through the front server, which exercises FPM workers,
-# the docroot and config rendering together.
+# php-fpm speaks FastCGI, not HTTP — there is no in-container way to ask it
+# to serve /healthz.php, so the container check runs the same file through
+# the CLI SAPI instead: it proves PHP executes, the docroot is mounted and
+# the file parses (broken volumes/code fail here). The REAL end-to-end health
+# signal lives one layer up: nginx/Caddy smoke tests in CI and any external
+# load balancer should target /healthz.php through the front server, which
+# exercises FPM workers, the docroot and config rendering together.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD kill -0 1
+    CMD php /var/www/html/healthz.php > /dev/null || exit 1
 ENTRYPOINT ["entrypoint.sh"]
 CMD ["php-fpm"]

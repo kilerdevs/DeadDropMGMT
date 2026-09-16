@@ -30,7 +30,12 @@ $_lang_csrf = generate_csrf();
         <?php if ($_is_owner): ?>
         <a class="nav-item-danger <?= $_active === 'panic' ? 'active' : '' ?>" href="/admin/panic.php">&#9888; <?= t('admin.sidebar.panic') ?></a>
         <?php endif; ?>
-        <a class="sidebar-logout" href="/admin/logout.php"><?= t('admin.sidebar.logout') ?></a>
+        <!-- Logout is POST-only (CSRF): a GET link here would let any hostile
+             page log the admin out with a single <img> tag. -->
+        <form method="POST" action="/admin/logout.php" class="sidebar-logout-form">
+            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars(generate_csrf(), ENT_QUOTES, 'UTF-8') ?>">
+            <button type="submit" class="sidebar-logout"><?= t('admin.sidebar.logout') ?></button>
+        </form>
         <div class="sidebar-user">
             <span class="sidebar-username"><?= htmlspecialchars($_user_name, ENT_QUOTES, 'UTF-8') ?></span>
             <span class="role-badge role-<?= $_is_owner ? 'owner' : 'courier' ?>">

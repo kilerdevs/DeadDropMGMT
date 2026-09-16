@@ -42,12 +42,21 @@ if (!courier_owns_order($id)) {
 
 try {
     $db = get_db();
-    // Extend from current expiry (or NOW() if already expired), whichever is later
-    $db->prepare(
+    // Extend from current expiry (or NOW() if already expired), whichever is later.
+    // Delivered-only: arming expiry on a preparing order (normally immortal)
+    // would schedule it for silent auto-deletion before it was ever delivered.
+    $stmt = $db->prepare(
         'UPDATE orders
          SET expires_at = DATE_ADD(GREATEST(COALESCE(expires_at, NOW()), NOW()), INTERVAL ? HOUR)
-         WHERE id = ?'
-    )->execute([$hours, $id]);
+         WHERE id = ? AND status = "delivered"'
+    );
+    $stmt->execute([$hours, $id]);
+    if ($stmt->rowCount() === 0) {
+        $_SESSION['flash']    = t('admin.orders.flash.not_found');
+        $_SESSION['flash_ok'] = false;
+        header('Location: /admin/orders.php');
+        exit;
+    }
 
     audit('order_extend', $id, null, "+{$hours}h");
     $_SESSION['flash']    = t('admin.orders.flash.extended', ['hours' => (string)$hours]);

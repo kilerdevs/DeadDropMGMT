@@ -120,6 +120,7 @@ try {
     )->fetchColumn();
     $total_pages = max(1, (int)ceil($total_events / $per_page));
     $page = min($page, $total_pages);
+    $offset = ($page - 1) * $per_page; // recompute: $offset above used the unclamped ?page=
 
     // Recent events (paginated)
     $recent = $db->query(

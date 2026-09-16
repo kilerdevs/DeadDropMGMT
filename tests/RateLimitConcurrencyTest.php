@@ -25,10 +25,13 @@ putenv('RL_TEST_IP=' . $ip);
 // serializes transitions regardless, and the assertions below still demand
 // zero lost updates under whatever overlap actually occurs.
 $handles = [];
+// Portable null device: a hardcoded NUL creates a stray file called "NUL"
+// in the repo root on Linux and stops suppressing anything.
+$devnull = PHP_OS_FAMILY === 'Windows' ? 'NUL' : '/dev/null';
 for ($i = 0; $i < $procs; $i++) {
-    $cmd = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(__DIR__ . '/_rl_race.php') . ' 2>NUL';
+    $cmd = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(__DIR__ . '/_rl_race.php') . ' 2>' . $devnull;
     $pipes = [];
-    $handles[] = ['h' => proc_open($cmd, [['pipe', 'r'], ['pipe', 'w'], ['file', 'NUL', 'w']], $pipes), 'out' => $pipes[1]];
+    $handles[] = ['h' => proc_open($cmd, [['pipe', 'r'], ['pipe', 'w'], ['file', $devnull, 'w']], $pipes), 'out' => $pipes[1]];
     usleep(120000);
 }
 

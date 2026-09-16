@@ -1,4 +1,4 @@
-# DeadDropMGMT — PHP 8.3 / Apache with exactly the extensions the app touches.
+# DeadDropMGMT — PHP 8.5 / Apache with exactly the extensions the app touches.
 # Config is rendered from config.php.example at first boot (see docker/entrypoint.sh);
 # secrets arrive via DDMGMT_* environment variables, never baked into the image.
 

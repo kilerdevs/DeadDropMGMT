@@ -14,6 +14,7 @@ declare(strict_types=1);
 
 require_once dirname(__DIR__) . '/config.php';
 require_once dirname(__DIR__) . '/includes/db.php';
+require_once dirname(__DIR__) . '/includes/logger.php'; // glob_list() — no implicit dependency via config
 
 $base = getenv('JOURNEY_BASE_URL') ?: 'http://127.0.0.1';
 if (substr($base, -1) === '/') {
@@ -36,7 +37,12 @@ function _j(string $method, string $url, ?array $fields, string $cookie): array 
     $body = @file_get_contents($url, false, stream_context_create($opts));
     $status = 0;
     $setCookie = '';
-    foreach ($http_response_header ?? [] as $h) {
+    // PHP 8.5 deprecates the $http_response_header local: read the headers
+    // through the new API where it exists, the legacy variable elsewhere.
+    $headers = function_exists('http_get_last_response_headers')
+        ? (http_get_last_response_headers() ?? [])
+        : ($http_response_header ?? []);
+    foreach ($headers as $h) {
         if (preg_match('#^HTTP/\S+\s+(\d{3})#', $h, $m)) { $status = (int)$m[1]; }
         if (stripos($h, 'Set-Cookie:') === 0) {
             $pair = trim(explode(';', trim(substr($h, 11)))[0]);
@@ -130,7 +136,9 @@ $csrf = _j_csrf($html);
     'notes'        => 'journey test order',
     'new_password' => '',
 ], $ck);
-$row = get_db()->query("SELECT status FROM orders WHERE order_token = '$token'")->fetch();
+$st = get_db()->prepare('SELECT status FROM orders WHERE order_token = ?');
+$st->execute([$token]);
+$row = $st->fetch();
 T($row !== null && $row['status'] === 'delivered', 'order delivered through the admin UI');
 
 // ── 6. public lookup (no password) ───────────────────────────────────────────
@@ -157,11 +165,16 @@ T(str_contains($html, 'delivered'), 'receipt confirmed (done page)');
 
 // ── 9. assert wiped: the receipt must leave NOTHING behind ───────────────────
 $db = get_db();
-T((int)$db->query("SELECT COUNT(*) FROM orders WHERE order_token = '$token'")->fetchColumn() === 0,
+$cnt = static function (string $sql, array $args) use ($db): int {
+    $st = $db->prepare($sql);
+    $st->execute($args);
+    return (int)$st->fetchColumn();
+};
+T($cnt('SELECT COUNT(*) FROM orders WHERE order_token = ?', [$token]) === 0,
     'order row gone');
-T((int)$db->query("SELECT COUNT(*) FROM order_photos WHERE order_id = '$orderId'")->fetchColumn() === 0,
+T($cnt('SELECT COUNT(*) FROM order_photos WHERE order_id = ?', [$orderId]) === 0,
     'photo rows gone');
-T((int)$db->query("SELECT COUNT(*) FROM order_events WHERE order_token = '$token'")->fetchColumn() >= 1,
+T($cnt('SELECT COUNT(*) FROM order_events WHERE order_token = ?', [$token]) >= 1,
     'event log recorded the lifecycle');
 $uploadsDir = dirname(__DIR__) . '/uploads/' . $orderId;
 T(!is_dir($uploadsDir) || count(glob_list($uploadsDir . '/*')) === 0, 'no orphaned upload files');

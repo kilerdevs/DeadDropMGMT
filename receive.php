@@ -141,7 +141,8 @@ if ($step === 2 && $error === '') {
     <?php elseif ($error): ?>
     <!-- ── Error ───────────────────────────────────────────────────────── -->
     <h1><?= t('public.receive.title.error') ?></h1>
-    <div class="alert"><?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?></div>
+    <div class="alert"><?= $error ?></div>
+    <!-- $error is t()-built (HTML-safe); raw echo (see admin/orders.php). -->
     <a href="/" class="btn"><?= t('common.back') ?></a>
 
     <?php else: ?>

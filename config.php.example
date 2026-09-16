@@ -88,6 +88,13 @@ ini_set('error_log',       ERROR_LOG_PATH);
 // casual recovery, not as cryptographic erasure; full-disk encryption is
 // the only real answer on modern storage.
 function overwrite_and_unlink(string $path): void {
+    // A symlink must never be followed: overwriting would zero the TARGET
+    // (outside uploads//logs/) instead of removing the link. Unlink the link
+    // itself and stop.
+    if (is_link($path)) {
+        try { @unlink($path); } catch (Throwable $t) { /* best-effort */ }
+        return;
+    }
     if (!is_file($path)) return;
     try {
         $size = @filesize($path);

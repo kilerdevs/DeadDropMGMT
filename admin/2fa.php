@@ -110,13 +110,14 @@ $csrf = generate_csrf();
         <?php $totp_banner_show_link = false; require __DIR__ . '/totp_banner.php'; ?>
         <div class="page-heading"><?= t('admin.2fa.h1') ?></div>
 
-        <?php if ($error):   ?><div class="flash"><?= htmlspecialchars($error,   ENT_QUOTES, 'UTF-8') ?></div><?php endif; ?>
-        <?php if ($success): ?><div class="flash ok"><?= htmlspecialchars($success, ENT_QUOTES, 'UTF-8') ?></div><?php endif; ?>
+        <?php if ($error):   ?><div class="flash"><?= $error ?></div><?php endif; ?>
+        <?php if ($success): ?><div class="flash ok"><?= $success ?></div><?php endif; ?>
+        <!-- $error/$success are t()-built (HTML-safe); raw echo (see orders.php). -->
 
         <div class="form-panel totp-panel">
         <?php if ($enabled && is_owner()): ?>
             <div class="settings-warning">
-                <?= t('admin.2fa.enabled_notice', ['username' => htmlspecialchars(current_user_name(), ENT_QUOTES, 'UTF-8')]) ?>
+                <?= t('admin.2fa.enabled_notice', ['username' => current_user_name()]) ?>
             </div>
             <form method="POST" action="/admin/2fa.php" autocomplete="off">
                 <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
@@ -132,7 +133,7 @@ $csrf = generate_csrf();
             </form>
         <?php elseif ($enabled): ?>
             <div class="settings-warning">
-                <?= t('admin.2fa.courier_mandatory_notice', ['username' => htmlspecialchars(current_user_name(), ENT_QUOTES, 'UTF-8')]) ?>
+                <?= t('admin.2fa.courier_mandatory_notice', ['username' => current_user_name()]) ?>
             </div>
         <?php else: ?>
             <?php if (!is_owner() && ($_GET['required'] ?? '') === '1'): ?>
@@ -160,8 +161,8 @@ $csrf = generate_csrf();
                     <div class="location-display location-display-pw" id="totp-secret"><?= htmlspecialchars($secret_display, ENT_QUOTES, 'UTF-8') ?></div>
                     <div class="location-note">
                         <?= t('admin.2fa.manual_entry_note', [
-                            'site'     => htmlspecialchars(site_name(), ENT_QUOTES, 'UTF-8'),
-                            'username' => htmlspecialchars(current_user_name(), ENT_QUOTES, 'UTF-8'),
+                            'site'     => site_name(),
+                            'username' => current_user_name(),
                         ]) ?>
                     </div>
                 </div>
@@ -189,7 +190,7 @@ $csrf = generate_csrf();
 <script src="/admin/vendor/qrcode/qrcode.js"></script>
 <script nonce="<?= htmlspecialchars($csp_nonce, ENT_QUOTES, 'UTF-8') ?>">
 new QRCode(document.getElementById('qr-code'), {
-    text:         <?= json_encode($qr_uri) ?>,
+    text:         <?= json_encode($qr_uri, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT) ?>,
     width:        200,
     height:       200,
     colorDark:    '#000000',
@@ -202,7 +203,7 @@ document.getElementById('copy-secret').addEventListener('click', function () {
     navigator.clipboard.writeText(raw).then(function () {
         var btn = document.getElementById('copy-secret');
         var old = btn.textContent;
-        btn.textContent = <?= json_encode(t('admin.2fa.copied')) ?>;
+        btn.textContent = <?= json_encode(t('admin.2fa.copied'), JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT) ?>;
         setTimeout(function () { btn.textContent = old; }, 1500);
     });
 });

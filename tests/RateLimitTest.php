@@ -120,11 +120,13 @@ putenv('DDMGMT_TRUSTED_PROXIES=10.0.0.0/abc,,');
 T::eq('all-bad list with empty entry falls back to peer', $ip, get_client_ip());
 putenv('DDMGMT_TRUSTED_PROXIES');
 
-// Multi-hop XFF from a trusted peer: first entry wins, loudly.
+// Multi-hop XFF from a trusted peer: the peer-appended LAST hop wins —
+// earlier entries are client-controlled under an appending proxy, so the
+// old first-entry rule let a spoofed IP bypass per-IP rate limiting.
 $_SERVER['REMOTE_ADDR'] = '127.0.0.1';
 unset($_SERVER['HTTP_CF_CONNECTING_IP']);
 $_SERVER['HTTP_X_FORWARDED_FOR'] = '203.0.113.2, 70.41.3.18';
-T::eq('multihop XFF uses first entry', '203.0.113.2', get_client_ip());
+T::eq('multihop XFF uses peer-appended last hop', '70.41.3.18', get_client_ip());
 unset($_SERVER['HTTP_X_FORWARDED_FOR']);
 putenv('DDMGMT_TRUST_PROXY');
 

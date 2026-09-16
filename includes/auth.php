@@ -96,7 +96,11 @@ function courier_owns_order(int $order_id): bool {
 // ── Login / logout ────────────────────────────────────────────────────────────
 
 // Completes login: sets the full session and clears any pending-2FA state.
+// Starts the session itself — library code must not depend on every caller
+// remembering to (an unstarted session would silently lose the login state
+// and skip the fixation-protection regenerate below).
 function admin_finish_login(int $user_id, string $role, string $username, bool $totp_enabled = false, string $lang = 'en'): void {
+    start_secure_session();
     session_regenerate_id(true);
     $_SESSION['user_id']      = $user_id;
     $_SESSION['user_role']    = $role;
@@ -113,6 +117,7 @@ function admin_finish_login(int $user_id, string $role, string $username, bool $
 // the pending-setup session state is armed), or 'fail' (bad credentials).
 function admin_login(string $username, string $password): string {
     require_once dirname(__DIR__) . '/includes/db.php';
+    start_secure_session();
     try {
         $stmt = get_db()->prepare('SELECT * FROM users WHERE username = ? LIMIT 1');
         $stmt->execute([$username]);
@@ -236,7 +241,9 @@ function verify_csrf_readonly(string $token): bool {
 function json_out(array $payload, int $status = 200): never {
     http_response_code($status);
     header('Content-Type: application/json; charset=utf-8');
-    $payload += ['csrf' => generate_csrf()];
+    // Overwrite, never += : a caller-supplied 'csrf' would be the pre-rotation
+    // token verify_csrf() just invalidated, desyncing the client forever.
+    $payload['csrf'] = generate_csrf();
     echo json_encode($payload, JSON_UNESCAPED_UNICODE);
     exit;
 }
@@ -470,10 +477,12 @@ function enrollment_secret_hash(string $secret): string {
 
 function enrollment_secret_valid(int $user_id, string $secret): bool {
     try {
+        // No IS NULL arm: a missing expiry is a damaged row, not a perpetual
+        // credential. Every creation path stamps NOW() + 24h; NULL must fail.
         $stmt = get_db()->prepare(
             'SELECT enrollment_hash FROM users
              WHERE id = ? AND enrollment_hash IS NOT NULL
-               AND (enrollment_expires IS NULL OR enrollment_expires > NOW())
+               AND enrollment_expires > NOW()
              LIMIT 1'
         );
         $stmt->execute([$user_id]);

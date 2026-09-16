@@ -1,5 +1,10 @@
 parameters:
-	level: 5
+	level: 5 # Deliberate: level 8's 100+ findings here are PDOStatement|false
+	         # arms on $db->query() chains — dead under ERRMODE_EXCEPTION
+	         # (query() throws, never returns false) plus missing-type
+	         # hygiene. Fixing them would churn every admin page with zero
+	         # behaviour change; level 5 already caught the last real
+	         # anonymity-gate bug (see ProxyTest header).
 	bootstrapFiles:
 		- config.php
 	paths:
@@ -13,7 +18,6 @@ parameters:
 		# error pages and the gitignored local config are trivial / environment
 		- error
 		- config.php
-		- docker
 	treatPhpDocTypesAsCertain: false
 	# The TLS option matrix lives in the pure db_options() factory, so no
 	# environment-dependent "always false" suppressions are needed anymore.

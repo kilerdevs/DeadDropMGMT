@@ -116,7 +116,10 @@ $_active = 'orders';
         <div class="page-heading"><?= t('admin.orders.title') ?></div>
 
         <?php if ($flash): ?>
-        <div class="flash <?= $flash_ok ? 'ok' : '' ?>"><?= htmlspecialchars($flash, ENT_QUOTES, 'UTF-8') ?></div>
+        <!-- Flash is always t()-built (HTML-safe: static text + escaped params) —
+             echo raw. htmlspecialchars() here would double-escape every value
+             t() already escaped (e.g. a generated password containing &). -->
+        <div class="flash <?= $flash_ok ? 'ok' : '' ?>"><?= $flash ?></div>
         <?php endif; ?>
 
         <?php if (is_owner() && !empty($couriers)): ?>

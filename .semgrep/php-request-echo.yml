@@ -5,11 +5,15 @@
 # and JSON endpoints, and ignores nosemgrep annotations in PHP templates).
 # This rule replaces it with taint analysis that understands OUR escaping:
 #
-#   sources    — request superglobals an attacker controls directly
+#   sources    — request superglobals an attacker controls directly, plus
+#                $_SERVER (User-Agent and other headers are displayed in
+#                analytics paths) and $_FILES (client filenames are shown in
+#                upload-error flashes)
 #   sanitizers — htmlspecialchars/htmlentities (the codebase-wide sink
 #                wrapper), t() (escapes parameters internally), and
 #                json_encode (correct encoding for JSON contexts)
-#   sinks      — echo/print of tainted data
+#   sinks      — echo/print of tainted data (<?= ?> short-echo is parsed as
+#                echo by the PHP engine, so it is covered by the echo sink)
 #
 # Future regressions in raw echo of request data fail the build; properly
 # escaped code passes without suppressions.
@@ -30,8 +34,11 @@ rules:
       - pattern: $_POST
       - pattern: $_REQUEST
       - pattern: $_COOKIE
+      - pattern: $_SERVER
+      - pattern: $_FILES
     pattern-sinks:
       - pattern: echo $SINK;
+      - pattern: print $SINK;
     pattern-sanitizers:
       - pattern: htmlspecialchars(...)
       - pattern: htmlentities(...)

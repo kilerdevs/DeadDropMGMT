@@ -58,6 +58,25 @@ write_chain($p, [$r1, $r2, $r3]);
 $lines = file($p);
 unset($lines[1]);
 file_put_contents($p, implode('', $lines));
+
+// A non-string 'hash' field (planted/corrupt line) fails verification —
+// never TypeErrors inside hash_equals() and 500s the integrity page.
+// (Separate scratch file: $p below must still hold the middle-removed chain.)
+$badHash = $r1; $badHash['hash'] = 12345;
+$badPath = $tmpDir . '/badhash.log';
+write_chain($badPath, [$badHash]);
+[$valid] = verify_log_chain($badPath);
+T::ok('non-string hash fails closed, no TypeError', $valid === false);
+
+// A single entry larger than the tail window: the writer must anchor on ITS
+// hash, not the second-to-last one (which permanently alarms the chain).
+$bigRec = mk_chain_rec($genesis, ['ts' => '2026-08-26T00:00:04.000Z', 'level' => 'info', 'event' => 't_big', 'msg' => str_repeat('y', 9000)]);
+$big = $tmpDir . '/big.log';
+write_chain($big, [$bigRec]);
+$fhBig = fopen($big, 'c+');
+T::eq('tail scan anchors past an 8 KiB entry', $bigRec['hash'], _log_last_hash($fhBig));
+fclose($fhBig);
+T::eq('chain with oversized entry verifies', [true, 1, null, null], verify_log_chain($big));
 [$valid, , , $reason] = verify_log_chain($p);
 T::ok('removed entry breaks chain linkage', $valid === false && $reason === 'broken chain linkage');
 
@@ -185,13 +204,15 @@ T::ok('audit detail truncated to 255', strlen((string)($row['detail'] ?? '')) <=
 
 with_table_hidden_lg('audit_log', function (): void {
     audit('t_audit_fail'); // must degrade to a log entry, never throw
-    T::ok('audit survives unreadable table silently', true);
 });
+T::ok('failed audit leaves no phantom row',
+      $db->query("SELECT 1 FROM audit_log WHERE action = 't_audit_fail'")->fetch() === false);
 
 // ── Event log ────────────────────────────────────────────────────────────────
 set_setting('analytics_enabled', '0');
 log_event('t_disabled_event'); // early return, no insert, no error
-T::ok('disabled analytics writes nothing', true); // would throw if DB broke
+T::ok('disabled analytics writes nothing',
+      $db->query("SELECT 1 FROM order_events WHERE event_type = 't_disabled_event'")->fetch() === false);
 
 set_setting('analytics_enabled', '1');
 $_SERVER['HTTP_USER_AGENT'] = 'LoggerTest/1.0';
@@ -202,8 +223,9 @@ T::ok('event UA recorded', ($ev['user_agent'] ?? '') === 'LoggerTest/1.0');
 
 with_table_hidden_lg('order_events', function (): void {
     log_event('t_event_fail');
-    T::ok('event log survives unreadable table silently', true);
 });
+T::ok('failed event leaves no phantom row',
+      $db->query("SELECT 1 FROM order_events WHERE event_type = 't_event_fail'")->fetch() === false);
 
 exit(T::done());
 

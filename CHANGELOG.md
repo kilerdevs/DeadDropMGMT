@@ -2,6 +2,124 @@
 
 All notable changes to DeadDropMGMT are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is semver.
+## [1.3.0] - 2026-09-16
+
+### Security
+- TOTP fails closed on weak secrets: an empty, undecodable, or truncated
+  secret used to HMAC under the empty key — a publicly computable code, so
+  a row with a damaged secret was a 2FA bypass for anyone computing the
+  empty-key TOTP offline. Secrets decoding under 10 bytes now throw in
+  `totp_code()` and deny in `totp_verify()`; absurd window/period/digits
+  reject instead of hanging or dividing by zero
+- Enrollment secrets with a NULL expiry no longer validate: every creation
+  path stamps NOW() + 24h, so a missing expiry is a damaged row, not a
+  perpetual claim credential
+- Multi-hop `X-Forwarded-For` behind a trusted peer resolves to the
+  peer-appended LAST hop: earlier entries are client-controlled under an
+  appending proxy, and the old first-entry rule let a spoofed IP bypass
+  per-IP rate limiting and poison audit IPs
+- Proxy anonymity judging requires EVERY reachable judge clean: the first
+  clean answer used to accept the proxy while a second judge could see the
+  server IP leaking, storing a transparent proxy as `ok`
+- Sealed reveal blobs are re-checked against the orders table on consume:
+  an owner panic between unlock and the redirect GET no longer renders a
+  deleted order for the 180 s window
+- `admin/delete.php` routes through `order_delete_atomic()`: the legacy
+  copy unlinked DB filenames with no path check (traversal to arbitrary
+  file destroy), skipped `order_events`, and deleted files before the row
+- `extend.php` only arms expiry on delivered orders, and the cleanup sweep
+  only reaps delivered rows: a direct POST could previously schedule a
+  never-delivered order for silent auto-deletion
+- Panic wipe also destroys the rotated `app.log.1` generation, which
+  carried the same IPs and tokens the panic exists to destroy
+- `overwrite_and_unlink()` never follows symlinks: a planted link used to
+  make the wipe zero its target outside uploads/logs
+- DB client certificate/key without a CA now throws instead of silently
+  falling back to a plaintext connection
+- Logout is POST + CSRF only: a state-changing GET let any hostile page
+  log the admin out with a single image tag
+- Decryptors reject length-correct but non-hex IVs (`ctype_xdigit`):
+  `hex2bin()` answers false there and `openssl_decrypt()` would TypeError
+  instead of failing closed; invalid-UTF-8 payloads throw before reaching
+  the ciphers; upload size is read from disk, not the client-supplied field
+- Pseudo-cron dice fails toward cleanup on CSPRNG failure instead of
+  500ing every page (injectable randomness keeps the arm test-covered)
+
+### Fixed
+- One-time passwords/flashes with `&` no longer display corrupted:
+  `t()`/`tn()` output is HTML-safe by contract and sinks echo it raw;
+  pre-escaping params or re-escaping output double-escaped them (a
+  generated password containing `&` copied wrong and locked the recipient
+  out). Contract documented on `t()`; all flash/error sinks converted
+- `json_out()` always mints a fresh CSRF token instead of keeping a
+  caller-supplied (just rotated, now invalid) one
+- `admin_login()`/`admin_finish_login()` start the session themselves
+  instead of depending on callers (an unstarted session silently lost the
+  login and skipped fixation-protection rotation)
+- Log rotation now serializes on a sidecar lock (concurrent rotators could
+  delete each other's `.1` generation), verification reads under `LOCK_SH`,
+  and the tail scan widens past single entries larger than 8 KiB (which
+  used to anchor the next write to the wrong hash and alarm the chain)
+- Transactional functions catch `Throwable`, not just `Exception`: an
+  `Error` mid-transaction no longer escapes with the shared PDO handle
+  holding an open transaction
+- Panic report counts every table under guard (a raw `PDOException` with
+  SQL text no longer escapes pre-transaction); routine cleanup deletions
+  log at info level, not error
+- Pagination clamps before querying (analytics recomputes the offset after
+  clamping; audit log clamps at all); `save_setting` validates
+  `extend_hours_options` as strict digits within extend's 1-720 range;
+  client-side settings limits synced to the server ranges they mirror
+- `download_log.php` omits `Content-Length` when `filesize()` fails;
+  panic report counts render cast to int; all three key tools roll back
+  their dry-run transaction before exiting; `edit.php` surfaces per-photo
+  upload errors like `create.php`; `user_action` password/2FA changes
+  report failure when no row matched; deliver TTL clamps to 1-720 h
+- First-run screens: the intro paragraph keeps its spacing (the global
+  reset had glued it to the first form label), and the one-time recovery
+  enrollment code renders in an amber informational box instead of
+  error-red — red means something failed, this is something to keep.
+  The 64-char code also wraps instead of overflowing the column on
+  narrow screens
+- The enrollment code survives failed password attempts: it was consumed
+  from the session on first render, so a too-short or mismatched password
+  hid the only copy the creator would ever see. It now persists until the
+  password is set (or the setup window lapses), and is consumed on claim
+- Stale CSRF token on re-rendered setup/2FA forms: `verify_csrf()`
+  rotates the session token on success, but `setup_password.php` and
+  `verify_2fa.php` embedded the pre-rotation value captured at the top of
+  the script — so the submit AFTER any failed attempt died with "Invalid
+  CSRF token". Both re-capture the fresh token after a successful verify
+- Form, settings, 2FA and panic panels center on the screen, not on the
+  parent div (which sits right of center once the fixed sidebar takes its
+  share): desktop-only relative offset of half the sidebar width.
+  Relative, not transform, so `position:fixed` descendants stay
+  viewport-anchored; mobile (drawer sidebar, full-width content) untouched
+
+### Changed
+- PHP 8.5 readiness: CI test matrix adds 8.5 (the shipped Docker images
+  already run it); `curl_close()`/`imagedestroy()` calls removed (GC frees
+  the handles), `$http_response_header` reads go through
+  `http_get_last_response_headers()` where it exists, and
+  `PDO::MYSQL_ATTR_*` resolves via `Pdo\Mysql::*` with legacy fallback
+- Coverage `cleanup.php` pin 89 → 85: the proxy-revalidation hook added
+  three load-time `require` lines that are structurally uncoverable (the
+  bootstrap loads every include before recording starts) — the file is at
+  100% of coverable lines
+- FPM healthcheck runs `healthz.php` through the CLI SAPI (a broken
+  docroot fails it; `kill -0 1` could never fail); `vendor/` and
+  `composer.lock` no longer ship in images; `.dockerignore` re-includes
+  `tests/schema_loader.php` with the portable `tests/*` pattern
+- Semgrep custom rule gains `print` sinks and `$_SERVER`/`$_FILES`
+  sources (validated live: fires on raw echoes, silent on escaped code);
+  PHPStan keeps level 5 deliberately (level 8's bulk is dead
+  `PDOStatement|false` arms under `ERRMODE_EXCEPTION`) and now also
+  covers `docker/`
+- `i18n_load()` whitelists its language argument; proxy discovery
+  early-returns without cURL; `proxy_public_ip()` documents its direct
+  clearnet trade-off; `schema_loader.php` replaces the database name only
+  in `CREATE DATABASE`/`USE` position; stale version comments and ADR-010
+  (superseded by the portable setup.sql + MySQL 8 CI job) corrected
 
 ## [1.2.0] - 2026-09-16
 

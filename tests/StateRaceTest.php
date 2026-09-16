@@ -45,7 +45,8 @@ for ($i = 0; $i < 6; $i++) {
 }
 $wins = count(array_filter($results, static fn($r) => ($r['ok'] ?? false) === true));
 T::eq('exactly one concurrent receive wins', 1, $wins);
-T::ok('losers report clean failure', count($results) === 6 && !isset($results[0]['error']));
+T::ok('losers report clean failure',
+    count($results) === 6 && count(array_filter($results, static fn($r) => isset($r['error']))) === 0);
 T::ok('received order is gone', !$db->query("SELECT 1 FROM orders WHERE id = $idR")->fetch());
 
 // 2 ── six processes race to DELIVER the same preparing order

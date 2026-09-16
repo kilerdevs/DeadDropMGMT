@@ -93,14 +93,16 @@ $csrf = generate_csrf();
     <?php elseif ($step === 2): ?>
     <!-- ── Step 3/3 ──────────────────────────────────────────────────────── -->
     <div class="panic-wrap">
-        <?php if ($error): ?><div class="flash"><?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?></div><?php endif; ?>
+        <?php if ($error): ?><div class="flash"><?= $error ?></div><?php endif; ?>
+        <!-- $error is t()-built (HTML-safe); raw echo. The counts below are
+             COUNT(*) ints — cast, same as the done-report above. -->
         <div class="panic-step"><?= t('admin.panic.step3.label') ?></div>
         <div class="panic-heading"><?= t('admin.panic.step3.heading') ?></div>
         <?php if (!empty($counts)): ?>
         <div class="panic-counts">
-            <div class="panic-counts-row"><?= t('admin.orders.title') ?><span><?= $counts['orders'] ?></span></div>
-            <div class="panic-counts-row"><?= t('admin.panic.counts.photos_label') ?><span><?= $counts['photos'] ?></span></div>
-            <div class="panic-counts-row"><?= t('admin.panic.counts.events') ?><span><?= $counts['events'] ?></span></div>
+            <div class="panic-counts-row"><?= t('admin.orders.title') ?><span><?= (int)($counts['orders'] ?? 0) ?></span></div>
+            <div class="panic-counts-row"><?= t('admin.panic.counts.photos_label') ?><span><?= (int)($counts['photos'] ?? 0) ?></span></div>
+            <div class="panic-counts-row"><?= t('admin.panic.counts.events') ?><span><?= (int)($counts['events'] ?? 0) ?></span></div>
         </div>
         <?php endif; ?>
         <div class="panic-body">

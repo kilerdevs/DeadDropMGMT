@@ -50,8 +50,11 @@ if (in_array($key, $booleans, true)) {
 } elseif ($key === 'extend_hours_options') {
     $value = trim($value);
     foreach (explode(',', $value) as $part) {
-        $n = (int)trim($part);
-        if ($n <= 0) {
+        // Strict digits + the same 1–720 range extend.php enforces: (int)
+        // casts silently accepted "24abc" → 24 and unbounded millions that
+        // render as dead +99999999h buttons.
+        $p = trim($part);
+        if (!preg_match('/^\d+$/', $p) || (int)$p < 1 || (int)$p > 720) {
             json_out(['error' => t('admin.settings.js.extend_hours_error')], 422);
         }
     }

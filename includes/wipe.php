@@ -20,19 +20,16 @@ require_once dirname(__DIR__) . '/includes/db.php';
 function do_panic_wipe(): array {
     $db = get_db();
 
-    $report = [
-        'orders'       => (int)$db->query('SELECT COUNT(*) FROM orders')->fetchColumn(),
-        'photos'       => (int)$db->query('SELECT COUNT(*) FROM order_photos')->fetchColumn(),
-        'events'       => (int)$db->query('SELECT COUNT(*) FROM order_events')->fetchColumn(),
-        'audit'        => 0,
-        'files'        => 0,
-        'files_failed' => 0,
-    ];
-
-    try {
-        $report['audit'] = (int)$db->query('SELECT COUNT(*) FROM audit_log')->fetchColumn();
-    } catch (Exception $e) {
-        $report['audit'] = -1; // table unreadable — count unknown, still wiped below if possible
+    // Every count is guarded: an unreadable table must surface as -1 in the
+    // report (still wiped below if possible), never as a raw PDOException
+    // escaping before the transaction with SQL text attached.
+    $report = ['orders' => -1, 'photos' => -1, 'events' => -1, 'audit' => -1, 'files' => 0, 'files_failed' => 0];
+    foreach (['orders' => 'orders', 'photos' => 'order_photos', 'events' => 'order_events', 'audit' => 'audit_log'] as $k => $table) {
+        try {
+            $report[$k] = (int)$db->query("SELECT COUNT(*) FROM {$table}")->fetchColumn();
+        } catch (Exception $e) {
+            $report[$k] = -1; // table unreadable — count unknown, still wiped below if possible
+        }
     }
 
     // Collect filenames while the FK chain still exists.
@@ -52,7 +49,7 @@ function do_panic_wipe(): array {
         $db->prepare('DELETE FROM audit_log')->execute();
         $db->prepare('DELETE FROM rate_limits')->execute();
         $db->commit();
-    } catch (Exception $e) {
+    } catch (Throwable $e) {
         if ($db->inTransaction()) {
             $db->rollBack();
         }
@@ -67,18 +64,17 @@ function do_panic_wipe(): array {
         }
     }
     foreach (glob_list(dirname(__DIR__) . '/uploads/*', GLOB_ONLYDIR) as $dir) {
-        foreach (glob_list($dir . '/*') as $f) {
-            _panic_unlink($f, $report);
-        }
+        _panic_sweep_dir($dir, $report);
         @rmdir($dir);
     }
 
     // On-disk logs carry IPs and tokens — destroyed along with everything
     // else. Same overwrite treatment as photo files (finding: truncation
     // alone leaves the old blocks recoverable); both daemons reopen their
-    // logs per write, so unlinking under them is safe.
-    foreach ([ERROR_LOG_PATH, APP_LOG_PATH] as $log_path) {
-        if (is_file($log_path)) {
+    // logs per write, so unlinking under them is safe. The rotated .1
+    // generation carries the same history and must die too.
+    foreach ([ERROR_LOG_PATH, APP_LOG_PATH, APP_LOG_PATH . '.1'] as $log_path) {
+        if (is_file($log_path) || is_link($log_path)) {
             overwrite_and_unlink($log_path);
         }
     }
@@ -86,8 +82,23 @@ function do_panic_wipe(): array {
     return $report;
 }
 
+// Recursive sweep: only one level was walked before, so a nested directory
+// under uploads/<id>/ survived (with @rmdir then failing silently on top).
+function _panic_sweep_dir(string $dir, array &$report): void {
+    foreach (glob_list($dir . '/*') as $f) {
+        if (is_dir($f) && !is_link($f)) {
+            _panic_sweep_dir($f, $report);
+            @rmdir($f);
+        } else {
+            _panic_unlink($f, $report);
+        }
+    }
+}
+
 function _panic_unlink(string $path, array &$report): void {
-    if (!is_file($path)) {
+    // is_file() is false for symlinks — but those must still be removed
+    // (overwrite_and_unlink() unlinks them without following).
+    if (!is_file($path) && !is_link($path)) {
         return; // already gone — retry runs stay quiet about it
     }
     overwrite_and_unlink($path);

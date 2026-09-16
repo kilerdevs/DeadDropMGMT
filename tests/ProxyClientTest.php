@@ -154,8 +154,9 @@ $m = $db->query("SELECT last_status FROM osm_proxies WHERE id = $mid")->fetch();
 T::eq('mark fail records failure', 'fail', $m['last_status']);
 with_table_hidden_px('osm_proxies', function (): void {
     osm_proxy_mark(1, true, 5); // must degrade silently
-    T::ok('health marking survives unreadable pool table', true);
 });
+T::ok('health marking degrades silently on unreadable pool',
+      $db->query("SELECT 1 FROM osm_proxies WHERE id = $mid")->fetch() !== false);
 
 // Pool load failure path
 with_table_hidden_px('osm_proxies', function (): void {
@@ -188,6 +189,17 @@ T::ok('judge passes when echo is clean',
       proxy_judge_anonymous("http://127.0.0.1:$port", '10.255.255.1') === true);
 T::ok('judge fails when echo leaks our IP',
       proxy_judge_anonymous("http://127.0.0.1:$port", 'default-body') === false);
+// Unanimity: a leak visible to ANY reachable judge rejects, even when an
+// earlier judge was clean (different judges echo different fields).
+T::ok('judge rejects on clean-then-leak',
+      proxy_judge_anonymous("http://127.0.0.1:$port", '203.0.113.99', 6,
+          ["http://127.0.0.1:$port/clean", "http://127.0.0.1:$port/leak"]) === false);
+T::ok('judge rejects on leak-then-clean',
+      proxy_judge_anonymous("http://127.0.0.1:$port", '203.0.113.99', 6,
+          ["http://127.0.0.1:$port/leak", "http://127.0.0.1:$port/clean"]) === false);
+T::ok('judge passes on unanimous clean',
+      proxy_judge_anonymous("http://127.0.0.1:$port", '203.0.113.99', 6,
+          ["http://127.0.0.1:$port/clean", "http://127.0.0.1:$port/ok"]) === true);
 
 // Batch probing: every candidate answers [code, ms], dead ones with code 0
 $res = proxy_multi_probe(
@@ -251,7 +263,11 @@ function with_table_hidden_px(string $table, callable $fn): mixed {
 function _px_req(string $url): array {
     $body = @file_get_contents($url, false, stream_context_create(['http' => ['timeout' => 3, 'ignore_errors' => true]]));
     $status = 0;
-    foreach ($http_response_header ?? [] as $h) {
+    // PHP 8.5 deprecates $http_response_header: new API where it exists.
+    $headers = function_exists('http_get_last_response_headers')
+        ? (http_get_last_response_headers() ?? [])
+        : ($http_response_header ?? []);
+    foreach ($headers as $h) {
         if (preg_match('#^HTTP/\S+\s+(\d{3})#', $h, $m)) { $status = (int)$m[1]; }
     }
     return [$status, $body === false ? '' : $body];
