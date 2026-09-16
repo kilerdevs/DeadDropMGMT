@@ -240,7 +240,7 @@ jobs:
       # Grype (via the Anchore actions, both SHA-pinned) replaces Trivy here:
       # same gate semantics, SBOMs from Syft in the same step family.
       - name: Scan Apache image (Grype)
-        uses: anchore/scan-action@1638637db639e0ade3258b51db49a9a137574c3e # v6
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
         with:
           image: deaddrop:apache
           severity-cutoff: high
@@ -249,7 +249,7 @@ jobs:
           output-format: table
 
       - name: Scan FPM image (Grype)
-        uses: anchore/scan-action@1638637db639e0ade3258b51db49a9a137574c3e # v6
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
         with:
           image: deaddrop:fpm
           severity-cutoff: high
