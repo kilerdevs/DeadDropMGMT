@@ -136,6 +136,18 @@ $db->prepare("INSERT INTO rate_limits (ip_address, scope, count, window_start)
 do_cleanup();
 T::eq('stale window purged', 0, (int)$db->query("SELECT COUNT(*) FROM rate_limits WHERE ip_address = '198.51.100.9'")->fetchColumn());
 T::eq('live window kept', 1, (int)$db->query("SELECT COUNT(*) FROM rate_limits WHERE ip_address = '198.51.100.10'")->fetchColumn());
+
+// Purge failure is contained: an unreadable counter must not break cleanup
+// (and this covers the catch — the floor counts every line).
+$db->exec('RENAME TABLE rate_limits TO rate_limits_purge_bak');
+try {
+    _purge_stale_rate_limits();
+    T::ok('purge survives missing table', true);
+} finally {
+    $db->exec('RENAME TABLE rate_limits_purge_bak TO rate_limits');
+}
+T::ok('rate_limits table survived purge probe',
+    $db->query("SHOW TABLES LIKE 'rate_limits'")->fetch() !== false);
 $db->prepare("DELETE FROM rate_limits WHERE scope = 'purge_test'")->execute();
 
 // Cleanup
