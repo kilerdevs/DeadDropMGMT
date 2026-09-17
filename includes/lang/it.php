@@ -34,6 +34,8 @@ return [
     'public.index.error.server_decrypt'     => "Errore del server. Contatta l'assistenza.",
     'public.index.error.invalid_credentials'=> 'Credenziali non valide.',
     'public.index.error.service_unavailable'=> 'Servizio non disponibile. Riprova più tardi.',
+    'public.lang.label'               => 'Lingua',
+    'public.lang.apply'               => 'Applica',
     'public.index.title'            => 'Traccia una consegna',
     'public.index.cooldown_heading' => 'Limite di tentativi raggiunto',
     'public.index.cooldown_sub'     => 'Troppi tentativi falliti — riprova più tardi',

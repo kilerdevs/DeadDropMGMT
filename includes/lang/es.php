@@ -34,6 +34,8 @@ return [
     'public.index.error.server_decrypt'     => 'Error del servidor. Póngase en contacto con soporte.',
     'public.index.error.invalid_credentials'=> 'Credenciales no válidas.',
     'public.index.error.service_unavailable'=> 'Servicio no disponible. Inténtelo de nuevo más tarde.',
+    'public.lang.label'               => 'Idioma',
+    'public.lang.apply'               => 'Aplicar',
     'public.index.title'            => 'Seguimiento de pedido',
     'public.index.cooldown_heading' => 'Límite de intentos alcanzado',
     'public.index.cooldown_sub'     => 'Demasiados intentos fallidos — inténtelo de nuevo más tarde',

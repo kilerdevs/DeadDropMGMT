@@ -402,7 +402,8 @@ DeadDropMGMT/
 │   ├── totp.php              TOTP (RFC 6238) — base32, otpauth:// URI
 │   ├── audit.php             Write-action audit logger
 │   ├── settings.php          Settings cache (one DB query per page load)
-│   ├── i18n.php              Translation engine (8 languages, CLDR plurals)
+│   ├── i18n.php              Translation engine (8 languages, CLDR plurals,
+│   │                           account preference + public ?lang= switcher)
 │   ├── proxy.php             OSM outbound proxy pool + free-proxy discovery
 │   ├── analytics.php         Event logger
 │   ├── logger.php            Structured JSONL log + tamper-evident hash chain

@@ -34,6 +34,8 @@ return [
     'public.index.error.server_decrypt'     => 'Server error. Please contact support.',
     'public.index.error.invalid_credentials'=> 'Invalid credentials.',
     'public.index.error.service_unavailable'=> 'Service unavailable. Please try again later.',
+    'public.lang.label'               => 'Language',
+    'public.lang.apply'               => 'Apply',
     'public.index.title'            => 'Track a delivery',
     'public.index.cooldown_heading' => 'Attempt limit reached',
     'public.index.cooldown_sub'     => 'Too many failed attempts — please try again later',

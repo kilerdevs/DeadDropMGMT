@@ -34,6 +34,8 @@ return [
     'public.index.error.server_decrypt'     => 'Erreur serveur. Veuillez contacter le support.',
     'public.index.error.invalid_credentials'=> 'Identifiants invalides.',
     'public.index.error.service_unavailable'=> 'Service indisponible. Veuillez réessayer plus tard.',
+    'public.lang.label'               => 'Langue',
+    'public.lang.apply'               => 'Appliquer',
     'public.index.title'            => 'Suivre une livraison',
     'public.index.cooldown_heading' => 'Limite de tentatives atteinte',
     'public.index.cooldown_sub'     => 'Trop de tentatives échouées — réessayez plus tard',

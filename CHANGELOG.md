@@ -4,6 +4,16 @@ All notable changes to DeadDropMGMT are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is semver.
 ## [Unreleased]
 
+### Added
+- Public language switcher: recipients can change the site language from a
+  selector on the pickup page (`?lang=`). The choice applies to the same
+  request, persists in the session, and is remembered across visits in a
+  year-long `ddmgmt_lang` cookie (HttpOnly, Lax). Unknown codes are ignored
+  instead of erroring; the account preference still wins for logged-in
+  staff, then the visitor choice, then the cookie, then the site default.
+  `current_lang()` is no longer statically memoized so long-lived SAPIs
+  can't pin the first request's language.
+
 ## [1.4.0] - 2026-09-17
 
 ### Changed

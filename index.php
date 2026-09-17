@@ -4,6 +4,9 @@ require_once __DIR__ . '/includes/kernel.php';
 
 $csp_nonce = set_security_headers(false);
 start_secure_session();
+// A recipient's explicit ?lang= choice must land before the first t() on
+// this page so the same request already renders in the new language.
+i18n_handle_public_lang_param();
 run_cleanup_if_due();
 
 $allow_status_lookup = get_setting('allow_status_lookup', '1') === '1';
@@ -248,6 +251,20 @@ $csrf_public = generate_csrf();
 </head>
 <body>
 <main>
+    <form class="lang-switch" method="GET" action="">
+        <?php if ($prefill_token !== '' || isset($_GET['token'])): ?>
+        <input type="hidden" name="token"
+               value="<?= htmlspecialchars($prefill_token !== '' ? $prefill_token : (string)($_GET['token'] ?? ''), ENT_QUOTES, 'UTF-8') ?>">
+        <?php endif; ?>
+        <label for="lang"><?= t('public.lang.label') ?></label>
+        <select id="lang" name="lang" onchange="this.form.submit()">
+            <?php foreach (i18n_lang_names() as $code => $name): ?>
+            <option value="<?= htmlspecialchars($code, ENT_QUOTES, 'UTF-8') ?>"
+                <?= $code === current_lang() ? 'selected' : '' ?>><?= htmlspecialchars($name, ENT_QUOTES, 'UTF-8') ?></option>
+            <?php endforeach; ?>
+        </select>
+        <noscript><button type="submit" class="btn btn-lang"><?= t('public.lang.apply') ?></button></noscript>
+    </form>
     <div class="wordmark">DEAD DROP // <?= htmlspecialchars(site_name(), ENT_QUOTES, 'UTF-8') ?></div>
     <h1><?= t('public.index.title') ?></h1>
 

@@ -4,9 +4,8 @@ require_once __DIR__ . '/bootstrap.php';
 require_once dirname(__DIR__) . '/includes/i18n.php';
 
 // ── i18n engine: dictionaries, fallbacks, escaping at substitution, plurals ──
-// This suite must stay the FIRST in-process caller of current_lang() (the
-// result is statically cached per process); suites are run alphabetically
-// and nothing before I18nTest translates in-process.
+// current_lang() is deliberately unmemoized (long-lived SAPIs would pin the
+// first request's language), so cases below may switch languages freely.
 
 T::eq('eight supported languages', 8, count(i18n_supported_langs()));
 T::ok('language names complete', count(i18n_lang_names()) === count(i18n_supported_langs()));
@@ -18,7 +17,6 @@ T::eq('dictionary load is cached', $en, i18n_load('en'));
 T::eq('unknown language falls back to empty dict', [], i18n_load('xx'));
 
 // current_lang: unsupported session value collapses to English.
-// (Static cache: this first call fixes the language for this process.)
 $_SESSION = [];
 start_secure_session();
 $_SESSION['user_lang'] = 'klingon';

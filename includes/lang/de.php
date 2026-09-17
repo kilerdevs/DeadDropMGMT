@@ -34,6 +34,8 @@ return [
     'public.index.error.server_decrypt'     => 'Serverfehler. Bitte kontaktieren Sie den Support.',
     'public.index.error.invalid_credentials'=> 'Ungültige Anmeldedaten.',
     'public.index.error.service_unavailable'=> 'Dienst nicht verfügbar. Bitte versuchen Sie es später erneut.',
+    'public.lang.label'               => 'Sprache',
+    'public.lang.apply'               => 'Anwenden',
     'public.index.title'            => 'Sendung verfolgen',
     'public.index.cooldown_heading' => 'Versuchslimit erreicht',
     'public.index.cooldown_sub'     => 'Zu viele fehlgeschlagene Versuche — bitte später erneut versuchen',

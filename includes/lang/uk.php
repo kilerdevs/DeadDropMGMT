@@ -34,6 +34,8 @@ return [
     'public.index.error.server_decrypt'     => 'Помилка сервера. Зверніться до служби підтримки.',
     'public.index.error.invalid_credentials'=> 'Невірні облікові дані.',
     'public.index.error.service_unavailable'=> 'Сервіс недоступний. Спробуйте пізніше.',
+    'public.lang.label'               => 'Мова',
+    'public.lang.apply'               => 'Застосувати',
     'public.index.title'            => 'Відстеження замовлення',
     'public.index.cooldown_heading' => 'Ліміт спроб вичерпано',
     'public.index.cooldown_sub'     => 'Забагато невдалих спроб — спробуйте пізніше',

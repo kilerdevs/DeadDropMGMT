@@ -76,6 +76,32 @@ main { width: 100%; max-width: 500px; }
     margin-bottom:  28px;
 }
 
+/* ── Public language switcher ──────────────────────────────────────────── */
+
+.lang-switch {
+    display:         flex;
+    align-items:     center;
+    justify-content: flex-end;
+    gap:             8px;
+    margin-bottom:   18px;
+    font-family:     'IBM Plex Mono', monospace;
+    font-size:       11px;
+    letter-spacing:  0.05em;
+    color:           var(--text-muted);
+}
+
+.lang-switch select {
+    background:   var(--surface);
+    color:        var(--text);
+    border:       1px solid var(--border);
+    border-radius: 4px;
+    padding:      4px 6px;
+    font:         inherit;
+    cursor:       pointer;
+}
+
+.btn-lang { padding: 4px 10px; font-size: 11px; }
+
 /* ── Trust bar ───────────────────────────────────────────────────────────── */
 
 .trust-bar {

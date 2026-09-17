@@ -34,6 +34,8 @@ return [
     'public.index.error.server_decrypt'     => 'Ошибка сервера. Свяжитесь со службой поддержки.',
     'public.index.error.invalid_credentials'=> 'Неверные учётные данные.',
     'public.index.error.service_unavailable'=> 'Сервис недоступен. Повторите попытку позже.',
+    'public.lang.label'               => 'Язык',
+    'public.lang.apply'               => 'Применить',
     'public.index.title'            => 'Отслеживание заказа',
     'public.index.cooldown_heading' => 'Лимит попыток исчерпан',
     'public.index.cooldown_sub'     => 'Слишком много неудачных попыток — повторите позже',

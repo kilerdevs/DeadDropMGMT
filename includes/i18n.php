@@ -28,15 +28,65 @@ function i18n_load(string $lang): array {
 }
 
 // Admin accounts carry their own language in session (set at login); public
-// visitors have no account, so they get the owner-configured site default.
+// visitors have no account, so they pick their own: an explicit ?lang=
+// choice (session, first visit) wins, then the year-long preference cookie
+// from an earlier visit, then the owner-configured site default.
+//
+// Deliberately NOT statically memoized: under long-lived SAPIs (php -S,
+// FrankenPHP, workers) statics survive across requests, so a memoized first
+// request would pin the language for every later one. get_settings() already
+// caches the settings row and i18n_load() caches dictionaries — the per-call
+// cost left is a session/cookie read plus allowlist checks.
 function current_lang(): string {
-    static $lang = null;
-    if ($lang !== null) return $lang;
-    $candidate = (session_status() === PHP_SESSION_ACTIVE && !empty($_SESSION['user_lang']))
-        ? $_SESSION['user_lang']
-        : default_lang();
-    $lang = in_array($candidate, i18n_supported_langs(), true) ? $candidate : 'en';
-    return $lang;
+    $supported = i18n_supported_langs();
+    if (session_status() === PHP_SESSION_ACTIVE && !empty($_SESSION['user_lang'])) {
+        // An account preference, corrupt or not, decides for its owner: an
+        // invalid stored code collapses to English (the guaranteed-complete
+        // dictionary), never to a visitor-level fallback.
+        return in_array($_SESSION['user_lang'], $supported, true) ? $_SESSION['user_lang'] : 'en';
+    }
+    if (session_status() === PHP_SESSION_ACTIVE && !empty($_SESSION['public_lang'])
+        && in_array($_SESSION['public_lang'], $supported, true)) {
+        return $_SESSION['public_lang'];
+    }
+    $cookie = $_COOKIE[i18n_public_lang_cookie()] ?? '';
+    if (is_string($cookie) && in_array($cookie, $supported, true)) {
+        return $cookie;
+    }
+    $candidate = default_lang();
+    return in_array($candidate, $supported, true) ? $candidate : 'en';
+}
+
+// Preference-cookie name for the public language choice. A cookie (not just
+// the session) so a returning recipient keeps their language across visits.
+function i18n_public_lang_cookie(): string {
+    return 'ddmgmt_lang';
+}
+
+// Honors an explicit public language choice (?lang=) on public pages: an
+// allowlisted code is stored in the session AND in the preference cookie;
+// anything else (missing, unknown, non-string) is silently ignored — a
+// recipient following a stale or hand-typed link keeps their current
+// language instead of meeting an error page.
+//
+// Call BEFORE the first t()/current_lang() on the page (the choice must be
+// visible to this same request) and AFTER start_secure_session() (it writes
+// the session and must emit Set-Cookie before any output).
+function i18n_handle_public_lang_param(): void {
+    $raw = $_GET['lang'] ?? null;
+    if (!is_string($raw) || !in_array($raw, i18n_supported_langs(), true)) {
+        return;
+    }
+    if (session_status() === PHP_SESSION_ACTIVE) {
+        $_SESSION['public_lang'] = $raw;
+    }
+    setcookie(i18n_public_lang_cookie(), $raw, [
+        'expires'  => time() + 31536000,
+        'path'     => '/',
+        'secure'   => request_is_https(),
+        'httponly' => true,
+        'samesite' => 'Lax', // Strict would drop it on arrival from a chat-app link
+    ]);
 }
 
 function t(string $key, array $params = []): string {

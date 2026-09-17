@@ -4,6 +4,10 @@ require_once __DIR__ . '/includes/kernel.php';
 
 $csp_nonce = set_security_headers(false);
 start_secure_session();
+// No switcher UI on this page (its POST-driven confirm flow must not be
+// abandoned mid-step), but an explicit ?lang= is still honored — the session
+// choice made on index.php carries through these renders either way.
+i18n_handle_public_lang_param();
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     header('Location: /');

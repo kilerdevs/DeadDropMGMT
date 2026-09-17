@@ -34,6 +34,8 @@ return [
     'public.index.error.server_decrypt'     => 'Błąd serwera. Skontaktuj się z obsługą.',
     'public.index.error.invalid_credentials'=> 'Nieprawidłowe dane uwierzytelniające.',
     'public.index.error.service_unavailable'=> 'Usługa niedostępna. Spróbuj ponownie później.',
+    'public.lang.label'               => 'Język',
+    'public.lang.apply'               => 'Zastosuj',
     'public.index.title'            => 'Wyszukiwanie przesyłki',
     'public.index.cooldown_heading' => 'Limit prób wyczerpany',
     'public.index.cooldown_sub'     => 'Zbyt wiele nieudanych prób — spróbuj ponownie później',
