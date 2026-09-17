@@ -59,16 +59,28 @@ foreach ([
 }
 
 // ── Admin pages pull includes only via the kernel ───────────────────────────
+// Dispatch shims (legacy action URLs delegating to admin/dispatch.php) are
+// the one other allowed shape: they pin $_GET['action'] to a route in
+// admin/routes.php and pull nothing else.
 $partials = ['sidebar.php' => true, 'totp_banner.php' => true, 'osm_monit.php' => true];
+// routes.php is pure data (required, never executed directly).
+$unscanned = $partials + ['routes.php' => true];
+/** @var array<string,array<string,mixed>> */
+$routes = require $root . '/admin/routes.php';
 $checked = 0;
 foreach (glob($root . '/admin/*.php') as $f) {
     $name = basename($f);
-    if (isset($partials[$name])) {
+    if (isset($unscanned[$name])) {
         continue;
     }
-    $checked += _kernel_guarded($name, (string)file_get_contents($f));
+    $src = (string)file_get_contents($f);
+    if ($name !== 'dispatch.php' && str_contains($src, 'dispatch.php')) {
+        $checked += _dispatch_shim($name, $src, $routes);
+        continue;
+    }
+    $checked += _kernel_guarded($name, $src);
 }
-T::ok('admin entry pages scanned', $checked === 32);
+T::ok('admin entry pages scanned', $checked === 33);
 
 // ── Same rule for every other entry point: public pages, cron, CLI tools,
 // and the docker journey script. Deliberate exceptions (not scanned):
@@ -100,7 +112,11 @@ foreach (glob($root . '/includes/*.php') as $f) {
         $serviceFuncs[strtolower($n)] = basename($f);
     }
 }
-$entryFiles = array_merge(glob($root . '/admin/*.php') ?: [], $others);
+$entryFiles = array_merge(
+    glob($root . '/admin/*.php') ?: [],
+    glob($root . '/admin/actions/*.php') ?: [],
+    $others,
+);
 foreach ($entryFiles as $f) {
     preg_match_all('/^function\s+(\w+)/mi', (string)file_get_contents($f), $m);
     foreach (array_unique($m[1]) as $n) {
@@ -125,5 +141,24 @@ function _kernel_guarded(string $name, string $src): int {
         }
     }
     T::ok("$name has no direct includes pulls", $stray === []);
+    return 1;
+}
+
+// Asserts a legacy-URL shim pins $_GET['action'] to a real route and pulls
+// nothing but the dispatcher.
+function _dispatch_shim(string $name, string $src, array $routes): int {
+    $ok = preg_match('/\$_GET\s*\[\s*[\'"]action[\'"]\s*\]\s*=\s*[\'"]([A-Za-z0-9_]+)[\'"]/', $src, $m) === 1;
+    T::ok("$name shim pins an action", $ok);
+    if ($ok) {
+        T::ok("$name shim action '{$m[1]}' is a route", isset($routes[$m[1]]));
+    }
+    $stray = [];
+    foreach (explode("\n", $src) as $line) {
+        if (preg_match('/\b(require|include)(_once)?\b/', $line)
+            && !str_contains($line, 'dispatch.php')) {
+            $stray[] = trim($line);
+        }
+    }
+    T::ok("$name shim pulls only the dispatcher", $stray === []);
     return 1;
 }

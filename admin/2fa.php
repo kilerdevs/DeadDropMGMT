@@ -3,6 +3,9 @@ declare(strict_types=1);
 require_once dirname(__DIR__) . '/includes/kernel.php';
 
 start_secure_session();
+// The enrollment page itself: a courier pending TOTP setup must reach it,
+// so it carries the same 2fa-exempt flag dispatched routes declare.
+$GLOBALS['DDMGMT_ROUTE_2FA_EXEMPT'] = true;
 require_admin();
 $csp_nonce = set_security_headers(true);
 

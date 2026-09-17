@@ -1,0 +1,187 @@
+<?php
+declare(strict_types=1);
+
+// Handler for the user_action dispatch route. Runs INSIDE the dispatcher
+// envelope (security headers, session, owner auth, POST, CSRF) — direct
+// requests are refused.
+if (!defined('DDMGMT_DISPATCH') || DDMGMT_DISPATCH !== 'user_action') {
+    http_response_code(404);
+    exit;
+}
+
+$action = $_POST['action'] ?? '';
+
+// ── Create courier ────────────────────────────────────────────────────────────
+if ($action === 'create_courier') {
+    $username = trim($_POST['username'] ?? '');
+    $password = (string)($_POST['password'] ?? '');
+
+    if ($username === '' || strlen($username) < 3 || strlen($username) > 64) {
+        $_SESSION['flash']    = t('admin.users.flash.username_length');
+        $_SESSION['flash_ok'] = false;
+        header('Location: /admin/users.php');
+        exit;
+    }
+    if (!preg_match('/^[a-zA-Z0-9_\-\.]+$/', $username)) {
+        $_SESSION['flash']    = t('admin.users.flash.username_chars');
+        $_SESSION['flash_ok'] = false;
+        header('Location: /admin/users.php');
+        exit;
+    }
+    // An empty password creates a first-login account: the courier picks
+    // their own password on sign-in. A preset one still needs min. 8 chars.
+    if ($password !== '' && strlen($password) < 8) {
+        $_SESSION['flash']    = t('admin.users.flash.password_min8');
+        $_SESSION['flash_ok'] = false;
+        header('Location: /admin/users.php');
+        exit;
+    }
+
+    try {
+        if ($password === '') {
+            // Passwordless account: the enrollment secret is the claim
+            // credential, shown exactly once — the username alone must not
+            // be enough to reach the setup step.
+            $secret = enrollment_secret_generate();
+            get_db()->prepare(
+                'INSERT INTO users (username, password_hash, role, enrollment_hash, enrollment_expires)
+                 VALUES (?, "", "courier", ?, NOW() + INTERVAL 24 HOUR)'
+            )->execute([$username, enrollment_secret_hash($secret)]);
+            audit('courier_create', null, null, $username . ' (enrollment issued)');
+            $_SESSION['flash']    = t('admin.users.flash.courier_created_secret',
+                ['username' => $username, 'secret' => $secret]);
+            $_SESSION['flash_ok'] = true;
+        } else {
+            get_db()->prepare(
+                'INSERT INTO users (username, password_hash, role) VALUES (?, ?, "courier")'
+            )->execute([$username, password_hash($password, PASSWORD_BCRYPT, ['cost' => 12])]);
+            audit('courier_create', null, null, $username);
+            $_SESSION['flash']    = t('admin.users.flash.courier_created', ['username' => $username]);
+            $_SESSION['flash_ok'] = true;
+        }
+    } catch (Exception $e) {
+        $msg = str_contains($e->getMessage(), 'Duplicate') ? t('admin.users.flash.username_taken') : t('admin.users.flash.create_failed');
+        log_err('Create courier: ' . $e->getMessage());
+        $_SESSION['flash']    = $msg;
+        $_SESSION['flash_ok'] = false;
+    }
+    header('Location: /admin/users.php');
+    exit;
+}
+
+// ── Delete courier ────────────────────────────────────────────────────────────
+if ($action === 'delete_courier') {
+    $uid = (int)($_POST['user_id'] ?? 0);
+
+    if ($uid <= 0 || $uid === current_user_id()) {
+        $_SESSION['flash']    = t('admin.common.invalid_request');
+        $_SESSION['flash_ok'] = false;
+        header('Location: /admin/users.php');
+        exit;
+    }
+
+    try {
+        $db   = get_db();
+        $user = $db->prepare('SELECT role, username FROM users WHERE id = ? LIMIT 1');
+        $user->execute([$uid]);
+        $row  = $user->fetch();
+
+        if (!$row || $row['role'] !== 'courier') {
+            $_SESSION['flash']    = t('admin.users.flash.not_courier');
+            $_SESSION['flash_ok'] = false;
+            header('Location: /admin/users.php');
+            exit;
+        }
+
+        $db->prepare('DELETE FROM users WHERE id = ?')->execute([$uid]);
+        audit('courier_delete', null, null, $row['username']);
+        $_SESSION['flash']    = t('admin.users.flash.courier_deleted', ['username' => $row['username']]);
+        $_SESSION['flash_ok'] = true;
+    } catch (Exception $e) {
+        log_err('Delete courier: ' . $e->getMessage());
+        $_SESSION['flash']    = t('admin.users.flash.delete_failed');
+        $_SESSION['flash_ok'] = false;
+    }
+    header('Location: /admin/users.php');
+    exit;
+}
+
+// ── Change password ───────────────────────────────────────────────────────────
+if ($action === 'change_password') {
+    $uid      = (int)($_POST['user_id']      ?? 0);
+    $password = (string)($_POST['new_password'] ?? '');
+
+    if ($uid <= 0) {
+        $_SESSION['flash']    = t('admin.common.invalid_request');
+        $_SESSION['flash_ok'] = false;
+        header('Location: /admin/users.php');
+        exit;
+    }
+    if (strlen($password) < 8) {
+        $_SESSION['flash']    = t('admin.users.flash.new_password_min8');
+        $_SESSION['flash_ok'] = false;
+        header('Location: /admin/users.php');
+        exit;
+    }
+
+    try {
+        $db   = get_db();
+        $stmt = $db->prepare('UPDATE users SET password_hash = ? WHERE id = ?');
+        $stmt->execute([
+            password_hash($password, PASSWORD_BCRYPT, ['cost' => 12]),
+            $uid,
+        ]);
+        // A stale/typo'd user_id must not report success while changing
+        // nothing — the form rebuilds its user list from the same table.
+        if ($stmt->rowCount() === 0) {
+            $_SESSION['flash']    = t('admin.users.flash.not_courier');
+            $_SESSION['flash_ok'] = false;
+            header('Location: /admin/users.php');
+            exit;
+        }
+        audit('password_change', null, null, "user_id={$uid}");
+        $_SESSION['flash']    = t('admin.users.flash.password_changed');
+        $_SESSION['flash_ok'] = true;
+    } catch (Exception $e) {
+        log_err('Change password: ' . $e->getMessage());
+        $_SESSION['flash']    = t('admin.users.flash.password_change_failed');
+        $_SESSION['flash_ok'] = false;
+    }
+    header('Location: /admin/users.php');
+    exit;
+}
+
+// ── Reset 2FA — owner recovery path for a locked-out account ─────────────────
+if ($action === 'reset_2fa') {
+    $uid = (int)($_POST['user_id'] ?? 0);
+    if ($uid <= 0) {
+        $_SESSION['flash']    = t('admin.common.invalid_request');
+        $_SESSION['flash_ok'] = false;
+        header('Location: /admin/users.php');
+        exit;
+    }
+    try {
+        $stmt = get_db()->prepare(
+            'UPDATE users SET totp_enabled = 0, totp_secret_enc = NULL, totp_secret_iv = NULL WHERE id = ?'
+        );
+        $stmt->execute([$uid]);
+        if ($stmt->rowCount() === 0) {
+            $_SESSION['flash']    = t('admin.users.flash.not_courier');
+            $_SESSION['flash_ok'] = false;
+            header('Location: /admin/users.php');
+            exit;
+        }
+        audit('2fa_reset', null, null, "user_id={$uid}");
+        $_SESSION['flash']    = t('admin.users.flash.twofa_reset');
+        $_SESSION['flash_ok'] = true;
+    } catch (Exception $e) {
+        log_err('Reset 2FA: ' . $e->getMessage());
+        $_SESSION['flash']    = t('admin.users.flash.twofa_reset_failed');
+        $_SESSION['flash_ok'] = false;
+    }
+    header('Location: /admin/users.php');
+    exit;
+}
+
+header('Location: /admin/users.php');
+exit;

@@ -1,47 +1,8 @@
 <?php
 declare(strict_types=1);
-require_once dirname(__DIR__) . '/includes/kernel.php';
 
-set_security_headers(true);
-start_secure_session();
-require_admin();
-
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    header('Location: /admin/orders.php');
-    exit;
-}
-
-if (!verify_csrf($_POST['csrf_token'] ?? '')) {
-    $_SESSION['flash']    = t('admin.common.invalid_csrf');
-    $_SESSION['flash_ok'] = false;
-    header('Location: /admin/orders.php');
-    exit;
-}
-
-$id = (int)($_POST['id'] ?? 0);
-if ($id <= 0) {
-    header('Location: /admin/orders.php');
-    exit;
-}
-
-// Central authorization check for every courier/admin mutation.
-if (!courier_owns_order($id)) {
-    $_SESSION['flash']    = t('admin.orders.flash.no_access');
-    $_SESSION['flash_ok'] = false;
-    header('Location: /admin/orders.php');
-    exit;
-}
-
-// Atomic preparing → delivered transition: affected rows decide, so a
-// double-submit or a race with another admin is a harmless no-op.
-if (order_deliver_atomic($id, order_ttl_hours())) {
-    audit('order_deliver', $id);
-    $_SESSION['flash']    = t('admin.orders.flash.marked_delivered');
-    $_SESSION['flash_ok'] = true;
-} else {
-    $_SESSION['flash']    = t('admin.orders.flash.already_delivered');
-    $_SESSION['flash_ok'] = true;
-}
-
-header('Location: /admin/orders.php');
-exit;
+// Legacy URL shim: the mark_delivered action moved behind the dispatcher
+// (admin/dispatch.php), which owns the security envelope. Posted forms keep
+// hitting this filename; method and body pass through untouched.
+$_GET['action'] = 'mark_delivered';
+require __DIR__ . '/dispatch.php';

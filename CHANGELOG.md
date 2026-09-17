@@ -16,6 +16,18 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   boot through the same manifest. `healthz.php` stays dependency-free on
   purpose (liveness must not depend on the stack it reports on), and the
   `KernelTest` header guard now covers all 40 entry points
+- Thin admin dispatcher: the nine admin actions (`mark_delivered`,
+  `order_close`, `order_remove`, `photo_delete`, `extend`, `save_setting`,
+  `user_action`, `set_lang`, `logout`) run through one envelope
+  (`admin/dispatch.php` + pure-data `admin/routes.php`) — headers, session,
+  route-flag 2FA gate, method, auth, CSRF, ownership — while the legacy URLs
+  stay as one-line shims, so bookmarks and forms keep working. The 2FA gate
+  now consults the route's `2fa_exempt` flag instead of a script-basename
+  allow-list, so shims and canonical URLs gate alike; handlers are
+  moved-verbatim business logic guarded on their route name. Covered by
+  `DispatchTest` (structural contract + HTTP shim/dispatch parity) and the
+  `FailClosedTest` gate check, which now arms the route flag instead of a
+  script name
 - Automated formatting gate: `.php-cs-fixer.php` (conservative ruleset —
   whitespace, quotes, short arrays, strict-types; brace placement and line
   splitting deliberately out so the gate prevents drift without restyling

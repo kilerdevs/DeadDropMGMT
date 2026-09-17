@@ -91,12 +91,16 @@ T::ok('owner passes require_admin', is_admin_logged_in());
 require_owner(); // owner passes the owner check too
 T::ok('owner passes require_owner', true);
 
-// Courier without TOTP on an ALLOWED script name gets through the gate check
+// Courier without TOTP on a 2fa-exempt ROUTE gets through the gate check
+// (the flag 2fa.php and exempt dispatch routes set — script basenames no
+// longer gate anything; the gated negative is exit-covered over HTTP by
+// DispatchTest's 'pending courier gated from actions').
 $_SESSION['user_role'] = 'courier';
 $_SESSION['totp_enabled'] = false;
-$_SERVER['SCRIPT_NAME'] = '/admin/2fa.php';
+$GLOBALS['DDMGMT_ROUTE_2FA_EXEMPT'] = true;
 require_admin();
-T::ok('courier pre-enrollment allowed on 2fa.php itself', true);
+T::ok('courier pre-enrollment allowed on exempt route', true);
+unset($GLOBALS['DDMGMT_ROUTE_2FA_EXEMPT']);
 
 // Non-owner would be redirected by require_owner (exit-covered over HTTP);
 // the ownership predicate itself stays unit-checkable:

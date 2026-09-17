@@ -59,11 +59,13 @@ function require_admin(): void {
     }
 
     // 2FA is mandatory for couriers (optional for the owner). Gate every
-    // page but the enrollment page itself, logout, and self-service
-    // preference endpoints that touch nothing but the caller's own row.
+    // page but the enrollment page itself and routes flagged 2fa-exempt
+    // (logout, self-service preferences touching only the caller's own
+    // row). The flag comes from the dispatch route table — or is set by
+    // 2fa.php itself, the one standalone page that needs it — never from
+    // the script name, so shims and canonical dispatch URLs gate alike.
     if (is_courier() && empty($_SESSION['totp_enabled'])) {
-        $script = basename($_SERVER['SCRIPT_NAME'] ?? '');
-        if (!in_array($script, ['2fa.php', 'logout.php', 'set_lang.php'], true)) {
+        if (empty($GLOBALS['DDMGMT_ROUTE_2FA_EXEMPT'])) {
             header('Location: /admin/2fa.php?required=1');
             exit;
         }
