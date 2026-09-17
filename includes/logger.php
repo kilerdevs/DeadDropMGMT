@@ -236,7 +236,12 @@ function app_log(string $level, string $event, array $ctx = []): bool {
                 unset($rec[$k]);
             }
         }
-        $payload = json_encode($rec, JSON_INVALID_UTF8_SUBSTITUTE);
+        // Identical flags to the stored line AND the verifier (unescaped +
+        // substitute): hashing the default-flags encoding here while the
+        // line below is written unescaped made every non-ASCII base field
+        // (Polish msgs, names) verify as "hash mismatch" — a false tamper
+        // alarm on a perfectly honest entry.
+        $payload = json_encode($rec, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
         if ($payload === false) {
             flock($fh, LOCK_UN);
             fclose($fh);
@@ -245,7 +250,15 @@ function app_log(string $level, string $event, array $ctx = []): bool {
     }
     $rec['hash'] = hash_hmac('sha256', $payload, _log_key());
 
-    $line = json_encode($rec, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    $line = json_encode($rec, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+    if ($line === false) {
+        // Unencodable even with substitution (e.g. INF/NAN floats in ctx) —
+        // refuse loudly instead of appending a blank line the verifier
+        // would silently skip, losing the entry without a trace.
+        flock($fh, LOCK_UN);
+        fclose($fh);
+        return false;
+    }
     fwrite($fh, $line . "\n");
     fflush($fh);
     flock($fh, LOCK_UN);

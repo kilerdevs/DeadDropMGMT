@@ -17,21 +17,22 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 // Token enumeration is limited on every public surface, not just the
 // destructive one: the confirmation probe burns budget like anything else.
 // rl_hit is one atomic state transition — spend + verdict — so concurrent
-// requests can never both slip through on a stale count. It runs BEFORE the
-// CSRF check deliberately: a flood of forged requests must drain its own
-// budget (self-throttling), and an already-blocked visitor gets the cooldown
-// card instead of being waved to a redirect that leaks nothing anyway.
+// requests can never both slip through on a stale count. The CSRF gate runs
+// BEFORE the spend (same ordering as index.php): the limiter is IP-scoped,
+// so a forged cross-site flood would otherwise burn the VICTIM's budget and
+// lock them out of their own pickup, while the attacker's hosts spend
+// nothing. Forged requests die here having spent nothing; a legitimately
+// blocked visitor still gets the cooldown card below.
+if (!verify_csrf($_POST['csrf_token'] ?? '')) {
+    header('Location: /');
+    exit;
+}
 $rl = rl_hit('public');
 $error = $rl['blocked']
     ? t('public.receive.rate_limited', ['min' => (int)ceil($rl['remaining'] / 60)])
     : '';
 
-if ($error === '' && !verify_csrf($_POST['csrf_token'] ?? '')) {
-    header('Location: /');
-    exit;
-}
-
-$raw_token = trim($_POST['order_token'] ?? '');
+$raw_token = trim(post_string('order_token'));
 $step      = (int)($_POST['step'] ?? 0);
 $deleted   = false;
 $csrf      = generate_csrf();

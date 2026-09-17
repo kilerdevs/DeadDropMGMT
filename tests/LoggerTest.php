@@ -173,6 +173,14 @@ T::eq('three live appends form a verifiable chain',
 T::ok('app_log survives non-UTF8 context',
       app_log('info', 'logger_test_binary', ['junk' => "\xB1\x31", 'msg' => 'binary ctx']) === true);
 
+// Non-ASCII base fields must VERIFY after the substitution fallback: the
+// hash used to be computed over default-flags encoding while the stored
+// line was unescaped, so a Polish msg false-alarmed as "hash mismatch".
+T::ok('app_log survives non-UTF8 context with non-ASCII msg',
+      app_log('info', 'logger_test_binary_pl', ['junk' => "\xB1\x31", 'msg' => 'Zażółć gęślą jaźń']) === true);
+T::eq('fallback entry with non-ASCII msg verifies clean',
+      [true, 5, null, null], verify_log_chain($live));
+
 // Garbage at the tail is TOLERATED: the writer anchors on the last parseable
 // entry, so one broken line must not orphan the rest of the log
 $live = APP_LOG_PATH;

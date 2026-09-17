@@ -29,7 +29,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $error = t('admin.common.invalid_csrf');
     } else {
         $action = $_POST['action'] ?? '';
-        $code   = trim($_POST['code'] ?? '');
+        $code   = trim(post_string('code'));
         $rl     = rl_status('admin_2fa_setup');
 
         if ($rl['blocked']) {
@@ -57,7 +57,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } else {
                 $enc = encrypt_secret($pending);
                 get_db()->prepare(
-                    'UPDATE users SET totp_enabled = 1, totp_secret_enc = ?, totp_secret_iv = ? WHERE id = ?'
+                    'UPDATE users SET totp_enabled = 1, totp_secret_enc = ?, totp_secret_iv = ?, totp_last_counter = NULL WHERE id = ?'
                 )->execute([$enc['ciphertext'], $enc['iv'], $uid]);
                 unset($_SESSION['pending_totp_secret']);
                 $_SESSION['totp_enabled'] = true;
@@ -77,7 +77,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $error = t('admin.2fa.error.invalid_code');
             } else {
                 get_db()->prepare(
-                    'UPDATE users SET totp_enabled = 0, totp_secret_enc = NULL, totp_secret_iv = NULL WHERE id = ?'
+                    'UPDATE users SET totp_enabled = 0, totp_secret_enc = NULL, totp_secret_iv = NULL, totp_last_counter = NULL WHERE id = ?'
                 )->execute([$uid]);
                 $_SESSION['totp_enabled'] = false;
                 audit('2fa_disable');

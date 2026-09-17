@@ -67,7 +67,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && !empty($_SESSION['reveal'])) {
 
 // ── GET ?token= pre-fill: auto-show password step ─────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'GET' && $loc_data === null && !$correct_preparing) {
-    $get_token = trim($_GET['token'] ?? '');
+    $get_token = trim(get_string('token'));
     if (strlen($get_token) === 16 && ctype_alnum($get_token)) {
         try {
             $db_g  = get_db();
@@ -112,8 +112,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $blocked       = true;
         $cooldown_secs = max($hit['remaining'], bucket_remaining('public'));
     } else {
-        $raw_token = trim($_POST['order_token'] ?? '');
-        $password  = (string)($_POST['pickup_password'] ?? '');
+        $raw_token = trim(post_string('order_token'));
+        $password  = post_string('pickup_password');
 
         if (strlen($raw_token) !== 16 || !ctype_alnum($raw_token)) {
             $error = t('public.index.error.not_found');
@@ -251,20 +251,31 @@ $csrf_public = generate_csrf();
 </head>
 <body>
 <main>
+    <?php if ($loc_data === null && !$correct_preparing): ?>
+    <!-- No inline event handlers anywhere on this page: the public CSP is
+         script-src 'self' + nonce, which never authorizes on* attributes —
+         an onchange here would be dead in every modern browser. The plain
+         submit button works with and without JavaScript alike.
+         Hidden while a reveal (or preparing card) is on screen: that state
+         is single-use session data a fresh GET would consume and destroy,
+         and the pickup password cannot be carried through a language
+         switch — so changing language mid-reveal is refused instead of
+         silently discarding the reveal. -->
     <form class="lang-switch" method="GET" action="">
-        <?php if ($prefill_token !== '' || isset($_GET['token'])): ?>
+        <?php if ($prefill_token !== '' || (isset($_GET['token']) && is_string($_GET['token']))): ?>
         <input type="hidden" name="token"
-               value="<?= htmlspecialchars($prefill_token !== '' ? $prefill_token : (string)($_GET['token'] ?? ''), ENT_QUOTES, 'UTF-8') ?>">
+               value="<?= htmlspecialchars($prefill_token !== '' ? $prefill_token : (string)$_GET['token'], ENT_QUOTES, 'UTF-8') ?>">
         <?php endif; ?>
         <label for="lang"><?= t('public.lang.label') ?></label>
-        <select id="lang" name="lang" onchange="this.form.submit()">
+        <select id="lang" name="lang">
             <?php foreach (i18n_lang_names() as $code => $name): ?>
             <option value="<?= htmlspecialchars($code, ENT_QUOTES, 'UTF-8') ?>"
                 <?= $code === current_lang() ? 'selected' : '' ?>><?= htmlspecialchars($name, ENT_QUOTES, 'UTF-8') ?></option>
             <?php endforeach; ?>
         </select>
-        <noscript><button type="submit" class="btn btn-lang"><?= t('public.lang.apply') ?></button></noscript>
+        <button type="submit" class="btn btn-lang"><?= t('public.lang.apply') ?></button>
     </form>
+    <?php endif; ?>
     <div class="wordmark">DEAD DROP // <?= htmlspecialchars(site_name(), ENT_QUOTES, 'UTF-8') ?></div>
     <h1><?= t('public.index.title') ?></h1>
 

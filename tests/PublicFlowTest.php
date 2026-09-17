@@ -309,33 +309,62 @@ T::ok('fresh session same IP is not blocked by another bucket',
     str_contains($body, 'status-badge') && !str_contains($body, 'cooldown-heading'));
 
 // 12. receive.php burns budget on the confirmation probe too — a blocked
-// visitor cannot even enumerate step 1. Needs a real unlocked session first:
-// only the reveal page issues the CSRF token receive.php accepts.
+// visitor cannot even enumerate step 1. Every spend needs a freshly
+// harvested token: single-use rotation retires each one on use.
 set_setting('rate_limit_max', '3');
 $db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
 $cookie = '';
 [$stU, , $cookie] = $pf_unlock($tokD2, $pass, $cookie);
-[, $body, $cookie] = _pf_get("http://127.0.0.1:$port/", $cookie);
-preg_match('/name="csrf_token"\s*value="([0-9a-f]{64})"/', $body, $mR);
-$rcsrf = $mR[1] ?? '';
 T::eq('unlock for confirmation flow redirects (test setup)', 302, $stU);
-T::ok('reveal page offers confirmation form (test setup)', $rcsrf !== '');
-
+$harvest = static function () use ($port, &$cookie): string {
+    [, $g, $cookie] = _pf_get("http://127.0.0.1:$port/", $cookie);
+    preg_match('/name="csrf_token"\s*value="([0-9a-f]{64})"/', (string)$g, $m);
+    return $m[1] ?? '';
+};
 for ($i = 0; $i < 3; $i++) {
+    $tok = $harvest();
+    T::ok("confirmation token harvestable [$i]", $tok !== '');
     [, , $cookie] = _pf_post(
         "http://127.0.0.1:$port/receive.php",
-        ['csrf_token' => $rcsrf, 'order_token' => $tokD2, 'step' => '1'],
+        ['csrf_token' => $tok, 'order_token' => $tokD2, 'step' => '1'],
         $cookie
     );
 }
 [, $body] = _pf_post(
     "http://127.0.0.1:$port/receive.php",
-    ['csrf_token' => $rcsrf, 'order_token' => $tokD2, 'step' => '2'],
+    ['csrf_token' => $harvest(), 'order_token' => $tokD2, 'step' => '2'],
     $cookie
 );
 T::ok('blocked budget refuses even the destructive confirmation', str_contains($body, 'class="alert"'));
 T::ok('order survives blocked deletion attempt',
     (bool)$db->query("SELECT 1 FROM orders WHERE order_token = '$tokD2'")->fetch());
+
+// 12b. Forged (tokenless) receive POSTs spend NOTHING: even a full budget
+// worth of forgeries must leave the victim's limiter untouched, and a
+// legitimate confirmation afterwards must still go through.
+$db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
+$cookieF = '';
+for ($i = 0; $i < 5; $i++) {
+    [$stF, , $cookieF] = _pf_post(
+        "http://127.0.0.1:$port/receive.php",
+        ['order_token' => $tokD2, 'step' => '1'],
+        $cookieF
+    );
+    T::eq("forged receive POST redirected [$i]", 302, $stF);
+}
+T::eq('forgeries created no limiter row',
+    0, (int)$db->query("SELECT COUNT(*) FROM rate_limits WHERE scope = 'public'")->fetchColumn());
+[$stL, , $cookieF] = $pf_unlock($tokD2, $pass, $cookieF);
+T::eq('unlock still works after forgery flood', 302, $stL);
+[, $gL, $cookieF] = _pf_get("http://127.0.0.1:$port/", $cookieF);
+preg_match('/name="csrf_token"\s*value="([0-9a-f]{64})"/', (string)$gL, $mL);
+[$stC, $bodyC] = _pf_post(
+    "http://127.0.0.1:$port/receive.php",
+    ['csrf_token' => $mL[1] ?? '', 'order_token' => $tokD2, 'step' => '1'],
+    $cookieF
+);
+T::eq('legitimate confirmation proceeds after forgery flood', 200, $stC);
+T::ok('confirmation page renders after forgery flood', str_contains($bodyC, 'name="step" value="2"'));
 
 // Reveal dies with the row: unlock, then an owner panic deletes the order
 // before the consuming GET — the sealed blob alone must reveal nothing.

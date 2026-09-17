@@ -237,8 +237,12 @@ function generate_csrf(): string {
     return $_SESSION['csrf_token'];
 }
 
-function verify_csrf(string $token, bool $rotate = true): bool {
+function verify_csrf(mixed $token, bool $rotate = true): bool {
     start_secure_session();
+    // Array-shaped input (csrf_token[]=x) must fail the check, not TypeError
+    // at the hash_equals() boundary — outside every try, and catches are
+    // Exception-only, so a bare array would 500 instead of answering false.
+    if (!is_string($token) || $token === '') return false;
     if (empty($_SESSION['csrf_token'])) return false;
     if (!hash_equals($_SESSION['csrf_token'], $token)) {
         return false;
@@ -262,7 +266,7 @@ function verify_csrf(string $token, bool $rotate = true): bool {
 // up and desync itself. The named wrapper exists so call sites state that
 // intent — a bare verify_csrf(..., rotate: false) is how the next read-only
 // endpoint silently breaks its callers.
-function verify_csrf_readonly(string $token): bool {
+function verify_csrf_readonly(mixed $token): bool {
     return verify_csrf($token, rotate: false);
 }
 
@@ -348,6 +352,22 @@ function rl_enabled(): bool {
     return get_setting('rate_limit_enabled', '1') === '1';
 }
 
+// window_start is written by MySQL UTC_TIMESTAMP() — a bare DATETIME with
+// no zone. Parsing it with plain strtotime() interprets it in PHP's
+// default timezone, skewing every window by the UTC offset: east of UTC
+// (Europe/Warsaw) windows expire hours early and budgets reset constantly
+// (fail-open for guessing); west of UTC they never roll and visitors stay
+// sticky-blocked with absurd cooldowns. Anchoring the parse to UTC keeps
+// the read side on the same clock the write side used. Returns false for
+// values the database should never hold (fail-closed callers decide).
+function _rl_parse_window_start(string $v): int|false {
+    $v = trim($v);
+    if ($v === '') {
+        return false;
+    }
+    return strtotime($v . ' UTC');
+}
+
 function rl_status(string $scope = 'public'): array {
     if (!rl_enabled()) {
         return ['blocked' => false, 'remaining' => 0, 'count' => 0];
@@ -369,12 +389,13 @@ function rl_status(string $scope = 'public'): array {
     if (!$row) {
         return ['blocked' => false, 'remaining' => $window, 'count' => 0];
     }
-    // Corrupt timestamps fail CLOSED: strtotime() answers false for values
-    // the database should never hold, and legacy zero-dates parse to year 0
-    // — both would otherwise read as "window started ages ago", silently
-    // resetting the budget so a damaged row could never block. A garbage
-    // counter denies (loudly) rather than waving traffic through.
-    $started = strtotime((string)$row['window_start']);
+    // Corrupt timestamps fail CLOSED: _rl_parse_window_start() answers false
+    // for values the database should never hold, and legacy zero-dates
+    // parse to year 0 — both would otherwise read as "window started ages
+    // ago", silently resetting the budget so a damaged row could never
+    // block. A garbage counter denies (loudly) rather than waving traffic
+    // through.
+    $started = _rl_parse_window_start((string)$row['window_start']);
     if ($started === false || $started <= 0) {
         log_err('Rate limit status: unparseable window_start, failing closed');
         return ['blocked' => true, 'remaining' => $window, 'count' => 0];
@@ -414,7 +435,7 @@ function rl_hit(string $scope = 'public', ?int $max_override = null, ?int $windo
 
         // Unparseable window_start fails CLOSED (see rl_status): rolling back
         // and denying beats resetting the budget on a damaged row.
-        $started = $row ? strtotime((string)$row['window_start']) : time();
+        $started = $row ? _rl_parse_window_start((string)$row['window_start']) : time();
         if ($started === false || $started <= 0) {
             $db->rollBack();
             log_err('Rate limit increment: unparseable window_start, failing closed');
@@ -532,6 +553,27 @@ function enrollment_secret_valid(int $user_id, string $secret): bool {
         $stmt->execute([$user_id]);
         $row = $stmt->fetch();
         return $row && hash_equals((string)$row['enrollment_hash'], enrollment_secret_hash($secret));
+    } catch (Exception $e) {
+        return false;
+    }
+}
+
+// ── TOTP replay resistance ──────────────────────────────────────────────────
+// A code is valid inside its ±1-step window (~90 s) — without a burn list it
+// is valid AGAIN for a second login in the same window. Each accepted
+// counter is claimed at most once per user: the conditional UPDATE is the
+// atomic test-and-set, so two concurrent logins with the same code cannot
+// both succeed. Counters grow with time, so a stale value can only ever
+// reject (fail closed, self-healing as time advances) — a NULL (never used,
+// freshly enrolled) accepts any valid counter.
+function totp_claim_counter(int $user_id, int $counter): bool {
+    try {
+        $stmt = get_db()->prepare(
+            'UPDATE users SET totp_last_counter = ?
+             WHERE id = ? AND (totp_last_counter IS NULL OR totp_last_counter < ?)'
+        );
+        $stmt->execute([$counter, $user_id, $counter]);
+        return $stmt->rowCount() === 1;
     } catch (Exception $e) {
         return false;
     }

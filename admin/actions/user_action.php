@@ -13,8 +13,8 @@ $action = $_POST['action'] ?? '';
 
 // ── Create courier ────────────────────────────────────────────────────────────
 if ($action === 'create_courier') {
-    $username = trim($_POST['username'] ?? '');
-    $password = (string)($_POST['password'] ?? '');
+    $username = trim(post_string('username'));
+    $password = post_string('password');
 
     if ($username === '' || strlen($username) < 3 || strlen($username) > 64) {
         $_SESSION['flash']    = t('admin.users.flash.username_length');

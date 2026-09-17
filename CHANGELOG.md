@@ -5,6 +5,15 @@ All notable changes to DeadDropMGMT are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- TOTP replay resistance: each accepted counter is claimed at most once per
+  user (`users.totp_last_counter`, atomic conditional UPDATE), so a code is
+  good for its first presentation only — never for a replay inside the ±1
+  window. Replayed codes answer exactly like wrong ones (no oracle).
+- Last-resort error boundary in the kernel: an escaped Throwable is logged
+  and answered with the localized 500 page (JSON for fetch callers) instead
+  of the webserver's blank 500. CLI/cron keeps log + exit 1.
+- `tests-tz` CI job runs the full battery under `TZ=Europe/Warsaw`, where
+  UTC/local clock skews fail open instead of hiding.
 - Public language switcher: recipients can change the site language from a
   selector on the pickup page (`?lang=`). The choice applies to the same
   request, persists in the session, and is remembered across visits in a
@@ -13,6 +22,32 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   staff, then the visitor choice, then the cookie, then the site default.
   `current_lang()` is no longer statically memoized so long-lived SAPIs
   can't pin the first request's language.
+
+### Fixed
+- Language switcher was dead under its own CSP: `script-src 'self'` + nonce
+  never authorizes inline `on*` handlers, so the `onchange` submit did
+  nothing with JS enabled. Plain submit button now, no inline handlers
+  anywhere (the admin extend-expiry `onclick` had the same disease and is a
+  real form now). A structural test scans rendered pages for `on*=` attrs.
+- Switching language mid-reveal no longer eats the reveal: the selector is
+  hidden while a single-use reveal (or preparing card) is on screen instead
+  of discarding it via a fresh GET.
+- Logger substitution fallback hashed default-flags encoding while the
+  stored line (and verifier) used unescaped flags — every non-ASCII base
+  field false-alarmed as "hash mismatch". Identical flags before hashing
+  now; unencodable lines refuse loudly instead of appending a blank line
+  the verifier would silently skip.
+- Rate-limiter windows are UTC-anchored on read (`window_start` is stamped
+  `UTC_TIMESTAMP()`): east of UTC budgets reset constantly (fail-open),
+  west stayed sticky-blocked. New `RateLimitTzTest` pins verdicts across
+  five timezones.
+- Array-shaped inputs (`field[]=x`) no longer 500: `verify_csrf()` answers
+  false for non-strings (covers all its call sites), new
+  `post_string()`/`get_string()` bag readers guard public and auth inputs,
+  and the kernel boundary localizes anything left.
+- `receive.php` checks CSRF before spending limiter budget (same ordering
+  as `index.php`): forged floods no longer burn the victim's IP budget.
+  Covered by a no-spend probe in `PublicFlowTest`.
 
 ## [1.4.0] - 2026-09-17
 

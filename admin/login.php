@@ -23,8 +23,8 @@ if ($rl['blocked']) {
     exit;
 }
 
-$username = trim($_POST['username'] ?? '');
-$password = (string)($_POST['password'] ?? '');
+$username = trim(post_string('username'));
+$password = post_string('password');
 
 switch (admin_login($username, $password)) {
     case 'ok':

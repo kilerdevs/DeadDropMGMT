@@ -1,6 +1,23 @@
 <?php
 declare(strict_types=1);
 
+// ── Request-bag string readers ──────────────────────────────────────────────
+// Form fields arrive as strings, but a crafted order_token[]=x (or any
+// field) arrives as an ARRAY: trim()/strlen() TypeError on it, outside
+// every try, and the catches are Exception-only — an uncaught 500 where the
+// normal error path belongs. These answer the default for non-strings, so
+// every downstream sink stays total on strings. (CSRF tokens are guarded
+// inside verify_csrf() itself, covering all its call sites at once.)
+function post_string(string $key, string $default = ''): string {
+    $v = $_POST[$key] ?? $default;
+    return is_string($v) ? $v : $default;
+}
+
+function get_string(string $key, string $default = ''): string {
+    $v = $_GET[$key] ?? $default;
+    return is_string($v) ? $v : $default;
+}
+
 // ── Client IP resolution (used by rate limiting, audit log) ────────────────
 // Lives OUTSIDE config.php on purpose: operators customize their config and
 // a typo there must not be able to silently weaken who counts as a trusted

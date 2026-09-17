@@ -143,9 +143,56 @@ T::ok('switcher offers all supported languages', $allOptions);
 T::ok('switcher labels every language natively',
     str_contains((string)$body5, i18n_lang_names()['de']));
 
+// CSP class guard: the public profile is script-src 'self' + nonce, which
+// never authorizes inline on* handlers — a browser silently drops them, and
+// raw-HTTP tests cannot see that. So the rendered page must not contain any.
+T::ok('no inline event handlers (CSP would kill them)',
+    preg_match('/\son[a-z]+\s*=/i', (string)$body5) !== 1);
+
 // A ?token= arrival keeps its token through the language form.
 [, $body6] = _pl_get("$base/?token=DeliveredToken01XY&lang=en");
 T::ok('token survives language switch', str_contains((string)$body6, 'name="token"'));
+
+// ── Last-resort boundary: an escaped Throwable renders localized ────────────
+// A dedicated docroot (temp dir, never the repo) serves a one-line router
+// that boots the kernel and throws — the response must be the localized
+// 500 page, not the webserver's blank crash.
+$webDir = ini_get('session.save_path') . '/pl_boundary_docroot';
+@mkdir($webDir, 0700, true);
+$router = $webDir . '/index.php';
+file_put_contents($router, '<?php declare(strict_types=1); require '
+    . var_export(str_replace('\\', '/', $root) . '/includes/kernel.php', true)
+    . '; throw new RuntimeException("boundary-probe");');
+$port2 = 8360 + (int)(getmypid() % 400);
+$cmd2  = escapeshellarg(PHP_BINARY) . " -S 127.0.0.1:$port2 -t " . escapeshellarg($webDir);
+$proc2 = proc_open($cmd2, [['pipe', 'r'], ['file', $null, 'w'], ['file', $null, 'w']], $pipes2);
+if (is_resource($proc2)) {
+    $up2 = false;
+    for ($i = 0; $i < 30; $i++) {
+        try { [$st2] = _pl_get("http://127.0.0.1:$port2/"); }
+        catch (Throwable) { $st2 = 0; usleep(200000); continue; }
+        if ($st2 === 500) { $up2 = true; break; }
+        usleep(200000);
+    }
+    T::ok('boundary answers 500', $up2 && $st2 === 500);
+    [, $bodyB] = _pl_get("http://127.0.0.1:$port2/");
+    T::ok('boundary renders the localized error page',
+        str_contains((string)$bodyB, 'class="alert"')
+        && !str_contains((string)$bodyB, 'boundary-probe'));
+    $stB = proc_get_status($proc2);
+    if (!empty($stB['running'])) {
+        if (DIRECTORY_SEPARATOR === '\\') {
+            exec('taskkill /F /T /PID ' . (int)$stB['pid'] . ' >NUL 2>&1');
+        } else {
+            proc_terminate($proc2);
+        }
+    }
+    proc_close($proc2);
+} else {
+    T::ok('boundary probe server booted', false);
+}
+@unlink($router);
+@rmdir($webDir);
 
 exit(T::done());
 

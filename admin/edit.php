@@ -428,18 +428,19 @@ $init_zoom = $has_pin ? 17 : 12;
                     <div class="field-label"><?= t('admin.edit.extend_label') ?></div>
                     <div class="extend-row">
                     <?php foreach (extend_hours_options() as $h): ?>
-                    <button type="button" class="btn btn-sm"
-                            onclick="(function(){
-                                var f = document.createElement('form');
-                                f.method = 'POST';
-                                f.action = '/admin/extend.php';
-                                f.innerHTML = '<input name=csrf_token value=\'<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>\'>' +
-                                              '<input name=id value=\'<?= htmlspecialchars((string)$id, ENT_QUOTES, 'UTF-8') ?>\'>' +
-                                              '<input name=hours value=\'<?= (int)$h ?>\'>' +
-                                              '<input name=ref value=edit>';
-                                document.body.appendChild(f);
-                                f.submit();
-                            })()">+<?= (int)$h ?>h</button>
+                    <!-- Real forms, not JS-built ones: the admin CSP is
+                         script-src 'self' + nonce and never authorizes
+                         inline onclick, so script-built submits would be
+                         dead buttons. These carry the identical fields. -->
+                    <form method="POST" action="/admin/extend.php" class="extend-form">
+                        <input type="hidden" name="csrf_token"
+                               value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
+                        <input type="hidden" name="id"
+                               value="<?= htmlspecialchars((string)$id, ENT_QUOTES, 'UTF-8') ?>">
+                        <input type="hidden" name="hours" value="<?= (int)$h ?>">
+                        <input type="hidden" name="ref" value="edit">
+                        <button type="submit" class="btn btn-sm">+<?= (int)$h ?>h</button>
+                    </form>
                     <?php endforeach; ?>
                     </div>
                 </div>

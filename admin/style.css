@@ -487,6 +487,7 @@ tbody td:last-child { padding-right: 0; }
 .td-muted { color: var(--text-muted); }
 .ua-cell    { max-width: 280px; overflow: hidden; text-overflow: ellipsis; font-size: 11px; }
 .extend-row { display: flex; gap: 10px; flex-wrap: wrap; }
+.extend-form { display: inline; margin: 0; }
 
 .form-deliver          { margin-bottom: 28px; }
 .btn-deliver           { border-color: #fff; color: #fff; }
