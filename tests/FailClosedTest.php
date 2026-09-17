@@ -413,4 +413,26 @@ T::throws('unreachable database throws PDOException',
           fn() => db_connect($refused, 'root', '', db_options('', '', '', true)),
           PDOException::class);
 
+// Array-shaped request input fails into defaults, never TypeError — and the
+// coverage floor counts these arms while HTTP suites run where pcov cannot
+// see, so both bag readers and both CSRF guards are pinned here in-process.
+$keepPost = $_POST;
+$keepGet = $_GET;
+$_POST = ['arr' => ['x'], 's' => ' v '];
+$_GET = ['arr' => ['x'], 's' => ' w '];
+T::eq('post_string answers default for arrays', '', post_string('arr'));
+T::eq('post_string answers explicit default for arrays', 'dflt', post_string('arr', 'dflt'));
+T::eq('post_string passes strings through', ' v ', post_string('s', 'd'));
+T::eq('post_string defaults missing keys', '', post_string('missing'));
+T::eq('post_string defaults missing keys explicitly', 'd', post_string('missing', 'd'));
+T::eq('get_string answers default for arrays', '', get_string('arr'));
+T::eq('get_string answers explicit default for arrays', 'dflt', get_string('arr', 'dflt'));
+T::eq('get_string passes strings through', ' w ', get_string('s', 'd'));
+T::eq('get_string defaults missing keys', '', get_string('missing'));
+T::eq('get_string defaults missing keys explicitly', 'd', get_string('missing', 'd'));
+T::eq('array csrf token fails closed', false, verify_csrf(['x']));
+T::eq('array readonly csrf token fails closed', false, verify_csrf_readonly(['x']));
+$_POST = $keepPost;
+$_GET = $keepGet;
+
 exit(T::done());
