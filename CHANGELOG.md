@@ -4,6 +4,8 @@ All notable changes to DeadDropMGMT are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is semver.
 ## [Unreleased]
 
+## [1.4.0] - 2026-09-17
+
 ### Changed
 - Admin pages boot through a single service kernel
   (`includes/kernel.php`): the per-page 4–8 line require blocks (32 pages,
