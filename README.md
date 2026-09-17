@@ -267,7 +267,22 @@ unlock, PRG reveal, receipt confirmation, rate limiting, the per-session
 failure bucket, IDOR/destructive-IDOR probes and concurrent state races. Runs
 automatically in GitHub Actions
 (`.github/workflows/ci.yml`, MariaDB 11 service container) across PHP
-8.2–8.5 plus MySQL 8, with smoke tests, CVE gates and SBOMs for all three Docker stacks.
+ 8.2–8.5 plus MySQL 8, with smoke tests, CVE gates and SBOMs for all three Docker stacks.
+
+**Browser E2E (Playwright).** What raw HTTP cannot see, a real Chromium
+covers: the no-JavaScript submit paths, inline-handler absence in a live DOM,
+and mid-reveal UI state (`e2e/tests/`: language switcher with and without JS,
+public unlock → reveal → receipt → deletion, admin login → edit → logout).
+
+```bash
+npm ci && npx playwright install chromium   # one-time toolchain
+npm run e2e                                 # boots php -S, seeds, runs
+```
+
+Needs MariaDB on `127.0.0.1:3306` (same as the PHP suite) and PHP on PATH
+(`PHP_BINARY` overrides the binary). The harness uses an isolated
+`deaddrops_e2e` database — never the PHP suite's `deaddrops_test` — so both
+can run side by side. Runs in CI as the `e2e` job.
 
 **Coverage.** A separate CI job runs the suite under `pcov` and reports line
 coverage over `includes/` - the security-critical library code (crypto,

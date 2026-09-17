@@ -5,6 +5,11 @@ All notable changes to DeadDropMGMT are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Real-browser E2E (`e2e/`, Playwright/Chromium, `e2e` CI job): the no-JS
+  language-switcher path, inline-handler absence in a live DOM, the
+  mid-reveal switcher hide, and full public/admin lifecycles through actual
+  forms — the behaviours the raw-HTTP suites structurally cannot observe.
+  Isolated `deaddrops_e2e` database, per-test browser contexts, 11 specs.
 - TOTP replay resistance: each accepted counter is claimed at most once per
   user (`users.totp_last_counter`, atomic conditional UPDATE), so a code is
   good for its first presentation only — never for a replay inside the ±1
