@@ -34,7 +34,7 @@ if (is_file($cacheFile) && (time() - filemtime($cacheFile)) < $cacheTtl) {
 $subdomain = ['a', 'b', 'c'][random_int(0, 2)];
 $url = "https://$subdomain.tile.openstreetmap.org/$z/$x/$y.png";
 
-$data = osm_fetch($url);
+$data = osm_fetch($url, 1048576); // dense-vector tiles stay well under 1 MiB
 
 // Record which proxy served the request (re-opens session briefly).
 osm_last_via_flush();

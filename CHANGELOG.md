@@ -72,6 +72,42 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   splitting deliberately out so the gate prevents drift without restyling
   history) enforced by a new CI `style` job running the version- and
   hash-pinned fixer phar in `--dry-run`
+- Log tail-deletion detection (external review, verified): hash chains never
+  caught pure tail truncation, so entries now carry a global monotonic `seq`
+  (continues across rotation, backfilled by position for legacy tips) and the
+  hourly cleanup pass anchors the tip in a new `log_checkpoints` table — a
+  separate trust domain (db-data vs app-logs volume). `log_verify.php`
+  reports a continuity verdict (`extends` / `truncated` / `rotated` /
+  `none` / `error`) next to chain validity; `setup.sql` creates the table
+  and is safe to re-run as the upgrade path
+- Public unlock CSRF (external review, verified): the anonymous unlock form
+  was the only state-affecting POST without a token, letting forged
+  cross-site submits burn the victim's limiter budget and force reveals.
+  The token is now verified before any budget is spent (both public forms
+  embed it; rotation cannot desync a form re-rendered on every response)
+- Session hardening: `use_strict_mode` / `use_only_cookies` /
+  `use_trans_sid` set explicitly instead of trusting php.ini, and the
+  pending TOTP secret + one-time enrollment note cross redirects sealed
+  (TOTP subkey) rather than plaintext — the ADR-008 "ciphertext-only"
+  wording is narrowed to the accurate "no plaintext secrets or credentials"
+- Outbound response ceilings: `osm_fetch_via()` / `osm_fetch()` take a byte
+  cap (default 2 MiB; 1 MiB tiles, 256 KiB geocode), enforced progressively
+  via `CURLOPT_MAXFILESIZE` plus post-fetch length checks on every transport
+  including the stream fallback and the direct discovery/IP-oracle reads
+- Schema: `order_events(order_token)` and `rate_limits(window_start)`
+  indexes (CREATE TABLE plus guarded ALTERs for existing installs, proven
+  by strip-and-reload); CI loads the schema twice to prove the re-run
+  no-op promise; `cache/` blocked from the web on all stacks (it was
+  reachable, bypassing the tile auth gate) with CI 403 asserts;
+  `docs/TROUBLESHOOTING.md` gains continuity-status and log-shipping notes
+- README audited end to end: CSRF token size corrected (32 bytes, not 64),
+  public-zone session reality, nginx/Caddy parity, PHP 8.2–8.5 matrix, new
+  suites + mutation job listed, project tree updated, dead
+  `SESSION_LIFETIME` knob removed from the template, cron recipe fixed to
+  CLI (`cron/` is 403 from the web on every stack)
+- Mutation probe grows to 16/16 killed (session ini, log seq, checkpoint
+  write, continuity verdict); the probe itself caught a real test bug here
+  (a stale anchor row letting a neutered writer pass)
 ## [1.3.0] - 2026-09-16
 
 ### Security

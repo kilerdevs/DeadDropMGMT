@@ -60,6 +60,18 @@ repair. Note the writer deliberately anchors *past* a corrupt tail on the
 next append, so logging keeps working while you investigate; it refuses to
 write only when no intact anchor exists at all.
 
+## "Verify integrity" continuity says truncated / rotated / none
+
+Next to chain validity the button reports a continuity verdict against the
+newest database checkpoint (written hourly by cleanup): `extends` is
+healthy; `truncated` means history ends before the anchor — tail entries
+were deleted, or the file was swapped for an older copy. Restore from
+backup and investigate how the file was modified. `rotated` is benign: the
+anchor aged out through legitimate log rotation. `none` means no anchor
+exists yet (fresh install, or the `log_checkpoints` table predates your
+schema — re-run `setup.sql`). Deletions inside the ~hourly checkpoint
+interval cannot be caught by design; that is the documented blind spot.
+
 ## Expired orders never disappear
 
 Expiry runs two ways: real cron (`cron/cleanup.php`, hourly recommended)
@@ -119,3 +131,14 @@ probe them: anything other than 403/404 on `/includes/db.php` and
 - `UploadHardeningTest` (and photo uploads generally) need the GD
   extension; the suite documents the `PHP_INI_SCAN_DIR` flag for hosts
   where GD is opt-in.
+
+## Shipping logs to a central system
+
+There is no in-app syslog/webhook forwarding by design (the write path
+stays dependency-free) — but both logs are already structured for
+collectors: `logs/app.log` is one JSON object per line (`ts`, `level`,
+`event`, `msg`, ...), and the PHP error log is plain text. Point any
+forwarder (rsyslog `imfile`, Fluent Bit `tail`, Promtail, Filebeat) at
+those two files. Keep the files themselves as the source of truth for
+`Verify integrity`: the HMAC chain is verified against the local lines,
+so forward copies are for alerting/search, not for tamper evidence.

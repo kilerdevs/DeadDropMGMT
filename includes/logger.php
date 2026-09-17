@@ -1,14 +1,20 @@
 <?php
 declare(strict_types=1);
+require_once __DIR__ . '/db.php';
 
 // ── Structured application log with tamper-evident chain ──────────────────────
 // Every entry is one JSON line in logs/app.log:
-//   {ts, level, event, msg, ip, user, req, ...ctx, prev, hash}
-// "prev" holds the previous entry's hash; "hash" is HMAC-SHA256 over the whole
-// record (key derived from AES_KEY_HEX with domain separation). Editing or
-// deleting any historical line breaks every subsequent hash, so tampering is
-// detectable via verify_log_chain(). Rotation keeps one generation (app.log.1)
-// and starts a fresh genesis chain.
+//   {ts, level, event, msg, ip, user, req, ...ctx, prev, seq, hash}
+// "prev" holds the previous entry's hash; "seq" is a global monotonic
+// sequence number (continues across rotation); "hash" is HMAC-SHA256 over
+// the whole record (key derived from AES_KEY_HEX with domain separation).
+// Editing, reordering, or deleting any historical line breaks every
+// subsequent hash, so tampering is detectable via verify_log_chain().
+// Pure tail DELETION leaves a shorter chain that still verifies — that half
+// is covered by truncation checkpoints (log_checkpoints table, written by
+// the hourly cleanup pass) compared in verify_log_continuity(). Rotation
+// keeps one generation (app.log.1) and starts a fresh file, but numbering
+// does not restart (the first entry continues the rotated tip's seq).
 
 if (!defined('APP_LOG_PATH')) {
     define('APP_LOG_PATH', dirname(__DIR__) . '/logs/app.log');
@@ -38,17 +44,21 @@ function _log_req_id(): string {
     return $req;
 }
 
-// Read the trailing hash of the last complete JSON line. Caller holds LOCK_EX.
-// Scans backwards in growing windows: a single entry larger than one window
-// must not anchor the next write to the second-to-last hash (which would
+// Read the tip of the log: [hash, seq] of the last complete JSON line.
+// Caller holds LOCK_EX (writers) or LOCK_SH (read-only peeks). Scans
+// backwards in growing windows: a single entry larger than one window must
+// not anchor the next write to the second-to-last hash (which would
 // permanently alarm the chain on the following verify). Garbage lines inside
 // the view are still skipped (tolerance is test-pinned); only a possibly
-// window-truncated TAIL line triggers a wider re-read.
-function _log_last_hash($fh): string {
+// window-truncated TAIL line triggers a wider re-read. Empty file →
+// [GENESIS, 0]; content without any parseable entry → ['', 0] (the writer
+// refuses to append — anchoring to nothing would fork the chain).
+// Records predating sequence numbers report seq 0; the writer counts.
+function _log_tail_tip($fh): array {
     fseek($fh, 0, SEEK_END);
     $size = ftell($fh);
     if ($size === 0) {
-        return APP_LOG_GENESIS;
+        return [APP_LOG_GENESIS, 0];
     }
     $window = 8192;
     while (true) {
@@ -65,7 +75,7 @@ function _log_last_hash($fh): string {
             }
             $rec = json_decode($line, true);
             if (is_array($rec) && isset($rec['hash']) && is_string($rec['hash'])) {
-                return $rec['hash'];
+                return [$rec['hash'], (int)($rec['seq'] ?? 0)];
             }
             // Unparseable tail line with unseen file above it: the entry is
             // cut by the window edge, not garbage — widen and retry instead
@@ -80,7 +90,56 @@ function _log_last_hash($fh): string {
         $window *= 8;
     }
     // File has content but no parseable last entry — treat as broken start
-    return '';
+    return ['', 0];
+}
+
+function _log_last_hash($fh): string {
+    return _log_tail_tip($fh)[0];
+}
+
+// Count entries (non-blank lines) from the start. Runs only when the tip
+// predates sequence numbers — at most once per legacy generation, since
+// every new write lands sequenced and tips carry seq from then on.
+function _log_count_entries($fh): int {
+    rewind($fh);
+    $n = 0;
+    while (($line = fgets($fh)) !== false) {
+        if (trim($line) !== '') {
+            $n++;
+        }
+    }
+    return $n;
+}
+
+// Tip seq of the rotated generation, or 0 when there is none to continue.
+function _log_rot_tip_seq(string $rotPath): int {
+    if (!is_file($rotPath)) {
+        return 0;
+    }
+    $fh = @fopen($rotPath, 'r');
+    if ($fh === false) {
+        return 0;
+    }
+    flock($fh, LOCK_SH);
+    try {
+        return _log_tail_tip($fh)[1];
+    } finally {
+        flock($fh, LOCK_UN);
+        fclose($fh);
+    }
+}
+
+// Pure seq rule, unit-testable without handles: sequenced tip → +1; legacy
+// tip → the position after it; fresh file → continue the rotated
+// generation, or start at 1 when there is nothing to continue.
+function _log_compute_seq(string $tipHash, int $tipSeq, int $entryCount, int $rotSeq): int {
+    if ($tipSeq > 0) {
+        return $tipSeq + 1;
+    }
+    if ($tipHash !== '' && $tipHash !== APP_LOG_GENESIS) {
+        return $entryCount + 1;
+    }
+    return $rotSeq > 0 ? $rotSeq + 1 : 1;
 }
 
 function _log_rotate_if_needed(string $path): void {
@@ -152,19 +211,28 @@ function app_log(string $level, string $event, array $ctx = []): bool {
         return false;
     }
     flock($fh, LOCK_EX);
-    $prev = _log_last_hash($fh);
+    [$prev, $tipSeq] = _log_tail_tip($fh);
     if ($prev === '') {
         flock($fh, LOCK_UN);
         fclose($fh);
         return false;
     }
     $rec['prev'] = $prev;
+    // Seq inputs stay lazy (ternaries): the full count runs only for legacy
+    // tips, the rotation peek only for a fresh file — the common sequenced
+    // path pays just the tail scan above.
+    $rec['seq'] = _log_compute_seq(
+        $prev,
+        $tipSeq,
+        $tipSeq > 0 ? 0 : _log_count_entries($fh),
+        ($prev !== APP_LOG_GENESIS || $tipSeq > 0) ? 0 : _log_rot_tip_seq($path . '.1')
+    );
 
     $payload = json_encode($rec, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     if ($payload === false) {
         // Non-UTF8 context — drop the offending context rather than lose the entry
         foreach ($rec as $k => $v) {
-            if (!in_array($k, ['ts', 'level', 'event', 'msg', 'ip', 'user', 'req', 'prev'], true)) {
+            if (!in_array($k, ['ts', 'level', 'event', 'msg', 'ip', 'user', 'req', 'prev', 'seq'], true)) {
                 unset($rec[$k]);
             }
         }
@@ -261,4 +329,140 @@ function verify_log_chain(?string $path = null): array {
     flock($fh, LOCK_UN);
     fclose($fh);
     return [true, $n, null, null];
+}
+
+// ── Truncation checkpoints ────────────────────────────────────────────────────
+// A hash chain detects modification, not pure tail deletion: lopping entries
+// off the end leaves a shorter chain that still verifies. The hourly cleanup
+// pass therefore anchors the current tip (hash + seq) in the database — a
+// separate trust domain from the log files (db-data vs app-logs volume) —
+// and verify_log_continuity() compares the live log against the newest
+// anchor. An anchor must predate the attack to catch it: deletions inside
+// the checkpoint interval (about an hour) are the documented residual blind
+// spot, same as with any polling anchor.
+
+function log_checkpoint_write(): void {
+    try {
+        $tip = _log_checkpoint_tip(APP_LOG_PATH);
+        if ($tip === null) {
+            return; // nothing anchorable (missing/empty/broken log)
+        }
+        [$hash, $seq] = $tip;
+        $db = get_db();
+        $db->prepare('INSERT INTO log_checkpoints (tip_hash, tip_seq) VALUES (?, ?)')
+           ->execute([$hash, $seq]);
+        $db->exec('DELETE FROM log_checkpoints WHERE created_at < NOW() - INTERVAL 30 DAY');
+    } catch (Throwable $e) {
+        // Best-effort: a missing table (pre-migration install) or a down DB
+        // must never break cleanup — continuity then reports 'none'.
+    }
+}
+
+// Readable tip for anchoring: [hash, seq], or null when there is nothing
+// worth anchoring (missing/empty file, unreadable handle, broken tail,
+// genesis-only file). Factored out so every no-anchor branch is directly
+// testable on scratch paths.
+function _log_checkpoint_tip(string $path): ?array {
+    if (!is_file($path) || filesize($path) === 0) {
+        return null;
+    }
+    $fh = @fopen($path, 'r');
+    if ($fh === false) {
+        return null;
+    }
+    flock($fh, LOCK_SH);
+    try {
+        [$hash, $seq] = _log_tail_tip($fh);
+    } finally {
+        flock($fh, LOCK_UN);
+        fclose($fh);
+    }
+    if ($hash === '' || $hash === APP_LOG_GENESIS) {
+        return null;
+    }
+    return [$hash, $seq];
+}
+
+// Compare the live log (current generation plus the rotated one) against
+// the newest checkpoint. Chain validity stays verify_log_chain()'s job;
+// this answers only "is anything missing since the anchor":
+//   extends   — tip continues past the anchor (healthy)
+//   truncated — surviving history ends before the anchor (tail deleted, or
+//               the file swapped for an older copy)
+//   rotated   — anchor aged out by legitimate rotation (oldest surviving
+//               entry is newer than the anchor)
+//   none      — no anchor yet (fresh install / table missing)
+//   error     — checkpoint store unreadable for another reason
+function verify_log_continuity(?string $path = null): array {
+    $path = $path ?? APP_LOG_PATH;
+    try {
+        $db = get_db();
+        $cp = $db->query(
+            'SELECT tip_hash, tip_seq, created_at FROM log_checkpoints ORDER BY id DESC LIMIT 1'
+        )->fetch();
+    } catch (Throwable $e) {
+        $missing = $e instanceof PDOException && (string)$e->getCode() === '42S02';
+        $msg = strtolower($e->getMessage());
+        if ($missing || str_contains($msg, "doesn't exist") || str_contains($msg, 'no such table')) {
+            return ['status' => 'none', 'detail' => 'no checkpoint table yet'];
+        }
+        return ['status' => 'error', 'detail' => 'checkpoint store unavailable'];
+    }
+    if (!$cp) {
+        return ['status' => 'none', 'detail' => 'no checkpoint written yet'];
+    }
+    $entries = []; // ordered [seq|null, hash] across the rotated + live file
+    foreach ([$path . '.1', $path] as $f) {
+        if (!is_file($f)) {
+            continue;
+        }
+        $lines = @file($f, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        if (!is_array($lines)) {
+            continue;
+        }
+        foreach ($lines as $line) {
+            $rec = json_decode(trim($line), true);
+            if (is_array($rec) && isset($rec['hash']) && is_string($rec['hash'])) {
+                $entries[] = [isset($rec['seq']) ? (int)$rec['seq'] : null, $rec['hash']];
+            }
+        }
+    }
+    $cHash = trim((string)$cp['tip_hash']);
+    $cSeq = (int)$cp['tip_seq'];
+    $base = [
+        'checkpoint_seq' => $cSeq,
+        'checkpoint_at'  => (string)($cp['created_at'] ?? ''),
+        'entries'        => count($entries),
+    ];
+    $foundIdx = null;
+    $minSeq = null;
+    $maxSeq = null;
+    foreach ($entries as $i => [$s, $h]) {
+        if ($foundIdx === null && hash_equals($cHash, $h)) {
+            $foundIdx = $i;
+        }
+        if ($s !== null) {
+            $minSeq = $minSeq === null ? $s : min($minSeq, $s);
+            $maxSeq = $maxSeq === null ? $s : max($maxSeq, $s);
+        }
+    }
+    $base['tip_seq'] = $maxSeq;
+    if ($foundIdx !== null) {
+        // Anything sequenced after the anchor must continue past it: file
+        // order is append order, so a lower seq past the anchor means the
+        // history was rewritten, not extended.
+        foreach (array_slice($entries, $foundIdx + 1) as [$s]) {
+            if ($s !== null && $s < $cSeq) {
+                return ['status' => 'truncated', 'detail' => 'history rewritten after the anchor'] + $base;
+            }
+        }
+        if ($maxSeq !== null && $maxSeq < $cSeq) {
+            return ['status' => 'truncated', 'detail' => 'tip predates the anchor'] + $base;
+        }
+        return ['status' => 'extends', 'detail' => 'tip continues past the anchor'] + $base;
+    }
+    if ($minSeq !== null && $minSeq > $cSeq) {
+        return ['status' => 'rotated', 'detail' => 'anchor aged out by rotation'] + $base;
+    }
+    return ['status' => 'truncated', 'detail' => 'history ends before the anchor'] + $base;
 }

@@ -81,8 +81,10 @@ try {
 
 audit('owner_bootstrap', null, null, $username);
 
-// One-time display of the enrollment secret on the set-password screen.
-$_SESSION['enrollment_flash'] = t('admin.bootstrap.enrollment_note', ['secret' => $enrollment]);
+// One-time display of the enrollment secret on the set-password screen,
+// sealed like the TOTP pending secret (single-use credential crossing a
+// redirect via the session — never plaintext at rest).
+$_SESSION['enrollment_flash'] = encrypt_secret(t('admin.bootstrap.enrollment_note', ['secret' => $enrollment]));
 
 session_regenerate_id(true);
 $_SESSION['pending_setup_user_id'] = $new_user_id;

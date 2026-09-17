@@ -40,6 +40,10 @@ ErrorDocument 503 /error/503.php
 
     # Block access to logs/ directory
     RewriteRule ^logs/ - [F,L]
+
+    # Block access to the tile cache: tiles are served exclusively through
+    # admin/tile_proxy.php (authenticated), never by direct URL.
+    RewriteRule ^cache/ - [F,L]
 </IfModule>
 
 # Protect this file

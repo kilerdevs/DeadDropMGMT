@@ -1,0 +1,3 @@
+# Tile cache — served exclusively through admin/tile_proxy.php
+# (authenticated). Direct URLs would bypass the admin gate.
+Require all denied

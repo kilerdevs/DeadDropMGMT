@@ -28,6 +28,7 @@ if ($p === '/ok')        { header('Content-Type: text/plain'); echo 'STUB-BODY-O
 if ($p === '/nope')      { http_response_code(404); echo 'not found'; return true; }
 if ($p === '/leak')      { echo 'via 203.0.113.99 origin=203.0.113.99'; return true; }
 if ($p === '/clean')     { echo 'headers are anonymous, no ip here'; return true; }
+if ($p === '/big')       { header('Content-Type: application/octet-stream'); echo str_repeat('B', 3 * 1024 * 1024); return true; }
 http_response_code(200); echo 'default-body';
 return true;
 PHP);
@@ -83,6 +84,16 @@ T::ok('port zero rejected',               osm_proxy_normalize('10.0.0.1:0') === 
 T::eq('direct 200 returns body', 'STUB-BODY-OK', osm_fetch_via("http://127.0.0.1:$port/ok", null));
 T::ok('non-2xx returns false',   osm_fetch_via("http://127.0.0.1:$port/nope", null) === false);
 T::ok('dead proxy returns false', osm_fetch_via("http://127.0.0.1:$port/ok", 'http://127.0.0.1:1') === false);
+
+// ── Response size ceiling ───────────────────────────────────────────────────
+// 3 MiB over the 2 MiB default never fully materializes: curl aborts
+// progressively, the stream fallback reads max+1 and rejects.
+T::ok('oversized body rejected at default cap',
+    osm_fetch_via("http://127.0.0.1:$port/big", null) === false);
+T::ok('explicit small cap rejects a 12-byte body',
+    osm_fetch_via("http://127.0.0.1:$port/ok", null, 5, 4) === false);
+T::eq('exact-fit cap accepts the body',
+    'STUB-BODY-OK', osm_fetch_via("http://127.0.0.1:$port/ok", null, 5, 12));
 
 // ── Routing decision ──────────────────────────────────────────────────────────
 // Disabled routing goes direct even when a pool exists

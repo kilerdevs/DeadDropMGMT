@@ -12,6 +12,9 @@ require_once dirname(__DIR__) . '/includes/settings.php';
 // another cleanup pass (see CleanupTest / StateTransitionTest).
 function do_cleanup(): int {
     _purge_stale_rate_limits();
+    // Truncation anchor for the audit log (best-effort, never throws):
+    // covers both the real cron and the pseudo-cron path.
+    log_checkpoint_write();
     return cleanup_expired_orders();
 }
 

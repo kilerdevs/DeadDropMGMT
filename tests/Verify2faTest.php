@@ -113,7 +113,32 @@ $csrf3 = $csrfOf($b);
     ['csrf_token' => $csrf3, 'code' => totp_code($secret)], $ck);
 T::ok('correct code logs in', $st === 302 && str_contains($loc, 'orders.php'));
 
-$db->prepare("DELETE FROM users WHERE username = 't_2fa_owner'")->execute();
+// Enrollment round-trip: the pending secret crosses the QR render via the
+// session SEALED (never plaintext at rest) and still verifies on enable.
+$db->prepare("INSERT INTO users (username, password_hash, role, totp_enabled) VALUES ('t_2fa_enroll', ?, 'owner', 0)")
+   ->execute([password_hash('EnPass123!', PASSWORD_BCRYPT)]);
+[, $bE, $ckE] = _v2('GET', "$B/admin/index.php", null, '');
+[$stE,, $ckE, $locE] = _v2('POST', "$B/admin/login.php",
+    ['csrf_token' => $csrfOf($bE), 'username' => 't_2fa_enroll', 'password' => 'EnPass123!'], $ckE);
+T::ok('unenrolled owner logs in', $stE === 302 && str_contains($locE, 'orders.php'));
+[, $bEnroll, $ckE] = _v2('GET', "$B/admin/2fa.php", null, $ckE);
+preg_match('/id="totp-secret">([A-Z2-7 ]+)</', (string)$bEnroll, $mS);
+$enrollSecret = str_replace(' ', '', $mS[1] ?? '');
+T::ok('enrollment shows a secret', $enrollSecret !== '');
+$csrfE = $csrfOf($bEnroll);
+$realE = totp_code($enrollSecret);
+$wrongE = ($realE === '000000') ? '000001' : '000000';
+[$stBad, $bBad, $ckE] = _v2('POST', "$B/admin/2fa.php",
+    ['csrf_token' => $csrfE, 'action' => 'enable', 'code' => $wrongE], $ckE);
+T::ok('wrong enable code rejected',
+    $stBad === 200 && str_contains((string)$bBad, 'Invalid code')
+    && (int)$db->query("SELECT totp_enabled FROM users WHERE username = 't_2fa_enroll'")->fetchColumn() === 0);
+$csrfE2 = $csrfOf($bBad);
+[, $bOk, $ckE] = _v2('POST', "$B/admin/2fa.php",
+    ['csrf_token' => $csrfE2, 'action' => 'enable', 'code' => totp_code($enrollSecret)], $ckE);
+$enrolled = $db->query("SELECT totp_enabled FROM users WHERE username = 't_2fa_enroll'")->fetchColumn();
+T::ok('correct enable code enrolls (sealed round-trip)', (int)$enrolled === 1);
+$db->prepare("DELETE FROM users WHERE username IN ('t_2fa_owner', 't_2fa_enroll')")->execute();
 // Restore the limiter rows this suite pinned above.
 $db->prepare('UPDATE settings SET value = ? WHERE key_name = \'rate_limit_max\'')->execute([$prevMax]);
 $db->prepare('UPDATE settings SET value = ? WHERE key_name = \'rate_limit_window_min\'')->execute([$prevWin]);

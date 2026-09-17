@@ -6,7 +6,7 @@
 :80 {
 	root * /var/www/html
 
-	@blocked path /includes/* /logs/* /cron/* /tools/* /config.php /.htaccess /.ht*
+	@blocked path /includes/* /logs/* /cron/* /tools/* /cache/* /config.php /.htaccess /.ht*
 	respond @blocked 403
 
 	# Uploaded images must never reach PHP-FPM, whatever their name is.

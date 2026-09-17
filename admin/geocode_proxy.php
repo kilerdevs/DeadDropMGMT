@@ -14,7 +14,7 @@ if ($q === '' || strlen($q) > 200) {
 
 $url = 'https://nominatim.openstreetmap.org/search?q=' . urlencode($q) . '&format=json&limit=1';
 
-$data = osm_fetch($url);
+$data = osm_fetch($url, 262144); // Nominatim limit=1 answers are small JSON
 osm_last_via_flush();
 if ($data === false) {
     header('Content-Type: text/plain');

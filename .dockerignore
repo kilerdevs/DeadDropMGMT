@@ -14,6 +14,9 @@ uploads/*
 # servable, so no vhost-level rule can cover it. Tracked via git add -f.
 !uploads/.htaccess
 cache/*
+# Same for the tile cache: cache/ must stay on disk for tile_proxy.php, but
+# its .htaccess (deny direct URLs that would bypass the admin gate) ships.
+!cache/.htaccess
 # Dev-only Composer tooling (php-code-coverage) must never ship: it is a
 # supply-chain surface with no runtime purpose (ADR-001).
 vendor/

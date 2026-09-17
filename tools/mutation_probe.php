@@ -23,7 +23,9 @@ require_once dirname(__DIR__) . '/includes/kernel.php';
 //   1. The suites are a custom harness (no PHPUnit), so infection/phpunit
 //      cannot drive them — and whole-suite-per-mutant runs stay in the
 //      seconds range only because each mutant names one fast in-process
-//      suite (no php -S suites here).
+//      suite (no php -S suites here: unlock-CSRF, TOTP-seal and fetcher-cap
+//      mutants would need HTTP suites and are excluded on runtime grounds —
+//      their killers exist over HTTP and are named in the mutant comments).
 //   2. Equivalent or dangerous mutants are excluded BY HAND with a reason:
 //      - unlink-path bypass (order_state): would overwrite REAL files —
 //        excluded for safety, covered by review + the traversal test.
@@ -148,6 +150,38 @@ $mutants = [
         'why'   => 'retuning the limiter silently diverges the two layers',
         'count' => 5,
         'all'   => true,
+    ],
+    [
+        'id'    => 'session-ini-softened',
+        'file'  => 'includes/auth.php',
+        'old'   => "    ini_set('session.use_strict_mode', '1');",
+        'new'   => '    // MUTANT: strict mode off — SIDs injectable pre-login',
+        'suite' => 'FailClosedTest',
+        'why'   => 'session fixation via adopted session IDs',
+    ],
+    [
+        'id'    => 'log-seq-dropped',
+        'file'  => 'includes/logger.php',
+        'old'   => "    \$rec['seq'] = _log_compute_seq(\n        \$prev,\n        \$tipSeq,\n        \$tipSeq > 0 ? 0 : _log_count_entries(\$fh),\n        (\$prev !== APP_LOG_GENESIS || \$tipSeq > 0) ? 0 : _log_rot_tip_seq(\$path . '.1')\n    );",
+        'new'   => "    \$rec['seq'] = 0; // MUTANT: sequence numbers dropped",
+        'suite' => 'LoggerTest',
+        'why'   => 'truncation checkpoints anchor meaningless seqs',
+    ],
+    [
+        'id'    => 'log-checkpoint-neutered',
+        'file'  => 'includes/logger.php',
+        'old'   => '        $tip = _log_checkpoint_tip(APP_LOG_PATH);',
+        'new'   => '        $tip = null; // MUTANT: never anchor',
+        'suite' => 'LoggerTest',
+        'why'   => 'no anchors, truncation invisible by construction',
+    ],
+    [
+        'id'    => 'log-continuity-neutered',
+        'file'  => 'includes/logger.php',
+        'old'   => "    return ['status' => 'truncated', 'detail' => 'history ends before the anchor'] + \$base;",
+        'new'   => "    return ['status' => 'extends', 'detail' => 'MUTANT: blind'] + \$base;",
+        'suite' => 'LoggerTest',
+        'why'   => 'verdict always healthy regardless of deletions',
     ],
 ];
 

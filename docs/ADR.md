@@ -149,8 +149,12 @@ redirects to `/`, the next GET consumes, decrypts and clears it. Fresh
 sessions see nothing.
 
 **Consequences.** Location never appears in history/referrer/logs (+). The
-session store holds only ciphertext — someone dumping session files learns
-exactly as much as from the encrypted database rows (+). Reveal survives
+session holds no plaintext secrets or credentials — reveal/receipt blobs,
+the pending TOTP secret, and the one-time enrollment note all cross
+redirects sealed (AES subkeys), so someone dumping session files learns
+nothing beyond what the encrypted database rows already give (+).
+Non-secret session contents (user id/role/name, CSRF token, counters,
+UI flashes) stay plaintext by design: they carry no credential value. Reveal survives
 exactly one page load — refresh loses it by design (communicated in UI
 copy). The capability is additionally short-lived (180 s from unlock,
 `REVEAL_MAX_AGE`) and scoped: token, photos and notes travel inside the same

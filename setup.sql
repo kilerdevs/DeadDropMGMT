@@ -212,10 +212,18 @@ CREATE TABLE IF NOT EXISTS order_events (
     created_at   DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     INDEX idx_order_id   (order_id),
+    INDEX idx_order_token (order_token),
     INDEX idx_event_type (event_type),
     INDEX idx_ip         (ip_address(20)),
     INDEX idx_created    (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Older installs lack the token index (analytics per-order breakdown and
+-- the order-state cleanup OR-delete filter on it).
+SET @c = (SELECT COUNT(*) FROM information_schema.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'order_events' AND INDEX_NAME = 'idx_order_token');
+SET @s = IF(@c = 0, 'ALTER TABLE order_events ADD INDEX idx_order_token (order_token)', 'SELECT 1');
+PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 
 -- ── Rate limiting (IP-based, DB-backed) ──────────────────────────────────────
 
@@ -224,8 +232,15 @@ CREATE TABLE IF NOT EXISTS rate_limits (
     scope        VARCHAR(32) NOT NULL,
     count        INT         NOT NULL DEFAULT 0,
     window_start DATETIME    NOT NULL,
-    PRIMARY KEY (ip_address, scope)
+    PRIMARY KEY (ip_address, scope),
+    INDEX idx_window (window_start)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Older installs lack the window index (stale-window purge range delete).
+SET @c = (SELECT COUNT(*) FROM information_schema.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'rate_limits' AND INDEX_NAME = 'idx_window');
+SET @s = IF(@c = 0, 'ALTER TABLE rate_limits ADD INDEX idx_window (window_start)', 'SELECT 1');
+PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 
 -- ── Audit log (admin write actions) ──────────────────────────────────────────
 
@@ -252,6 +267,21 @@ CREATE TABLE IF NOT EXISTS settings (
     value      TEXT         NOT NULL,
     label      VARCHAR(128) NOT NULL DEFAULT '',
     updated_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ── Log truncation checkpoints ─────────────────────────────────────────────
+-- Anchors for verify_log_continuity(): the hourly cleanup pass records the
+-- log tip (hash + seq) here so tail deletion is detectable. A separate
+-- trust domain from the log files (db-data vs app-logs volume). Starts
+-- empty — continuity reports 'none' until the first cleanup pass writes.
+
+CREATE TABLE IF NOT EXISTS log_checkpoints (
+    id         INT           AUTO_INCREMENT PRIMARY KEY,
+    tip_hash   VARCHAR(64)   NOT NULL,
+    tip_seq    BIGINT        NOT NULL,
+    created_at DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    INDEX idx_created (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 INSERT INTO settings (key_name, value, label) VALUES

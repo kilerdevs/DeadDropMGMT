@@ -63,6 +63,11 @@ jobs:
       - name: Load schema into test database
         run: php tests/schema_loader.php
 
+      # setup.sql promises re-running is a harmless no-op (the upgrade path
+      # for existing installs) — prove it every build by loading twice.
+      - name: Reload schema (idempotency proof)
+        run: php tests/schema_loader.php
+
       - name: Run tests
         run: php tests/run_all.php
 
@@ -385,6 +390,7 @@ jobs:
           curl -fs http://127.0.0.1:2137/ | grep -qi "<title>"
           hz_body="$(curl -s http://127.0.0.1:2137/healthz.php)"
           [ "$hz_body" = "ok" ] || { echo "HEALTHZ MISMATCH:"; printf '%s\n' "$hz_body"; curl -si http://127.0.0.1:2137/healthz.php | head -12; exit 1; }
+          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:2137/cache/osm_tiles/0/0/0.png)" = 403 ]
           docker compose exec -T app php docker/e2e_journey.php
           docker compose down -v
 
@@ -396,6 +402,7 @@ jobs:
           [ "$(curl -s http://127.0.0.1:2137/healthz.php)" = "ok" ]
           [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:2137/includes/db.php)" = 403 ]
           [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:2137/config.php)" = 403 ]
+          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:2137/cache/osm_tiles/0/0/0.png)" = 403 ]
           docker compose -f docker-compose.nginx.yml down -v
 
       - name: Smoke test (Caddy + fpm)
@@ -406,6 +413,7 @@ jobs:
           [ "$(curl -s http://127.0.0.1:2137/healthz.php)" = "ok" ]
           [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:2137/includes/db.php)" = 403 ]
           [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:2137/config.php)" = 403 ]
+          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:2137/cache/osm_tiles/0/0/0.png)" = 403 ]
           docker compose -f docker-compose.caddy.yml down -v
 
       # DAST: OWASP ZAP baseline (spider + passive analysis) against a live

@@ -88,7 +88,7 @@ The author provides this software **"as is," without warranty of any kind**, and
 | Auth | bcrypt cost=12, TOTP 2FA, CSRF tokens, session hardening |
 | Frontend | Vanilla JS (ES5+), CSS Grid/Flexbox |
 | Maps | Leaflet + OpenStreetMap |
-| Webserver | Apache — mod_rewrite, mod_headers, .htaccess path protection |
+| Webserver | Apache 2.4+ (`mod_rewrite`, `mod_headers`, `.htaccess` path protection) — or nginx / Caddy via the Docker stacks, which replicate every block natively |
 
 ---
 
@@ -136,10 +136,15 @@ Browser ──[TLS, external]── Web server / PHP
    Embedded: Browser iframe → OSM tiles  ⚠ leaks visitor IP to OSM
 ```
 
-- **Public ↔ PHP**: no session, only rate limiting and token entropy protect S3
+- **Public ↔ PHP**: no accounts — but sessions exist: the unlock form carries
+  a single-use CSRF token (verified before any limiter budget is spent), and
+  the reveal lives server-side sealed. Only token entropy + rate limiting
+  protect S3 itself
 - **Admin ↔ PHP**: session cookie + CSRF token + TOTP; owner vs courier role split
 - **PHP ↔ MySQL**: prepared statements; the DB is *never* trusted to hold secrets in readable form (S1–S4 encrypted/hashed before insert)
-- **PHP ↔ filesystem**: `.htaccess` denies direct web access to `includes/`, `logs/`, `config.php`
+- **PHP ↔ filesystem**: `.htaccess` denies direct web access to `includes/`,
+  `logs/`, `cache/`, `config.php` (nginx/Caddy replicate the same denies —
+  see the setup warning below)
 - **PHP ↔ OSM**: server-side proxies so admin IPs never leave the server; fail-closed proxy pool optional
 
 ### 4. Mitigations (capability → asset mapping)
@@ -154,12 +159,12 @@ Browser ──[TLS, external]── Web server / PHP
 | Rate-limit bypass via spoofed `X-Forwarded-For` | Proxy headers are honored only when `DDMGMT_TRUST_PROXY=1` (opt-in for reverse-proxy/CDN installs) **and** the direct peer matches `DDMGMT_TRUSTED_PROXIES` (default: loopback + RFC1918); header values are validated as literal IPs and `REMOTE_ADDR` is the default source of truth | S2 | A1 |
 | Token enumeration | 16-char alphanumeric random tokens (~95 bits); unknown-token answers burn the same bcrypt cost and return the same body as wrong passwords when a credential was submitted; receipt requires the delivered state atomically | S3 | A1 |
 | Session fixation / theft | `session_regenerate_id(true)` on login; `httponly`, `samesite=Strict`, `secure` when HTTPS | S5 | A1, A2 |
-| CSRF | 64-byte random token in session, `hash_equals()` on every POST | S5, S7 | A2 |
+| CSRF | 32-byte random token in session (64 hex chars), `hash_equals()` on every POST — public unlock forms included; single-use rotation | S5, S7 | A2 |
 | XSS | `htmlspecialchars(..., ENT_QUOTES, 'UTF-8')` on all user-derived output; strict CSP with nonces | S5 | A1, A2 |
 | Clickjacking / sniffing | `X-Frame-Options: DENY`, `nosniff`, HSTS | S5 | A1 |
 | Error leakage | `display_errors=0`, exceptions caught and logged, generic user-facing messages | S1–S5 | A1 |
 | Direct file access | `.htaccess` blocks `includes/`, `config.php`, `logs/`, `cron/` (Apache only — see below) | all local assets | A1 |
-| Log tampering | Structured JSONL log chained with HMAC-SHA256; one-click verification reports first broken entry. HMAC key derived from AES key with domain separation | S6 | A5 |
+| Log tampering | Structured JSONL log chained with HMAC-SHA256 (per-entry sequence numbers); one-click verification reports the first broken entry *and* a continuity verdict against hourly DB checkpoints (`extends` / `truncated` / `rotated`) — the chain catches modification, the checkpoints catch pure tail deletion. HMAC key derived from AES key with domain separation | S6 | A5 |
 | Unaccountable writes | Every admin create/edit/delete/setting-change logged with actor, IP, timestamp | S6 | A2, A5 |
 | Admin IP exposure to OSM | Tile/geocode requests proxied server-side; optional fail-closed anonymity proxy pool (manual or auto-discovered) | owner/courier privacy | A3 |
 
@@ -245,10 +250,15 @@ rejection + HKDF key separation (`CryptoTest`), login/2FA/session-fixation/logou
 (`AuthTest`), CSRF tokens (`CsrfTest`), RFC 4648 base32 + RFC 6238 vectors
 (`TotpTest`), rate-limit budgets/scopes/window-expiry/kill-switch/concurrency
 (`RateLimitTest`), owner-vs-courier authorization (`AuthorizationTest`), the
-proxy anonymity gate (`ProxyTest`), expiry cleanup with photo-file shredding
+proxy anonymity gate + response size ceilings (`ProxyTest`, `ProxyClientTest`),
+expiry cleanup with photo-file shredding + rate-limit purging
 (`CleanupTest`), atomic state transitions under contention
 (`StateTransitionTest`), panic wipe (`PanicTest`), upload hardening
-(`UploadHardeningTest`), fail-closed branches of every guard, limiter, wipe
+(`UploadHardeningTest`), the thin admin dispatcher contract
+(`DispatchTest`), the kernel service manifest (`KernelTest`), settings
+(`SettingsTest`), translations (`I18nTest`), setup/enrollment flows
+(`SetupPasswordTest`, `Verify2faTest`), per-request photo caps
+(`PhotoCapTest`), fail-closed branches of every guard, limiter, wipe
 and decrypt path plus the DB TLS option matrix (`FailClosedTest`) and an
 end-to-end public-flow and authorization suite over real HTTP
 (`PublicFlowTest`, `AuthorizationHttpTest`, `StateRaceTest`,
@@ -257,7 +267,7 @@ unlock, PRG reveal, receipt confirmation, rate limiting, the per-session
 failure bucket, IDOR/destructive-IDOR probes and concurrent state races. Runs
 automatically in GitHub Actions
 (`.github/workflows/ci.yml`, MariaDB 11 service container) across PHP
-8.2–8.4 plus MySQL 8, with smoke tests, CVE gates and SBOMs for all three Docker stacks.
+8.2–8.5 plus MySQL 8, with smoke tests, CVE gates and SBOMs for all three Docker stacks.
 
 **Coverage.** A separate CI job runs the suite under `pcov` and reports line
 coverage over `includes/` - the security-critical library code (crypto,
@@ -272,6 +282,14 @@ the job summary; a browsable HTML report is uploaded as an artifact for
 14 days. Locally:
 `composer install && php tests/coverage_runner.php` - Composer is dev-only
 tooling, the application itself never touches it.
+
+**Mutation probe.** Line coverage cannot tell a tested guard from a dead one,
+so `tools/mutation_probe.php` applies a curated set of logic-weakening
+mutants (CSRF bypass, fail-open limiter, login-fallback scope, token-entropy
+regression, sweep-guard removal, log-linkage skip, unescaped translations,
+missing session refresh, skipped purge, hardcoded bucket window) and requires
+the suite to kill every one. It runs as a report-only CI job while the score
+baseline proves stable; a survived mutant is filed as a test-suite bug.
 
 ---
 
@@ -351,13 +369,12 @@ DeadDropMGMT/
 │   ├── new_order.php         Order creation form (Leaflet map picker)
 │   ├── create.php            Order creation handler
 │   ├── edit.php              Edit order — status, location, password, photos
-│   ├── delete.php            Order deletion (wipes sensitive columns first)
-│   ├── order_close.php       Order close (immediate removal)
-│   ├── order_remove.php      Order removal variant
-│   ├── extend.php            Deadline extension
-│   ├── mark_delivered.php    Status → delivered, starts TTL clock
-│   ├── photo_delete.php      Photo removal
-│   ├── save_setting.php      Settings auto-save endpoint
+│   ├── delete.php            Legacy order-deletion page
+│   ├── dispatch.php + routes.php + actions/
+│   │                           Single envelope for the nine POST actions
+│   │                           (headers, session, 2FA gate, method, auth,
+│   │                           CSRF, ownership); legacy one-line shims per
+│   │                           route keep the old URLs working
 │   ├── log_verify.php         Log chain integrity verification (owner only)
 │   ├── download_log.php      Error log export
 │   ├── proxy_action.php      OSM proxy pool management (add / delete / discover)
@@ -377,6 +394,7 @@ DeadDropMGMT/
 │   └── vendor/               Leaflet + QRCode.js — vendored locally, no CDN
 │
 ├── includes/                 Blocked from web via .htaccess
+│   ├── kernel.php            Single service manifest (all pages boot here)
 │   ├── db.php                PDO singleton
 │   ├── auth.php              Session, CSRF, rate limiting, security headers
 │   ├── crypto.php            AES-256-GCM encrypt/decrypt, bcrypt, 64-bit passphrase generator
@@ -389,11 +407,19 @@ DeadDropMGMT/
 │   ├── analytics.php         Event logger
 │   ├── logger.php            Structured JSONL log + tamper-evident hash chain
 │   ├── cleanup.php           Expired order deletion (pseudo-cron + real cron)
+│   ├── net.php               Client IP, proxy-header trust, HTTPS detection
+│   ├── wipe.php              Panic wipe + secure file deletion driver
 │   └── lang/                 Translations: pl, en, de, ru, fr, es, uk, it
 │
 ├── logs/                     Error log (blocked from web)
-├── uploads/                  Order photos (blocked from web)
+├── uploads/                  Order photos: served by URL, no listing,
+│                             no PHP execution, no disk caching
 ├── cache/                    OSM tile disk cache (blocked from web)
+├── tests/                    Zero-dependency suite (see Tests above)
+├── tools/                    CLI maintenance: key rotation/separation,
+│                             CBC→GCM migration, recovery purge, mutation probe
+├── docker/                   Apache/nginx/Caddy front configs + e2e journey
+├── docs/                     ADRs + troubleshooting guide
 └── cron/
     └── cleanup.php           Server-side cron endpoint (call hourly)
 ```
@@ -519,7 +545,8 @@ define('DUMMY_TOTP_SECRET', 'KRZGS5DQNZQXG2DDNZUW453FOV2GKY3O');
 
 define('ERROR_LOG_PATH', __DIR__ . '/logs/error.log');
 define('SESSION_NAME',     'ddmgmt');
-define('SESSION_LIFETIME', 3600);
+// Admin session length is NOT set here: Settings → admin_session_hours
+// (minimum 30 minutes) governs the sliding inactivity window.
 define('RATE_LIMIT_MAX',    10);
 define('RATE_LIMIT_WINDOW', 900);
 
@@ -561,10 +588,11 @@ chown www-data:www-data logs/ uploads/
 
 On anything with real traffic, install the hourly cron — pseudo-cron only
 guarantees *eventual* expiry sweeps, and real cron takes the page-hit path
-out of the latency budget entirely:
+out of the latency budget entirely. CLI only (`cron/` is denied from the
+web on every stack — a `curl` recipe would just 403):
 
 ```cron
-0 * * * * curl -s https://yourdomain.com/cron/cleanup.php > /dev/null
+0 * * * * php /var/www/deaddrops/cron/cleanup.php
 ```
 
 ### 8. Two-factor authentication (mandatory for couriers, self-service)
@@ -577,7 +605,8 @@ No server setup needed — log in, open **2FA** in the sidebar, scan the QR code
 
 - PHP 8.2+ with `pdo_mysql`, `openssl`, `gd` extensions
 - MySQL 5.7+ or MariaDB 10.3+
-- Apache 2.4+ with `mod_rewrite`, `mod_headers`
+- Apache 2.4+ with `mod_rewrite`, `mod_headers` — or nginx/Caddy (Docker
+  stacks; manual installs must replicate every deny block, see §5)
 
 Stuck? Symptom → cause → fix lives in [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 

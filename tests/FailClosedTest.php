@@ -93,6 +93,12 @@ T::ok('nonces are per-call random', $nonce_admin !== $nonce_pub_https);
 $nonce_plain = set_security_headers();
 T::ok('plain-http nonce generated', strlen(base64_decode($nonce_plain, true) ?: '') === 18);
 
+// ── Session mechanism hardening (explicit, not php.ini defaults) ────────────
+start_secure_session();
+T::eq('strict mode refuses uninitialized SIDs', '1', ini_get('session.use_strict_mode'));
+T::eq('cookies carry the SID exclusively', '1', ini_get('session.use_only_cookies'));
+T::eq('transparent SID off', '0', ini_get('session.use_trans_sid'));
+
 // ── Guards: conditions reachable before their exit() redirects ───────────────
 $_SESSION = [];
 start_secure_session();
