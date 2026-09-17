@@ -55,6 +55,14 @@ function _j_csrf(string $body): string {
     preg_match('/name="csrf_token"\s*value="([0-9a-f]{64})"/', $body, $m);
     return $m[1] ?? '';
 }
+// Public unlock/lookup POSTs carry the single-use CSRF token: harvest a
+// live one from a fresh GET first — rotation retires each token on use.
+function _j_unlock(string $base, array $f, string $cookie): array {
+    [, $g, $cookie] = _j_get("$base/", $cookie);
+    $f['csrf_token'] = _j_csrf($g);
+    [$st, $b, $cookie] = _j_post("$base/", $f, $cookie);
+    return [$st, $b, $cookie];
+}
 
 $fail = 0;
 function jok(bool $cond, string $what): void {
@@ -140,11 +148,11 @@ $row = $st->fetch();
 jok($row !== null && $row['status'] === 'delivered', 'order delivered through the admin UI');
 
 // ── 6. public lookup (no password) ───────────────────────────────────────────
-[$st, $html, $pubCookie] = _j_post("$base/", ['order_token' => $token], '');
+[$st, $html, $pubCookie] = _j_unlock($base, ['order_token' => $token], '');
 jok($st === 200 && str_contains($html, 'status-badge delivered'), 'recipient sees the delivered badge');
 
 // ── 7. password unlock → reveal ──────────────────────────────────────────────
-[$st,, $pubCookie] = _j_post("$base/",
+[$st,, $pubCookie] = _j_unlock($base,
     ['order_token' => $token, 'pickup_password' => $orderPass], $pubCookie);
 jok($st === 302, 'correct pickup password redirects (PRG)');
 [$st, $html] = _j_get("$base/", $pubCookie);
@@ -176,7 +184,7 @@ jok($cnt('SELECT COUNT(*) FROM order_events WHERE order_token = ?', [$token]) >=
     'event log recorded the lifecycle');
 $uploadsDir = dirname(__DIR__) . '/uploads/' . $orderId;
 jok(!is_dir($uploadsDir) || count(glob_list($uploadsDir . '/*')) === 0, 'no orphaned upload files');
-[$st, $html] = _j_post("$base/", ['order_token' => $token], '');
+[$st, $html] = _j_unlock($base, ['order_token' => $token], '');
 jok(str_contains($html, 'class="alert"'), 'public lookup now reports the order unknown');
 
 // Reveal cannot be replayed from the same session either.
