@@ -1,4 +1,4 @@
-<?php
+<?php declare(strict_types=1);
 return [
     'common.expired' => 'Expired',
 
@@ -109,7 +109,7 @@ return [
     'admin.bootstrap.error.busy' => 'Someone else is claiming this server right now - please wait a few seconds and try again.',
     'admin.bootstrap.error.taken'       => 'That username is already taken.',
     'admin.bootstrap.error.create_failed' => 'Could not create the account. Please try again.',
-    'admin.bootstrap.enrollment_note' => "Recovery enrollment code for your account (shown once, valid 24 h — store it somewhere safe): {secret}",
+    'admin.bootstrap.enrollment_note' => 'Recovery enrollment code for your account (shown once, valid 24 h — store it somewhere safe): {secret}',
     'admin.verify2fa.error.csrf'         => 'Invalid CSRF token.',
     'admin.verify2fa.error.rate_limited' => 'Too many attempts — wait {min} min.',
     'admin.verify2fa.error.invalid_code' => 'Invalid code.',

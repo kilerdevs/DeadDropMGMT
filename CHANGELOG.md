@@ -2,6 +2,114 @@
 
 All notable changes to DeadDropMGMT are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is semver.
+## [Unreleased]
+
+## [1.4.0] - 2026-09-17
+
+### Changed
+- Admin pages boot through a single service kernel
+  (`includes/kernel.php`): the per-page 4–8 line require blocks (32 pages,
+  169 lines) collapse to one require, and the service list lives in one
+  manifest instead of being pasted across every entry script. Services stay
+  plain functions with their own require guards, so tests, cron, and CLI
+  entry points load them directly as before — zero behaviour change
+- Kernel migration finished: the public pages (`index.php`, `receive.php`),
+  `cron/cleanup.php`, the `tools/` one-shots, and `docker/e2e_journey.php`
+  boot through the same manifest. `healthz.php` stays dependency-free on
+  purpose (liveness must not depend on the stack it reports on), and the
+  `KernelTest` header guard now covers all 40 entry points
+- Thin admin dispatcher: the nine admin actions (`mark_delivered`,
+  `order_close`, `order_remove`, `photo_delete`, `extend`, `save_setting`,
+  `user_action`, `set_lang`, `logout`) run through one envelope
+  (`admin/dispatch.php` + pure-data `admin/routes.php`) — headers, session,
+  route-flag 2FA gate, method, auth, CSRF, ownership — while the legacy URLs
+  stay as one-line shims, so bookmarks and forms keep working. The 2FA gate
+  now consults the route's `2fa_exempt` flag instead of a script-basename
+  allow-list, so shims and canonical URLs gate alike; handlers are
+  moved-verbatim business logic guarded on their route name. Covered by
+  `DispatchTest` (structural contract + HTTP shim/dispatch parity) and the
+  `FailClosedTest` gate check, which now arms the route flag instead of a
+  script name
+
+### Added
+- Audit follow-ups (external review, all claims verified before acting):
+  order capability tokens use the full 62-symbol alphanumeric alphabet
+  (16 chars, ~95 bits — previously hex-only 64 bits despite what the threat
+  model promised; old tokens keep working), photo uploads are capped per
+  request (`max_photos_per_order`, default 10, enforced in `create.php` and
+  `edit.php` with over-cap files named in the flash), stale `rate_limits`
+  rows are purged on every cleanup pass, and the session failure bucket
+  follows the configured limiter window instead of a hardcoded 900 s
+- Auth hardening from the same review: the fresh-install config-owner
+  fallback now answers only for a genuinely absent `users` table (any other
+  DB failure fails closed, so an outage can never downgrade a TOTP-enrolled
+  owner to password-only login), and the admin session timeout is a sliding
+  inactivity window instead of absolute-since-login
+- Uploaded photo URLs hardened as bearer links: `Referrer-Policy:
+  no-referrer` on both header profiles (nothing server-side reads the
+  Referer) and `Cache-Control: private, no-store` on `/uploads/` across
+  Apache (`uploads/.htaccess`, now force-tracked in git and un-ignored for
+  Docker builds — it was silently absent from images), nginx, and Caddy
+- `docs/TROUBLESHOOTING.md`: symptom → cause → fix for the failures
+  operators actually hit (limiter lockouts, CSRF tab desync, DB-down
+  behaviour, key loss, broken log chains, idle cleanup, upload rejects,
+  2FA bounces, manual nginx/Caddy gaps)
+- `tools/mutation_probe.php`: curated mutation probe (12 logic-weakening
+  mutants over the security-critical code — CSRF, fail-closed limiter,
+  login fallback scope, token entropy, sweep guards, log linkage, i18n
+  escaping, session refresh, limiter purge, bucket window) that must all be
+  killed by the suite; runs report-only in CI while the MSI baseline
+  proves stable. Deliberately curated instead of infection/phpunit: the
+  harness is custom, and destructive mutants (unlink bypass) are excluded
+  by hand with reasons
+- `tests/PhotoCapTest.php`: HTTP end-to-end for the photo cap (12 uploads
+  leave exactly 10 rows)
+- Operational follow-ups: `docs/TROUBLESHOOTING.md` is linked from the
+  README; `uploads/.htaccess` is now force-tracked in git and re-included
+  in `.dockerignore` (it was silently absent from Docker images and fresh
+  clones, leaving the Apache variant without the uploads PHP-execution
+  block)
+- Automated formatting gate: `.php-cs-fixer.php` (conservative ruleset —
+  whitespace, quotes, short arrays, strict-types; brace placement and line
+  splitting deliberately out so the gate prevents drift without restyling
+  history) enforced by a new CI `style` job running the version- and
+  hash-pinned fixer phar in `--dry-run`
+- Log tail-deletion detection (external review, verified): hash chains never
+  caught pure tail truncation, so entries now carry a global monotonic `seq`
+  (continues across rotation, backfilled by position for legacy tips) and the
+  hourly cleanup pass anchors the tip in a new `log_checkpoints` table — a
+  separate trust domain (db-data vs app-logs volume). `log_verify.php`
+  reports a continuity verdict (`extends` / `truncated` / `rotated` /
+  `none` / `error`) next to chain validity; `setup.sql` creates the table
+  and is safe to re-run as the upgrade path
+- Public unlock CSRF (external review, verified): the anonymous unlock form
+  was the only state-affecting POST without a token, letting forged
+  cross-site submits burn the victim's limiter budget and force reveals.
+  The token is now verified before any budget is spent (both public forms
+  embed it; rotation cannot desync a form re-rendered on every response)
+- Session hardening: `use_strict_mode` / `use_only_cookies` /
+  `use_trans_sid` set explicitly instead of trusting php.ini, and the
+  pending TOTP secret + one-time enrollment note cross redirects sealed
+  (TOTP subkey) rather than plaintext — the ADR-008 "ciphertext-only"
+  wording is narrowed to the accurate "no plaintext secrets or credentials"
+- Outbound response ceilings: `osm_fetch_via()` / `osm_fetch()` take a byte
+  cap (default 2 MiB; 1 MiB tiles, 256 KiB geocode), enforced progressively
+  via `CURLOPT_MAXFILESIZE` plus post-fetch length checks on every transport
+  including the stream fallback and the direct discovery/IP-oracle reads
+- Schema: `order_events(order_token)` and `rate_limits(window_start)`
+  indexes (CREATE TABLE plus guarded ALTERs for existing installs, proven
+  by strip-and-reload); CI loads the schema twice to prove the re-run
+  no-op promise; `cache/` blocked from the web on all stacks (it was
+  reachable, bypassing the tile auth gate) with CI 403 asserts;
+  `docs/TROUBLESHOOTING.md` gains continuity-status and log-shipping notes
+- README audited end to end: CSRF token size corrected (32 bytes, not 64),
+  public-zone session reality, nginx/Caddy parity, PHP 8.2–8.5 matrix, new
+  suites + mutation job listed, project tree updated, dead
+  `SESSION_LIFETIME` knob removed from the template, cron recipe fixed to
+  CLI (`cron/` is 403 from the web on every stack)
+- Mutation probe grows to 16/16 killed (session ini, log seq, checkpoint
+  write, continuity verdict); the probe itself caught a real test bug here
+  (a stale anchor row letting a neutered writer pass)
 ## [1.3.0] - 2026-09-16
 
 ### Security

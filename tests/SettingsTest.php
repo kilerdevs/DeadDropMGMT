@@ -40,6 +40,14 @@ set_setting('admin_session_hours', '0.01');
 T::eq('admin session clamps to at least 1800s', 1800, admin_session_seconds());
 set_setting('max_photo_mb', '-3');
 T::eq('photo budget clamps positive', true, max_photo_bytes() > 0);
+set_setting('max_photos_per_order', '0');
+T::eq('photo count clamps to at least 1', 1, max_photos_per_order());
+set_setting('max_photos_per_order', '500');
+T::eq('photo count clamps to at most 100', 100, max_photos_per_order());
+$db->prepare("DELETE FROM settings WHERE key_name = 'max_photos_per_order'")->execute();
+$cache = &_settings_store();
+$cache = null;
+T::eq('photo count defaults to 10', 10, max_photos_per_order());
 
 // Boolean-ish getters
 set_setting('compliance_note_enabled', '1');

@@ -2,11 +2,20 @@
 declare(strict_types=1);
 require_once dirname(__DIR__) . '/config.php';
 require_once __DIR__ . '/net.php';
+require_once __DIR__ . '/settings.php';
 
 // ── Session ───────────────────────────────────────────────────────────────────
 
 function start_secure_session(): void {
     if (session_status() !== PHP_SESSION_NONE) return;
+    // Harden the mechanism itself, explicitly rather than trusting php.ini
+    // defaults: strict mode refuses uninitialized IDs (kills fixation via
+    // SID injection — regenerate_id() alone only helps after login),
+    // cookies-only keeps SIDs out of URLs (Referer/logs), trans_sid off.
+    // Must precede session_start(); no-op when already started (guard above).
+    ini_set('session.use_strict_mode', '1');
+    ini_set('session.use_only_cookies', '1');
+    ini_set('session.use_trans_sid', '0');
     session_set_cookie_params([
         'lifetime' => 0,
         'path'     => '/',
@@ -57,13 +66,20 @@ function require_admin(): void {
         header('Location: /admin/index.php?timeout=1');
         exit;
     }
+    // Sliding inactivity window: every authenticated admin request refreshes
+    // the timestamp, so the timeout above measures idleness, not time since
+    // login. Refreshed AFTER the check so an expired session can never be
+    // revived by the very request that should kill it.
+    $_SESSION['login_time'] = time();
 
     // 2FA is mandatory for couriers (optional for the owner). Gate every
-    // page but the enrollment page itself, logout, and self-service
-    // preference endpoints that touch nothing but the caller's own row.
+    // page but the enrollment page itself and routes flagged 2fa-exempt
+    // (logout, self-service preferences touching only the caller's own
+    // row). The flag comes from the dispatch route table — or is set by
+    // 2fa.php itself, the one standalone page that needs it — never from
+    // the script name, so shims and canonical dispatch URLs gate alike.
     if (is_courier() && empty($_SESSION['totp_enabled'])) {
-        $script = basename($_SERVER['SCRIPT_NAME'] ?? '');
-        if (!in_array($script, ['2fa.php', 'logout.php', 'set_lang.php'], true)) {
+        if (empty($GLOBALS['DDMGMT_ROUTE_2FA_EXEMPT'])) {
             header('Location: /admin/2fa.php?required=1');
             exit;
         }
@@ -112,6 +128,20 @@ function admin_finish_login(int $user_id, string $role, string $username, bool $
           $_SESSION['pending_setup_user_id'], $_SESSION['pending_setup_time']);
 }
 
+// True only when the users table itself is absent (fresh install, schema not
+// yet applied) — SQLSTATE 42S02 / driver error 1146, or the equivalent
+// message on other drivers. Used to scope the config-owner login fallback:
+// a missing table means "nobody can exist yet", while any other DB failure
+// (connection lost, server gone) must fail closed instead of answering 'ok'
+// from config credentials and skipping the DB account's TOTP.
+function _db_table_missing(Throwable $e): bool {
+    if ($e instanceof PDOException && (string)$e->getCode() === '42S02') {
+        return true;
+    }
+    $msg = strtolower($e->getMessage());
+    return str_contains($msg, "doesn't exist") || str_contains($msg, 'no such table');
+}
+
 // Returns 'ok' (fully logged in), 'need_2fa' (password ok, TOTP code required
 // next), 'need_setup' (account exists but has no password yet — first login;
 // the pending-setup session state is armed), or 'fail' (bad credentials).
@@ -123,8 +153,10 @@ function admin_login(string $username, string $password): string {
         $stmt->execute([$username]);
         $user = $stmt->fetch();
     } catch (Exception $e) {
-        // users table may not exist yet — fall back to config-based owner
-        if (defined('ADMIN_USERNAME') && defined('ADMIN_PASSWORD_HASH') &&
+        // Fresh-install fallback ONLY (see _db_table_missing): on any other
+        // DB error this returns 'fail' — a mid-operation outage must never
+        // downgrade a TOTP-enrolled owner to password-only config login.
+        if (_db_table_missing($e) && defined('ADMIN_USERNAME') && defined('ADMIN_PASSWORD_HASH') &&
             hash_equals(ADMIN_USERNAME, $username) &&
             password_verify($password, ADMIN_PASSWORD_HASH)) {
             admin_finish_login(0, 'owner', $username);
@@ -250,50 +282,60 @@ function json_out(array $payload, int $status = 200): never {
 
 // ── Security headers ──────────────────────────────────────────────────────────
 
-function set_security_headers(bool $admin = false): string {
-    header('X-Frame-Options: DENY');
-    header('X-Content-Type-Options: nosniff');
-    header('X-XSS-Protection: 0');
-
-    // Never let the browser cache or bfcache-restore a rendered page — these
-    // carry decrypted locations, passwords, or TOTP secrets. Applies to every
-    // page (public reveal included), so nothing lingers after logout or
-    // navigating away.
-    header('Cache-Control: no-store, no-cache, must-revalidate, private');
-    header('Pragma: no-cache');
+// Pure builder behind set_security_headers(): returning the header lines
+// instead of emitting them makes both profiles assertable in-process
+// (header() is a no-op under CLI, so FailClosedTest pins this list).
+// Referrer-Policy is no-referrer on BOTH profiles: photo URLs are
+// unguessable-but-bearer capability links, and nothing server-side reads
+// the Referer — no HTTP_REFERER consumer exists anywhere — so not even the
+// origin is disclosed to third parties (map tiles, judges) or logs.
+/** @return array<int,string> */
+function _security_headers_list(bool $admin, string $nonce): array {
+    $h = [
+        'X-Frame-Options: DENY',
+        'X-Content-Type-Options: nosniff',
+        'X-XSS-Protection: 0',
+        // Never let the browser cache or bfcache-restore a rendered page —
+        // these carry decrypted locations, passwords, or TOTP secrets.
+        // Applies to every page (public reveal included), so nothing lingers
+        // after logout or navigating away.
+        'Cache-Control: no-store, no-cache, must-revalidate, private',
+        'Pragma: no-cache',
+        'Referrer-Policy: no-referrer',
+    ];
 
     if (request_is_https()) {
-        header('Strict-Transport-Security: max-age=31536000; includeSubDomains');
+        $h[] = 'Strict-Transport-Security: max-age=31536000; includeSubDomains';
     }
 
     if ($admin) {
-        header('Referrer-Policy: strict-origin');
-        $nonce = base64_encode(random_bytes(18));
-        header('Permissions-Policy: geolocation=(self), camera=(), microphone=()');
-        header(
-            "Content-Security-Policy: default-src 'self'; " .
+        $h[] = 'Permissions-Policy: geolocation=(self), camera=(), microphone=()';
+        $h[] = "Content-Security-Policy: default-src 'self'; " .
             "style-src 'self'; " .
             "font-src 'self'; " .
             "script-src 'self' 'nonce-{$nonce}'; " .
             "img-src 'self' data: blob:; " .
             "connect-src 'self'; " .
-            "object-src 'none'; base-uri 'self'; frame-ancestors 'none';"
-        );
-        return $nonce;
+            "object-src 'none'; base-uri 'self'; frame-ancestors 'none';";
+        return $h;
     }
 
-    header('Referrer-Policy: no-referrer');
-    $nonce = base64_encode(random_bytes(18));
-    header('Permissions-Policy: geolocation=(), camera=(), microphone=()');
-    header(
-        "Content-Security-Policy: default-src 'self'; " .
+    $h[] = 'Permissions-Policy: geolocation=(), camera=(), microphone=()';
+    $h[] = "Content-Security-Policy: default-src 'self'; " .
         "style-src 'self'; " .
         "font-src 'self'; " .
         "script-src 'self' 'nonce-{$nonce}'; " .
         "img-src 'self'; " .
-        "frame-src https://www.openstreetmap.org; " .
-        "object-src 'none'; base-uri 'self'; frame-ancestors 'none';"
-    );
+        'frame-src https://www.openstreetmap.org; ' .
+        "object-src 'none'; base-uri 'self'; frame-ancestors 'none';";
+    return $h;
+}
+
+function set_security_headers(bool $admin = false): string {
+    $nonce = base64_encode(random_bytes(18));
+    foreach (_security_headers_list($admin, $nonce) as $line) {
+        header($line);
+    }
     return $nonce;
 }
 
@@ -436,10 +478,12 @@ function rl_reset(string $scope = 'public'): void {
 // Legit users behind shared NAT keep their own bucket; an attacker must now
 // rotate both IP and cookie per attempt. Server-side storage means clearing
 // cookies is also visible as a brand-new session with zero history.
+// Window follows the configured IP-limiter window (rl_window_seconds) so the
+// two layers can never silently diverge when an admin retunes one of them.
 
 function bucket_fail(string $scope = 'public'): void {
     $cur = $_SESSION['pw_fail'][$scope] ?? null;
-    if (!$cur || (time() - $cur['ts']) >= 900) {
+    if (!$cur || (time() - $cur['ts']) >= rl_window_seconds()) {
         $_SESSION['pw_fail'][$scope] = ['n' => 1, 'ts' => time()];
         return;
     }
@@ -449,13 +493,13 @@ function bucket_fail(string $scope = 'public'): void {
 
 function bucket_status(string $scope = 'public', int $max = 10): array {
     $cur = $_SESSION['pw_fail'][$scope] ?? null;
-    $n   = ($cur && (time() - $cur['ts']) < 900) ? (int)$cur['n'] : 0;
+    $n   = ($cur && (time() - $cur['ts']) < rl_window_seconds()) ? (int)$cur['n'] : 0;
     return ['count' => $n, 'blocked' => $n >= max(1, $max)];
 }
 
 function bucket_remaining(string $scope = 'public'): int {
     $cur = $_SESSION['pw_fail'][$scope] ?? null;
-    return $cur ? max(0, 900 - (time() - $cur['ts'])) : 0;
+    return $cur ? max(0, rl_window_seconds() - (time() - $cur['ts'])) : 0;
 }
 
 function bucket_clear(string $scope = 'public'): void {

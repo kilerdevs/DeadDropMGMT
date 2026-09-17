@@ -1,0 +1,32 @@
+# Uploads directory — images only, no PHP execution
+
+Options -Indexes -ExecCGI
+
+# Hard-block PHP execution regardless of MIME type
+<FilesMatch "\.ph(p\d?|tml|ps)$">
+    Order Allow,Deny
+    Deny from all
+</FilesMatch>
+
+# Belt-and-suspenders: disable PHP engine
+<IfModule mod_php.c>
+    php_flag engine off
+</IfModule>
+<IfModule mod_php8.c>
+    php_flag engine off
+</IfModule>
+
+# Only image files may be served
+<FilesMatch "^(?!.*\.(jpe?g|png|webp|gif)$)">
+    Order Allow,Deny
+    Deny from all
+</FilesMatch>
+
+# Uploaded URLs are unguessable-but-bearer capability links: once disclosed
+# (history, copy-paste, a unlocked screen) they work for anyone, forever.
+# Browsers must not persist them on disk or in shared caches — the app's own
+# pages already send no-store via set_security_headers(), this extends the
+# same rule to the static files that header never touches.
+<IfModule mod_headers.c>
+    Header set Cache-Control "private, no-store"
+</IfModule>

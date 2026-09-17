@@ -1,15 +1,11 @@
 <?php
 declare(strict_types=1);
-require_once dirname(__DIR__) . '/config.php';
-require_once dirname(__DIR__) . '/includes/db.php';
-require_once dirname(__DIR__) . '/includes/auth.php';
-require_once dirname(__DIR__) . '/includes/crypto.php';
-require_once dirname(__DIR__) . '/includes/settings.php';
-require_once dirname(__DIR__) . '/includes/totp.php';
-require_once dirname(__DIR__) . '/includes/audit.php';
-require_once dirname(__DIR__) . '/includes/i18n.php';
+require_once dirname(__DIR__) . '/includes/kernel.php';
 
 start_secure_session();
+// The enrollment page itself: a courier pending TOTP setup must reach it,
+// so it carries the same 2fa-exempt flag dispatched routes declare.
+$GLOBALS['DDMGMT_ROUTE_2FA_EXEMPT'] = true;
 require_admin();
 $csp_nonce = set_security_headers(true);
 
@@ -39,7 +35,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($rl['blocked']) {
             $error = t('admin.verify2fa.error.rate_limited', ['min' => (int)ceil($rl['remaining'] / 60)]);
         } elseif ($action === 'enable' && !$enabled) {
-            $pending = $_SESSION['pending_totp_secret'] ?? '';
+            // The pending secret crosses the QR render via the session sealed
+            // (TOTP subkey), never plaintext — a session-file reader learns
+            // nothing. A bare string is still honored so enrollments started
+            // before the seal deploy complete instead of bricking.
+            $pending_raw = $_SESSION['pending_totp_secret'] ?? '';
+            if (is_array($pending_raw)) {
+                $pending = decrypt_secret(
+                    (string)($pending_raw['ciphertext'] ?? ''),
+                    (string)($pending_raw['iv'] ?? '')
+                );
+                if ($pending === false) {
+                    $pending = '';
+                }
+            } else {
+                $pending = (string)$pending_raw;
+            }
             if ($pending === '' || !totp_verify($pending, $code)) {
                 rl_increment('admin_2fa_setup');
                 $error = t('admin.2fa.error.invalid_code');
@@ -77,14 +88,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-// Generate (or reuse) a pending secret for enrollment
+// Generate (or reuse) a pending secret for enrollment — sealed at rest.
 $pending_secret = '';
 $qr_uri         = '';
 if (!$enabled) {
-    $pending_secret = $_SESSION['pending_totp_secret'] ?? '';
+    $pending_secret = '';
+    $pending_raw = $_SESSION['pending_totp_secret'] ?? '';
+    if (is_array($pending_raw)) {
+        $dec = decrypt_secret(
+            (string)($pending_raw['ciphertext'] ?? ''),
+            (string)($pending_raw['iv'] ?? '')
+        );
+        if (is_string($dec)) {
+            $pending_secret = $dec;
+        }
+    } elseif (is_string($pending_raw)) {
+        $pending_secret = $pending_raw;
+    }
     if ($pending_secret === '') {
         $pending_secret = totp_generate_secret();
-        $_SESSION['pending_totp_secret'] = $pending_secret;
+        $_SESSION['pending_totp_secret'] = encrypt_secret($pending_secret);
     }
     $qr_uri = totp_uri($pending_secret, current_user_name(), site_name());
 }

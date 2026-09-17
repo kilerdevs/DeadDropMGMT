@@ -75,6 +75,14 @@ function max_photo_bytes(): int {
     return (int)(max(0.1, (float)get_setting('max_photo_mb', '2')) * 1024 * 1024);
 }
 
+// Hard cap on photos accepted per order per request (create + edit share
+// it): per-file size limits bound bytes, but only a count limit bounds the
+// number of rows/files — and disk. Clamped so a rogue setting can't disable
+// the guard entirely.
+function max_photos_per_order(): int {
+    return min(100, max(1, (int)get_setting('max_photos_per_order', '10')));
+}
+
 function analytics_enabled(): bool {
     return get_setting('analytics_enabled', '1') === '1';
 }

@@ -17,8 +17,7 @@ declare(strict_types=1);
 $options = getopt('', ['dry-run']);
 $dry     = isset($options['dry-run']);
 
-require_once dirname(__DIR__) . '/config.php';
-require_once dirname(__DIR__) . '/includes/db.php';
+require_once dirname(__DIR__) . '/includes/kernel.php';
 
 // The ONLY place legacy CBC decryption still exists — migration code, not
 // reachable from any HTTP path.

@@ -57,8 +57,12 @@ function osm_proxy_normalize(string $raw): ?string {
 }
 
 // One GET through a specific proxy (or direct when $proxy is null).
-// Returns body on HTTP 200, false otherwise. Never throws.
-function osm_fetch_via(string $url, ?string $proxy, int $timeout = 5): string|false {
+// Returns body on HTTP 200, false otherwise. Never throws. $maxBytes caps
+// the response body on BOTH transports: curl aborts progressively via
+// MAXFILESIZE, the stream fallback reads at most max+1 bytes and rejects
+// over-long bodies — a reusable fetcher with no ceiling is a memory-DoS
+// waiting for the next endpoint, proxy, or data source.
+function osm_fetch_via(string $url, ?string $proxy, int $timeout = 5, int $maxBytes = 2097152): string|false {
     if (!function_exists('curl_init')) {
         // No cURL on this host — fall back to direct stream fetch only.
         if ($proxy !== null) return false;
@@ -68,7 +72,11 @@ function osm_fetch_via(string $url, ?string $proxy, int $timeout = 5): string|fa
             'timeout' => $timeout,
             'ignore_errors' => false,
         ]]);
-        return @file_get_contents($url, false, $ctx);
+        $body = @file_get_contents($url, false, $ctx, 0, $maxBytes + 1);
+        if (!is_string($body) || strlen($body) > $maxBytes) {
+            return false;
+        }
+        return $body;
     }
 
     $ch = curl_init($url);
@@ -77,6 +85,7 @@ function osm_fetch_via(string $url, ?string $proxy, int $timeout = 5): string|fa
         CURLOPT_FOLLOWLOCATION => false,
         CURLOPT_TIMEOUT        => $timeout,
         CURLOPT_CONNECTTIMEOUT => $timeout,
+        CURLOPT_MAXFILESIZE    => $maxBytes,
         CURLOPT_USERAGENT      => 'DeadDropMGMT/1.0',
         CURLOPT_SSL_VERIFYPEER => true,
     ]);
@@ -88,7 +97,10 @@ function osm_fetch_via(string $url, ?string $proxy, int $timeout = 5): string|fa
     $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
     unset($ch); // PHP 8.5 deprecates curl_close(); the handle frees on scope exit
 
-    return ($code >= 200 && $code < 300 && is_string($body)) ? $body : false;
+    if ($code < 200 || $code >= 300 || !is_string($body) || strlen($body) > $maxBytes) {
+        return false;
+    }
+    return $body;
 }
 
 function osm_proxy_mark(int $id, bool $ok, ?int $latency_ms = null): void {
@@ -160,9 +172,9 @@ function osm_proxy_revalidate_stale(int $max = 3, int $stale_days = 7, ?string $
 // Bail-outs between attempts: an overall wall-clock budget (a big pool
 // must not churn for minutes) and a client-disconnect check, so a user who
 // navigated away stops generating further proxy attempts.
-function osm_fetch(string $url): string|false {
+function osm_fetch(string $url, int $maxBytes = 2097152): string|false {
     if (!osm_proxy_enabled()) {
-        return osm_fetch_via($url, null);
+        return osm_fetch_via($url, null, 5, $maxBytes);
     }
 
     $pool = osm_proxy_pool();
@@ -196,7 +208,7 @@ function osm_fetch(string $url): string|false {
         }
         $attempts++;
         $t0     = microtime(true);
-        $result = osm_fetch_via($url, $px['url'], 3);
+        $result = osm_fetch_via($url, $px['url'], 3, $maxBytes);
         $ms     = (int)round((microtime(true) - $t0) * 1000);
         osm_proxy_mark((int)$px['id'], $result !== false, $ms);
         if ($result !== false) {
@@ -287,8 +299,11 @@ const PROXY_ANONYMITY_JUDGES = [
 // the call happens only on owner-initiated discovery, never per request.
 function proxy_public_ip(): ?string {
     foreach (['https://api.ipify.org?format=text', 'http://httpbin.org/ip'] as $url) {
-        $raw = @file_get_contents($url, false, stream_context_create(['http' => ['timeout' => 8]]));
-        if ($raw === false) continue;
+        // An IP is bytes, not megabytes: cap the read like every other fetch.
+        $raw = @file_get_contents($url, false, stream_context_create(['http' => ['timeout' => 8]]), 0, 4097);
+        if (!is_string($raw) || strlen($raw) > 4096) {
+            continue;
+        }
         if (preg_match('/\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b/', $raw, $m)) {
             return $m[1];
         }
@@ -332,10 +347,14 @@ function proxy_discover(int $max_test = 400, int $timeout_s = 4): array {
     $candidates = []; // url => ['rated' => bool, 'source' => list name]
 
     foreach (PROXY_DISCOVERY_SOURCES as $src) {
+        // Third-party list bodies are the largest untrusted input on this
+        // path — same 2 MiB ceiling as the shared fetcher.
         $raw = @file_get_contents($src['url'], false, stream_context_create([
             'http' => ['timeout' => 10],
-        ]));
-        if ($raw === false) continue;
+        ]), 0, 2097153);
+        if (!is_string($raw) || strlen($raw) > 2097152) {
+            continue;
+        }
 
         $record = function (string $norm) use ($src, &$candidates): void {
             // first source wins, but a rated listing outranks an unrated one

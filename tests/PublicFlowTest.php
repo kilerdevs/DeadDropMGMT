@@ -59,12 +59,12 @@ $enc = encrypt_location_data([
     'text'         => 'PUBLICFLOWTEST skrzynka pod trzecią ławą',
     'lat'          => 52.2297,
     'lng'          => 21.0122,
-    'instructions' => "kod do bramy 4321",
+    'instructions' => 'kod do bramy 4321',
 ]);
 $hash = password_hash($pass, PASSWORD_BCRYPT);
 $ins  = $db->prepare(
-    "INSERT INTO orders (order_token, pickup_password_hash, location_encrypted, location_iv, status, delivered_at, expires_at, notes)
-     VALUES (?, ?, ?, ?, ?, ?, NOW() + INTERVAL 24 HOUR, ?)"
+    'INSERT INTO orders (order_token, pickup_password_hash, location_encrypted, location_iv, status, delivered_at, expires_at, notes)
+     VALUES (?, ?, ?, ?, ?, ?, NOW() + INTERVAL 24 HOUR, ?)'
 );
 $ins->execute([$tokD, $hash, $enc['ciphertext'], $enc['iv'], 'delivered', date('Y-m-d H:i:s'), 'notka dla odbiorcy']);
 $ins->execute([$tokD2, $hash, $enc['ciphertext'], $enc['iv'], 'delivered', date('Y-m-d H:i:s'), '']);
@@ -77,44 +77,68 @@ set_setting('rate_limit_window_min', '15');
 $db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
 $cookie = '';
 
+// Unlock (and token-only lookup) POSTs carry the single-use CSRF token:
+// harvest a live one from a fresh GET first — rotation retires each token
+// on use, so every POST needs its own.
+$pf_unlock = static function (string $tok, string $pw, string &$ck) use ($port): array {
+    [, $g, $ck] = _pf_get("http://127.0.0.1:$port/", $ck);
+    preg_match('/name="csrf_token"\s*value="([0-9a-f]{64})"/', (string)$g, $m);
+    [$st, $b, $ck2] = _pf_post("http://127.0.0.1:$port/",
+        ['csrf_token' => $m[1] ?? '', 'order_token' => $tok, 'pickup_password' => $pw], $ck);
+    $ck = $ck2;
+    return [$st, $b, $ck];
+};
+
 // 1. Unknown token → not-found alert, no reveal
-[, $body, $cookie] = _pf_post("http://127.0.0.1:$port/", ['order_token' => 'UNKNOWN00000000AA'], $cookie);
+[, $body, $cookie] = $pf_unlock('UNKNOWN00000000AA', '', $cookie);
 T::ok('unknown token rejected', str_contains($body, 'class="alert"'));
 $unknownBody = $body;
 
 // 1b. Enumeration resistance: unknown token WITH a password must answer
 // exactly like a wrong password for an existing order — same body.
-[, $bodyWrong] = _pf_post("http://127.0.0.1:$port/", ['order_token' => $tokD, 'pickup_password' => 'nope'], $cookie);
-[, $bodyUnknownPw] = _pf_post("http://127.0.0.1:$port/", ['order_token' => 'UNKNOWN0000000AB', 'pickup_password' => 'nope'], $cookie);
+[, $bodyWrong] = $pf_unlock($tokD, 'nope', $cookie);
+[, $bodyUnknownPw] = $pf_unlock('UNKNOWN0000000AB', 'nope', $cookie);
 preg_match('/<div class="alert">(.*?)<\/div>/s', $bodyWrong, $mW);
 preg_match('/<div class="alert">(.*?)<\/div>/s', $bodyUnknownPw, $mU);
 T::ok('unknown token + password ≡ wrong password (same answer)',
     ($mW[1] ?? 'a') === ($mU[1] ?? 'b') && ($mW[1] ?? '') !== '');
+
+// 1c. Unlock POST without a CSRF token dies BEFORE the limiter spend:
+// forged cross-site submits must not burn the victim's budget.
+$db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
+$cookieCsrf = '';
+for ($i = 0; $i < 3; $i++) {
+    [, $bodyCsrf, $cookieCsrf] = _pf_post("http://127.0.0.1:$port/",
+        ['order_token' => $tokD, 'pickup_password' => 'nope'], $cookieCsrf);
+    T::ok("tokenless unlock rejected [$i]", str_contains($bodyCsrf, 'class="alert"'));
+}
+[$stCsrf, , $cookieCsrf] = $pf_unlock($tokD, $pass, $cookieCsrf);
+T::eq('rejected forgeries spent no budget', 302, $stCsrf);
 
 // Those were two burned failures — start clean before the scripted budget math.
 $db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
 $cookie = '';
 
 // 2. Status lookup (empty password) → badge + password step for delivered order
-[, $body, $cookie] = _pf_post("http://127.0.0.1:$port/", ['order_token' => $tokD], $cookie);
+[, $body, $cookie] = $pf_unlock($tokD, '', $cookie);
 T::ok('status lookup shows delivered badge', str_contains($body, 'status-badge delivered'));
 T::ok('status lookup asks for password', str_contains($body, 'name="pickup_password"') && !str_contains($body, 'reveal-value'));
 
 // 3. Wrong passwords trigger the limiter (max=3)
-[, $body, $cookie] = _pf_post("http://127.0.0.1:$port/", ['order_token' => $tokD, 'pickup_password' => 'nope'], $cookie);
+[, $body, $cookie] = $pf_unlock($tokD, 'nope', $cookie);
 T::ok('wrong password shows alert, no reveal', str_contains($body, 'class="alert"') && !str_contains($body, 'reveal-value'));
-_pf_post("http://127.0.0.1:$port/", ['order_token' => $tokD, 'pickup_password' => 'nope'], $cookie);
-_pf_post("http://127.0.0.1:$port/", ['order_token' => $tokD, 'pickup_password' => 'nope'], $cookie);
+$pf_unlock($tokD, 'nope', $cookie);
+$pf_unlock($tokD, 'nope', $cookie);
 
 // 4. Budget exhausted → cooldown card, EVEN with the correct password
-[, $body, $cookie] = _pf_post("http://127.0.0.1:$port/", ['order_token' => $tokD, 'pickup_password' => $pass], $cookie);
+[, $body, $cookie] = $pf_unlock($tokD, $pass, $cookie);
 T::ok('rate limited: cooldown card instead of reveal', str_contains($body, 'cooldown-heading'));
 
 // 5. Clear the IP counter AND switch to a fresh session (the old session's
 // failure bucket is full by design), then unlock for real → PRG redirect
 $db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
 $cookie = '';
-[$st, , $cookie] = _pf_post("http://127.0.0.1:$port/", ['order_token' => $tokD, 'pickup_password' => $pass], $cookie);
+[$st, , $cookie] = $pf_unlock($tokD, $pass, $cookie);
 T::eq('correct password redirects (PRG)', 302, $st);
 [, $body, $cookie] = _pf_get("http://127.0.0.1:$port/", $cookie);
 T::ok('reveal shows decrypted location', str_contains($body, 'PUBLICFLOWTEST skrzynka pod trzecią ławą'));
@@ -170,20 +194,21 @@ T::ok('replayed receipt is refused',
 T::ok('replayed receipt does not resurrect the order',
     !$db->query("SELECT 1 FROM orders WHERE order_token = '$token'")->fetch());
 
-// 9d. A session that NEVER authenticated gets no CSRF token for the
-// destructive flow at all — nothing will arm or accept its confirmation.
-// (With a valid CSRF but no unlock the gate itself is proven in 9e.)
+// 9d. A session that NEVER unlocked cannot arm destruction: even posting a
+// freshly harvested (fully valid) token without the receipt capability is
+// bounced — CSRF authorizes the session, only the unlock arms the action.
 set_setting('rate_limit_max', '50');
 $db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
 [, $bodyNoUnlock, $cookieNoUnlock] = _pf_get("http://127.0.0.1:$port/");
-T::ok('never-unlocked session is not handed a destructive-flow CSRF token',
-    preg_match('/name="csrf_token"/', $bodyNoUnlock) !== 1);
-[$stNoUnlock] = _pf_post(
+preg_match('/name="csrf_token"\s*value="([0-9a-f]{64})"/', (string)$bodyNoUnlock, $mN);
+T::ok('unlock form hands out a session token (test setup)', ($mN[1] ?? '') !== '');
+[$stNoUnlock, $bodyNoUnlock2] = _pf_post(
     "http://127.0.0.1:$port/receive.php",
-    ['csrf_token' => '', 'order_token' => $tokD3, 'step' => '2'],
+    ['csrf_token' => $mN[1] ?? '', 'order_token' => $tokD3, 'step' => '2'],
     $cookieNoUnlock
 );
-T::eq('token-only destruction attempt bounced (redirect)', 302, $stNoUnlock);
+T::ok('token-only destruction attempt fails closed (alert, no delete)',
+    $stNoUnlock === 200 && str_contains((string)$bodyNoUnlock2, 'class="alert"'));
 T::ok('order survives token-only deletion attempt',
     (bool)$db->query("SELECT 1 FROM orders WHERE order_token = '$tokD3'")->fetch());
 
@@ -193,8 +218,8 @@ T::ok('order survives token-only deletion attempt',
 set_setting('rate_limit_max', '50');
 $db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
 $cookieE = '';
-_pf_post("http://127.0.0.1:$port/", ['order_token' => $tokD3], $cookieE);
-[$stE, , $cookieE] = _pf_post("http://127.0.0.1:$port/", ['order_token' => $tokD3, 'pickup_password' => $pass], $cookieE);
+$pf_unlock($tokD3, '', $cookieE);
+[$stE, , $cookieE] = $pf_unlock($tokD3, $pass, $cookieE);
 T::eq('unlock arms the receipt capability (redirect)', 302, $stE);
 [, $bodyE, $cookieE] = _pf_get("http://127.0.0.1:$port/", $cookieE);
 preg_match('/name="csrf_token"\s*value="([0-9a-f]{64})"/', $bodyE, $mE);
@@ -212,8 +237,8 @@ T::ok('order intact after denied cross-token attempt',
     (bool)$db->query("SELECT 1 FROM orders WHERE order_token = '$tokD3'")->fetch());
 
 // Fresh unlock re-arms the capability: own-token receipt now completes.
-_pf_post("http://127.0.0.1:$port/", ['order_token' => $tokD3], $cookieE);
-[, , $cookieE] = _pf_post("http://127.0.0.1:$port/", ['order_token' => $tokD3, 'pickup_password' => $pass], $cookieE);
+$pf_unlock($tokD3, '', $cookieE);
+[, , $cookieE] = $pf_unlock($tokD3, $pass, $cookieE);
 [, $bodyOwn, $cookieE] = _pf_get("http://127.0.0.1:$port/", $cookieE);
 preg_match('/name="csrf_token"\s*value="([0-9a-f]{64})"/', $bodyOwn, $mO);
 [, $bodyOwn2] = _pf_post(
@@ -232,9 +257,9 @@ T::ok('unlocked order deleted by its own capability',
 // delivered-order session; the preparing target is then refused by the
 // fail-closed layers (capability binding / state gate — the state rule
 // itself is pinned in StateTransitionTest::receive refuses preparing).
-$pf_csrf_after_unlock = static function (string $tok, string $pw, string &$ck) use ($port): string {
-    [, , $ck] = _pf_post("http://127.0.0.1:$port/", ['order_token' => $tok], $ck);
-    [, , $ck] = _pf_post("http://127.0.0.1:$port/", ['order_token' => $tok, 'pickup_password' => $pw], $ck);
+$pf_csrf_after_unlock = static function (string $tok, string $pw, string &$ck) use ($port, $pf_unlock): string {
+    $pf_unlock($tok, '', $ck);
+    $pf_unlock($tok, $pw, $ck);
     [, $b, $ck] = _pf_get("http://127.0.0.1:$port/", $ck);
     preg_match('/name="csrf_token"\s*value="([0-9a-f]{64})"/', $b, $m);
     return $m[1] ?? '';
@@ -262,7 +287,7 @@ T::ok('preparing order still exists after attack',
     (bool)$db->query("SELECT 1 FROM orders WHERE order_token = '$tokP'")->fetch());
 
 // 10. Preparing order: correct password → "not ready yet" note, no location
-[$st, , $cookie] = _pf_post("http://127.0.0.1:$port/", ['order_token' => $tokP, 'pickup_password' => $pass], $cookie);
+[$st, , $cookie] = $pf_unlock($tokP, $pass, $cookie);
 T::eq('correct password on preparing order redirects too', 302, $st);
 [, $body, $cookie] = _pf_get("http://127.0.0.1:$port/", $cookie);
 T::ok('preparing order hides location', !str_contains($body, 'PUBLICFLOWTEST'));
@@ -273,12 +298,13 @@ set_setting('rate_limit_max', '3');
 $db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
 $cookieA = '';
 for ($i = 0; $i < 3; $i++) {
-    [, , $cookieA] = _pf_post("http://127.0.0.1:$port/", ['order_token' => $tokP, 'pickup_password' => 'nope'], $cookieA);
+    [, , $cookieA] = $pf_unlock($tokP, 'nope', $cookieA);
 }
-[, $body] = _pf_post("http://127.0.0.1:$port/", ['order_token' => $tokP, 'pickup_password' => $pass], $cookieA);
+[, $body] = $pf_unlock($tokP, $pass, $cookieA);
 T::ok('session bucket blocks despite clean IP budget', str_contains($body, 'cooldown-heading'));
 $db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
-[, $body] = _pf_post("http://127.0.0.1:$port/", ['order_token' => $tokP], '');
+$cookieFresh = '';
+[, $body] = $pf_unlock($tokP, '', $cookieFresh);
 T::ok('fresh session same IP is not blocked by another bucket',
     str_contains($body, 'status-badge') && !str_contains($body, 'cooldown-heading'));
 
@@ -288,7 +314,7 @@ T::ok('fresh session same IP is not blocked by another bucket',
 set_setting('rate_limit_max', '3');
 $db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
 $cookie = '';
-[$stU, , $cookie] = _pf_post("http://127.0.0.1:$port/", ['order_token' => $tokD2, 'pickup_password' => $pass], $cookie);
+[$stU, , $cookie] = $pf_unlock($tokD2, $pass, $cookie);
 [, $body, $cookie] = _pf_get("http://127.0.0.1:$port/", $cookie);
 preg_match('/name="csrf_token"\s*value="([0-9a-f]{64})"/', $body, $mR);
 $rcsrf = $mR[1] ?? '';
@@ -315,7 +341,7 @@ T::ok('order survives blocked deletion attempt',
 // before the consuming GET — the sealed blob alone must reveal nothing.
 $db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
 $cookieR = '';
-[$stR, , $cookieR] = _pf_post("http://127.0.0.1:$port/", ['order_token' => $tokD2, 'pickup_password' => $pass], $cookieR);
+[$stR, , $cookieR] = $pf_unlock($tokD2, $pass, $cookieR);
 T::eq('reveal-after-delete setup unlock redirects', 302, $stR);
 $db->prepare('DELETE FROM orders WHERE order_token = ?')->execute([$tokD2]);
 [, $bodyR] = _pf_get("http://127.0.0.1:$port/", $cookieR);

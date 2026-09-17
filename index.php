@@ -1,13 +1,6 @@
 <?php
 declare(strict_types=1);
-require_once __DIR__ . '/config.php';
-require_once __DIR__ . '/includes/db.php';
-require_once __DIR__ . '/includes/auth.php';
-require_once __DIR__ . '/includes/crypto.php';
-require_once __DIR__ . '/includes/analytics.php';
-require_once __DIR__ . '/includes/settings.php';
-require_once __DIR__ . '/includes/cleanup.php';
-require_once __DIR__ . '/includes/i18n.php';
+require_once __DIR__ . '/includes/kernel.php';
 
 $csp_nonce = set_security_headers(false);
 start_secure_session();
@@ -95,6 +88,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && $loc_data === null && !$correct_prep
 
 // ── Handle POST ───────────────────────────────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // CSRF gate BEFORE the limiter spend: without it, a forged cross-site
+    // submit burns the VICTIM's IP budget on wrong-password attempts (DoS on
+    // their pickup) and can force a reveal into their browser. Forged
+    // requests die here having spent nothing. Every public form embeds the
+    // token (initial, password-step, and the receive handoff alike), and the
+    // error re-renders with a fresh one — single-use rotation cannot desync
+    // a form that is re-rendered on every response.
+    if (!verify_csrf($_POST['csrf_token'] ?? '')) {
+        $error = t('admin.common.invalid_csrf');
+    } else {
     // Spend-and-decide is ONE atomic transition on a row lock: concurrent
     // requests can never both act on the same stale pre-increment count.
     // A non-failure outcome refunds the spend below, so the IP budget keeps
@@ -208,6 +211,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
     }
+    } // end CSRF-verified branch
 }
 
 $cd_mins  = $blocked ? (int)floor($cooldown_secs / 60) : 0;
@@ -374,6 +378,8 @@ $csrf_public = generate_csrf();
     <hr class="divider">
     <div class="unlock-heading"><?= t('public.index.unlock_heading') ?></div>
     <form method="POST" action="" autocomplete="off">
+        <input type="hidden" name="csrf_token"
+               value="<?= htmlspecialchars($csrf_public, ENT_QUOTES, 'UTF-8') ?>">
         <input type="hidden" name="order_token"
                value="<?= htmlspecialchars($prefill_token, ENT_QUOTES, 'UTF-8') ?>">
         <div class="form-group">
@@ -387,6 +393,8 @@ $csrf_public = generate_csrf();
     <?php else: ?>
     <!-- ── Initial form ──────────────────────────────────────────────── -->
     <form method="POST" action="" autocomplete="off">
+        <input type="hidden" name="csrf_token"
+               value="<?= htmlspecialchars($csrf_public, ENT_QUOTES, 'UTF-8') ?>">
         <div class="form-group">
             <label for="order_token"><?= t('public.index.token_label') ?></label>
             <input type="text" id="order_token" name="order_token"

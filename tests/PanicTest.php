@@ -118,4 +118,34 @@ if (function_exists('posix_geteuid') && posix_geteuid() === 0) {
     @rmdir("$up/999001");
 }
 
+// ── CSRF step flow: stale/failed tokens surface an error, never silent ────
+// Renders admin/panic.php in-process with an owner session: a bad token on
+// step 1 or 2 used to drop back to step 1 with no message (a "broken
+// button" on a destructive flow). Step 3 is never posted here — it would
+// wipe the test database.
+$render_panic = static function (int $step, string $csrf): string {
+    $_POST = ['step' => (string)$step, 'csrf_token' => $csrf];
+    $_SERVER['REQUEST_METHOD'] = 'POST';
+    ob_start();
+    include dirname(__DIR__) . '/admin/panic.php';
+    return (string)ob_get_clean();
+};
+$_SESSION = [];
+start_secure_session();
+$_SESSION['user_id'] = 1;
+$_SESSION['user_role'] = 'owner';
+$_SESSION['user_name'] = 'panic-owner';
+$_SESSION['login_time'] = time();
+$panic_csrf = generate_csrf();
+$csrf_msg = t('admin.common.invalid_csrf');
+T::ok('step-1 CSRF failure surfaces an error',
+    str_contains($render_panic(1, 'wrong-token'), $csrf_msg));
+T::ok('step-2 CSRF failure surfaces an error',
+    str_contains($render_panic(2, 'wrong-token'), $csrf_msg));
+T::ok('valid step-1 token advances without the error',
+    !str_contains($render_panic(1, $panic_csrf), $csrf_msg));
+$_POST = [];
+$_SERVER['REQUEST_METHOD'] = 'GET';
+$_SESSION = [];
+
 exit(T::done());

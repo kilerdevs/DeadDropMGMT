@@ -63,6 +63,11 @@ jobs:
       - name: Load schema into test database
         run: php tests/schema_loader.php
 
+      # setup.sql promises re-running is a harmless no-op (the upgrade path
+      # for existing installs) — prove it every build by loading twice.
+      - name: Reload schema (idempotency proof)
+        run: php tests/schema_loader.php
+
       - name: Run tests
         run: php tests/run_all.php
 
@@ -131,6 +136,30 @@ jobs:
             https://github.com/phpstan/phpstan/releases/download/2.2.9/phpstan.phar
           echo "42af2954326f2f6f0c39e12eb0e1229b9e037297e2caec9a5db11d44e4f6cce1  phpstan.phar" | sha256sum -c -
           php phpstan.phar analyse --no-progress
+
+  # Automated formatting gate: the tree must already conform to
+  # .php-cs-fixer.php — the fixer runs read-only (--dry-run) and any
+  # violation fails the build. Fix locally before pushing:
+  #   php php-cs-fixer.phar fix
+  # Tool is version- AND hash-pinned like PHPStan: a compromised release
+  # must not rewrite — or wave through — this repo's code.
+  style:
+    runs-on: ubuntu-latest
+    name: Code style
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: '8.3'
+
+      - name: Run PHP-CS-Fixer (dry-run)
+        run: |
+          curl -fsSL -o php-cs-fixer.phar \
+            https://github.com/PHP-CS-Fixer/PHP-CS-Fixer/releases/download/v3.95.25/php-cs-fixer.phar
+          echo "80cad475fc5112fdbfab8bd66e51665ed78c1b849b918dab81fb63b7a7003b41  php-cs-fixer.phar" | sha256sum -c -
+          php php-cs-fixer.phar fix --config=.php-cs-fixer.php --dry-run --diff --show-progress=none
 
   # Line coverage over includes/ (the security-critical library code).
   # Separate job: needs pcov + the dev-only Composer dependency (ADR-001 keeps
@@ -216,6 +245,68 @@ jobs:
           path: coverage-html
           retention-days: 14
 
+  # Mutation probe (REPORT-ONLY trial): tools/mutation_probe.php applies
+  # curated logic-weakening mutants to the security-critical library code and
+  # requires the suite to kill every one — line coverage alone cannot show
+  # that a guard is actually tested. Report-only while the MSI baseline
+  # proves stable across PHP/DB variance: the probe exits nonzero only when
+  # its own anchors break (maintenance signal), never on a survived mutant,
+  # and continue-on-error is belt-and-braces so a slow run cannot block the
+  # build. Gate (minimum MSI) only after the number earns it. Needs the DB
+  # because the killer suites are the DB-backed in-process ones; no coverage
+  # driver, no Composer tooling — the probe is dependency-free like the app.
+  mutation:
+    runs-on: ubuntu-latest
+    name: Mutation probe (report-only)
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      DDMGMT_DB_HOST: 127.0.0.1
+      DDMGMT_DB_PORT: '3306'
+      DDMGMT_DB_USER: root
+      DDMGMT_DB_PASS: root
+      DDMGMT_TEST_DB: deaddrops_test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: '8.3'
+          extensions: pdo_mysql, openssl, gd, fileinfo
+
+      - name: Prepare config
+        run: cp config.php.example config.php
+
+      - name: Load schema
+        run: php tests/schema_loader.php
+
+      - name: Run mutation probe
+        id: probe
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          php tools/mutation_probe.php | tee mutation.txt
+          grep -oP "MSI \K[\d.]+" mutation.txt | head -1 | \
+            { read msi; echo "### Mutation score: ${msi}% (report-only)" >> $GITHUB_STEP_SUMMARY; } || true
+
+      - name: Upload probe report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutation-report
+          path: mutation.txt
+          retention-days: 14
+
   # Docker isn't installed on the maintainer's machine — these jobs are the
   # only place the images and compose stacks actually get exercised.
   docker:
@@ -240,7 +331,7 @@ jobs:
       # Grype (via the Anchore actions, both SHA-pinned) replaces Trivy here:
       # same gate semantics, SBOMs from Syft in the same step family.
       - name: Scan Apache image (Grype)
-        uses: anchore/scan-action@1638637db639e0ade3258b51db49a9a137574c3e # v6
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
         with:
           image: deaddrop:apache
           severity-cutoff: high
@@ -249,7 +340,7 @@ jobs:
           output-format: table
 
       - name: Scan FPM image (Grype)
-        uses: anchore/scan-action@1638637db639e0ade3258b51db49a9a137574c3e # v6
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
         with:
           image: deaddrop:fpm
           severity-cutoff: high
@@ -260,17 +351,17 @@ jobs:
       # SBOM (CycloneDX) for both images — the inventory that makes the CVE
       # scans auditable and gives downstream deployers something to diff.
       - name: Generate Apache SBOM (CycloneDX)
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
           image: deaddrop:apache
-          output-format: cyclonedx-json
+          format: cyclonedx-json
           output-file: sbom-apache.cdx.json
 
       - name: Generate FPM SBOM (CycloneDX)
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
           image: deaddrop:fpm
-          output-format: cyclonedx-json
+          format: cyclonedx-json
           output-file: sbom-fpm.cdx.json
 
       - name: Upload SBOMs
@@ -297,7 +388,9 @@ jobs:
           docker compose up -d --build --quiet-pull
           timeout 90 bash -c 'until curl -fs http://127.0.0.1:2137/ >/dev/null; do sleep 2; done'
           curl -fs http://127.0.0.1:2137/ | grep -qi "<title>"
-          [ "$(curl -s http://127.0.0.1:2137/healthz.php)" = "ok" ]
+          hz_body="$(curl -s http://127.0.0.1:2137/healthz.php)"
+          [ "$hz_body" = "ok" ] || { echo "HEALTHZ MISMATCH:"; printf '%s\n' "$hz_body"; curl -si http://127.0.0.1:2137/healthz.php | head -12; exit 1; }
+          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:2137/cache/osm_tiles/0/0/0.png)" = 403 ]
           docker compose exec -T app php docker/e2e_journey.php
           docker compose down -v
 
@@ -309,6 +402,7 @@ jobs:
           [ "$(curl -s http://127.0.0.1:2137/healthz.php)" = "ok" ]
           [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:2137/includes/db.php)" = 403 ]
           [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:2137/config.php)" = 403 ]
+          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:2137/cache/osm_tiles/0/0/0.png)" = 403 ]
           docker compose -f docker-compose.nginx.yml down -v
 
       - name: Smoke test (Caddy + fpm)
@@ -319,6 +413,7 @@ jobs:
           [ "$(curl -s http://127.0.0.1:2137/healthz.php)" = "ok" ]
           [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:2137/includes/db.php)" = 403 ]
           [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:2137/config.php)" = 403 ]
+          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:2137/cache/osm_tiles/0/0/0.png)" = 403 ]
           docker compose -f docker-compose.caddy.yml down -v
 
       # DAST: OWASP ZAP baseline (spider + passive analysis) against a live

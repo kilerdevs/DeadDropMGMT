@@ -1,17 +1,8 @@
 <?php
 declare(strict_types=1);
-require_once dirname(__DIR__) . '/config.php';
-require_once dirname(__DIR__) . '/includes/auth.php';
 
-set_security_headers();
-start_secure_session();
-
-// POST-only: a state-changing GET lets any hostile page log the admin out
-// with a single <img> tag. GETs (and CSRF failures) redirect without touching
-// the session.
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && verify_csrf($_POST['csrf_token'] ?? '')) {
-    admin_logout();
-}
-
-header('Location: /admin/index.php');
-exit;
+// Legacy URL shim: the logout action moved behind the dispatcher
+// (admin/dispatch.php), which owns the security envelope. Posted forms keep
+// hitting this filename; method and body pass through untouched.
+$_GET['action'] = 'logout';
+require __DIR__ . '/dispatch.php';

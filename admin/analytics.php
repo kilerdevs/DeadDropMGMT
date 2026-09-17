@@ -1,11 +1,6 @@
 <?php
 declare(strict_types=1);
-require_once dirname(__DIR__) . '/config.php';
-require_once dirname(__DIR__) . '/includes/db.php';
-require_once dirname(__DIR__) . '/includes/auth.php';
-require_once dirname(__DIR__) . '/includes/analytics.php';
-require_once dirname(__DIR__) . '/includes/settings.php';
-require_once dirname(__DIR__) . '/includes/i18n.php';
+require_once dirname(__DIR__) . '/includes/kernel.php';
 
 start_secure_session();
 require_owner();
@@ -16,13 +11,13 @@ $period = $_GET['period'] ?? '7d';
 if (!in_array($period, ['24h', '7d', '30d', 'all'], true)) $period = '7d';
 
 if ($period === '24h') {
-    $date_cond = "AND created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)";
+    $date_cond = 'AND created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)';
 } elseif ($period === '7d') {
-    $date_cond = "AND created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
+    $date_cond = 'AND created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)';
 } elseif ($period === '30d') {
-    $date_cond = "AND created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)";
+    $date_cond = 'AND created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)';
 } else {
-    $date_cond = "";
+    $date_cond = '';
 }
 $date_cond_e = str_replace('created_at', 'e.created_at', $date_cond);
 
@@ -128,7 +123,7 @@ try {
          FROM order_events e
          WHERE e.event_type NOT LIKE 'admin_%' $date_cond_e
          ORDER BY e.created_at DESC
-         LIMIT " . (int)$per_page . " OFFSET " . (int)$offset
+         LIMIT " . (int)$per_page . ' OFFSET ' . (int)$offset
     )->fetchAll();
 
 } catch (Exception $e) {

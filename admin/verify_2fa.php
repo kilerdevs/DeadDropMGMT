@@ -1,12 +1,6 @@
 <?php
 declare(strict_types=1);
-require_once dirname(__DIR__) . '/config.php';
-require_once dirname(__DIR__) . '/includes/db.php';
-require_once dirname(__DIR__) . '/includes/auth.php';
-require_once dirname(__DIR__) . '/includes/crypto.php';
-require_once dirname(__DIR__) . '/includes/totp.php';
-require_once dirname(__DIR__) . '/includes/settings.php';
-require_once dirname(__DIR__) . '/includes/i18n.php';
+require_once dirname(__DIR__) . '/includes/kernel.php';
 
 set_security_headers(false);
 start_secure_session();

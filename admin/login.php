@@ -1,8 +1,6 @@
 <?php
 declare(strict_types=1);
-require_once dirname(__DIR__) . '/config.php';
-require_once dirname(__DIR__) . '/includes/auth.php';
-require_once dirname(__DIR__) . '/includes/i18n.php';
+require_once dirname(__DIR__) . '/includes/kernel.php';
 set_security_headers(false);
 start_secure_session();
 
@@ -18,7 +16,6 @@ if (!verify_csrf($_POST['csrf_token'] ?? '')) {
 }
 
 // ── Rate limit failed attempts (IP-based, configurable in Ustawienia) ────────
-require_once dirname(__DIR__) . '/includes/settings.php';
 $rl = rl_status('admin_login');
 if ($rl['blocked']) {
     $_SESSION['login_error'] = t('admin.login.error.rate_limited', ['min' => (int)ceil($rl['remaining'] / 60)]);

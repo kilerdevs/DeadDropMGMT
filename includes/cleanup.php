@@ -3,6 +3,7 @@ declare(strict_types=1);
 require_once dirname(__DIR__) . '/includes/db.php';
 require_once dirname(__DIR__) . '/includes/order_state.php';
 require_once dirname(__DIR__) . '/includes/proxy.php';
+require_once dirname(__DIR__) . '/includes/settings.php';
 
 // Core deletion logic — single source of truth used by both pseudo-cron and CLI cron.
 // The actual work lives in order_state.php: per-order transactions with row
@@ -10,7 +11,26 @@ require_once dirname(__DIR__) . '/includes/proxy.php';
 // idempotent and safe to run concurrently with receiving, revealing or
 // another cleanup pass (see CleanupTest / StateTransitionTest).
 function do_cleanup(): int {
+    _purge_stale_rate_limits();
+    // Truncation anchor for the audit log (best-effort, never throws):
+    // covers both the real cron and the pseudo-cron path.
+    log_checkpoint_write();
     return cleanup_expired_orders();
+}
+
+// rate_limits rows are one-per-IP×scope and only ever reset on window expiry
+// or deleted on success — never swept. On a busy site (IPv6 rotation) the
+// table bloats forever, so each cleanup pass drops windows older than twice
+// the configured window. 2× margin: a row dropped a little early merely
+// grants that IP a fresh budget, which fails open by at most one window.
+function _purge_stale_rate_limits(): void {
+    try {
+        $cutoff = gmdate('Y-m-d H:i:s', time() - 2 * rl_window_seconds());
+        get_db()->prepare('DELETE FROM rate_limits WHERE window_start < ?')
+            ->execute([$cutoff]);
+    } catch (Throwable $e) {
+        log_err('Rate limit purge failed: ' . $e->getMessage());
+    }
 }
 
 // Pseudo-cron wrapper — throttled to at most once per hour, called on each page visit.

@@ -1,12 +1,6 @@
 <?php
 declare(strict_types=1);
-require_once dirname(__DIR__) . '/config.php';
-require_once dirname(__DIR__) . '/includes/db.php';
-require_once dirname(__DIR__) . '/includes/auth.php';
-require_once dirname(__DIR__) . '/includes/crypto.php';
-require_once dirname(__DIR__) . '/includes/settings.php';
-require_once dirname(__DIR__) . '/includes/audit.php';
-require_once dirname(__DIR__) . '/includes/i18n.php';
+require_once dirname(__DIR__) . '/includes/kernel.php';
 
 set_security_headers(true);
 start_secure_session();
@@ -63,7 +57,7 @@ if ($raw_lat !== '' && $raw_lng !== '' && is_numeric($raw_lat) && is_numeric($ra
 }
 
 try {
-    $token   = bin2hex(random_bytes(8));
+    $token   = generate_order_token();
     $enc     = encrypt_location_data([
         'text'         => $location,
         'lat'          => $lat,
@@ -86,18 +80,25 @@ try {
         $enc['ciphertext'],
         $enc['iv'],
         $notes !== '' ? $notes : null,
+        // Config-based fallback owner has user_id 0 with no users row, and
+        // the FK rejects 0 — so NULL is load-bearing here, not a lost trail:
+        // audit() below records the actor's username + IP in audit_log.
         current_user_id() ?: null,
     ]);
 
     $order_id = (int)$db->lastInsertId();
     audit('order_create', $order_id, $token);
 
-    // Handle photo uploads
+    // Handle photo uploads — capped per request (see max_photos_per_order):
+    // extras are reported, never silently dropped and never processed.
     $photo_errors = [];
+    $count = 0;
+    $limit = max_photos_per_order();
+    $files = ['name' => []];
     if (!empty($_FILES['photos']['name'][0])) {
         $files = $_FILES['photos'];
         $count = count($files['name']);
-        for ($i = 0; $i < $count; $i++) {
+        for ($i = 0; $i < $count && $i < $limit; $i++) {
             $entry = [
                 'name'     => $files['name'][$i],
                 'type'     => $files['type'][$i],
@@ -119,7 +120,15 @@ try {
 
     $msg = $generated_password
         ? t('admin.new_order.flash.created_with_pw', ['token' => $token, 'password' => $password])
-        : t('admin.new_order.flash.created', ['token' => $token]);    if (!empty($photo_errors)) {
+        : t('admin.new_order.flash.created', ['token' => $token]);
+    if ($count > $limit) {
+        // Skipped names join the same error list: the flash names every file
+        // that was not saved, whether rejected or over the cap.
+        for ($i = $limit; $i < $count; $i++) {
+            $photo_errors[] = (string)$files['name'][$i];
+        }
+    }
+    if (!empty($photo_errors)) {
         $msg .= ' | ' . t('admin.new_order.flash.upload_errors', ['files' => implode(', ', $photo_errors)]);
     }
     $_SESSION['flash']    = $msg;

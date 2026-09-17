@@ -1,7 +1,6 @@
 <?php
 declare(strict_types=1);
-require_once dirname(__DIR__) . '/includes/auth.php';
-require_once dirname(__DIR__) . '/includes/proxy.php';
+require_once dirname(__DIR__) . '/includes/kernel.php';
 require_admin();
 
 // Release the session lock immediately — a slow proxy chain must not lock
@@ -35,7 +34,7 @@ if (is_file($cacheFile) && (time() - filemtime($cacheFile)) < $cacheTtl) {
 $subdomain = ['a', 'b', 'c'][random_int(0, 2)];
 $url = "https://$subdomain.tile.openstreetmap.org/$z/$x/$y.png";
 
-$data = osm_fetch($url);
+$data = osm_fetch($url, 1048576); // dense-vector tiles stay well under 1 MiB
 
 // Record which proxy served the request (re-opens session briefly).
 osm_last_via_flush();

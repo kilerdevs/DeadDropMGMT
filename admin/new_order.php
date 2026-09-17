@@ -1,10 +1,6 @@
 <?php
 declare(strict_types=1);
-require_once dirname(__DIR__) . '/config.php';
-require_once dirname(__DIR__) . '/includes/db.php';
-require_once dirname(__DIR__) . '/includes/auth.php';
-require_once dirname(__DIR__) . '/includes/settings.php';
-require_once dirname(__DIR__) . '/includes/i18n.php';
+require_once dirname(__DIR__) . '/includes/kernel.php';
 
 start_secure_session();
 require_admin();
@@ -94,7 +90,7 @@ $csrf = generate_csrf();
                 <div class="form-group">
                     <label for="photos">
                         <?= t('public.index.reveal.photos') ?>
-                        <span class="hint">JPEG / PNG / WebP / GIF · <?= t('admin.new_order.photos_hint', ['mb' => (int)get_setting('max_photo_mb', '12')]) ?></span>
+                        <span class="hint">JPEG / PNG / WebP / GIF · <?= t('admin.new_order.photos_hint', ['mb' => (int)get_setting('max_photo_mb', '2')]) ?></span>
                     </label>
                     <input type="file" id="photos" name="photos[]" multiple
                            accept="image/jpeg,image/png,image/webp,image/gif">

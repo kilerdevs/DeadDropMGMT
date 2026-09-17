@@ -30,6 +30,21 @@ $_SERVER['HTTPS'] = 'on';
 $nonce_pub_https = set_security_headers();
 T::eq('public nonce decodes to 18 bytes', 18, strlen(base64_decode($nonce_pub_https, true) ?: ''));
 
+// The header list is pure (header() is a no-op under CLI), so both profiles
+// are pinned here instead of over HTTP.
+$pub_list = _security_headers_list(false, 'testnonce');
+$adm_list = _security_headers_list(true, 'testnonce');
+T::ok('public profile sends no-referrer', in_array('Referrer-Policy: no-referrer', $pub_list, true));
+T::ok('admin profile sends no-referrer', in_array('Referrer-Policy: no-referrer', $adm_list, true));
+foreach (['public' => $pub_list, 'admin' => $adm_list] as $prof => $list) {
+    $csp = implode("\n", $list);
+    T::ok("$prof CSP carries the request nonce", str_contains($csp, "'nonce-testnonce'"));
+    T::ok("$prof CSP keeps frame-ancestors none", str_contains($csp, "frame-ancestors 'none'"));
+    T::ok("$prof CSP keeps object-src none", str_contains($csp, "object-src 'none'"));
+}
+T::ok('public CSP keeps OSM frame-src',
+    str_contains(implode("\n", $pub_list), 'frame-src https://www.openstreetmap.org'));
+
 putenv('DDMGMT_TRUST_PROXY=1');
 $origRemote = $_SERVER['REMOTE_ADDR'] ?? null;
 $_SERVER['REMOTE_ADDR'] = '127.0.0.1';
@@ -78,6 +93,12 @@ T::ok('nonces are per-call random', $nonce_admin !== $nonce_pub_https);
 $nonce_plain = set_security_headers();
 T::ok('plain-http nonce generated', strlen(base64_decode($nonce_plain, true) ?: '') === 18);
 
+// ── Session mechanism hardening (explicit, not php.ini defaults) ────────────
+start_secure_session();
+T::eq('strict mode refuses uninitialized SIDs', '1', ini_get('session.use_strict_mode'));
+T::eq('cookies carry the SID exclusively', '1', ini_get('session.use_only_cookies'));
+T::eq('transparent SID off', '0', ini_get('session.use_trans_sid'));
+
 // ── Guards: conditions reachable before their exit() redirects ───────────────
 $_SESSION = [];
 start_secure_session();
@@ -91,12 +112,16 @@ T::ok('owner passes require_admin', is_admin_logged_in());
 require_owner(); // owner passes the owner check too
 T::ok('owner passes require_owner', true);
 
-// Courier without TOTP on an ALLOWED script name gets through the gate check
+// Courier without TOTP on a 2fa-exempt ROUTE gets through the gate check
+// (the flag 2fa.php and exempt dispatch routes set — script basenames no
+// longer gate anything; the gated negative is exit-covered over HTTP by
+// DispatchTest's 'pending courier gated from actions').
 $_SESSION['user_role'] = 'courier';
 $_SESSION['totp_enabled'] = false;
-$_SERVER['SCRIPT_NAME'] = '/admin/2fa.php';
+$GLOBALS['DDMGMT_ROUTE_2FA_EXEMPT'] = true;
 require_admin();
-T::ok('courier pre-enrollment allowed on 2fa.php itself', true);
+T::ok('courier pre-enrollment allowed on exempt route', true);
+unset($GLOBALS['DDMGMT_ROUTE_2FA_EXEMPT']);
 
 // Non-owner would be redirected by require_owner (exit-covered over HTTP);
 // the ownership predicate itself stays unit-checkable:
@@ -128,6 +153,56 @@ with_table_hidden('users', static function (): void {
     T::eq('wrong fallback password fails', 'fail', admin_login('fallback_owner', 'nope'));
     T::eq('unknown user fails without users table', 'fail', admin_login('nobody', 'nope'));
 });
+$_SESSION = [];
+
+// The config-owner fallback answers ONLY for a genuinely absent users table
+// (fresh install). Any other DB failure — connection lost, server gone —
+// fails closed even with correct config credentials, so a mid-operation
+// outage can never downgrade a TOTP-enrolled owner to password-only login.
+T::ok('missing-table message counts as absent table',
+    _db_table_missing(new PDOException("SQLSTATE[42S02]: Base table or view not found: 1146 Table 'deaddrops_test.users' doesn't exist")));
+T::ok('connection failure is not an absent table',
+    !_db_table_missing(new PDOException('SQLSTATE[HY000] [2002] Connection refused')));
+T::ok('syntax failure is not an absent table',
+    !_db_table_missing(new PDOException('SQLSTATE[42000]: Syntax error or access violation')));
+
+// Sliding inactivity: an authenticated request refreshes the session clock.
+$_SESSION = [];
+start_secure_session();
+$_SESSION['user_id'] = 7;
+$_SESSION['user_role'] = 'owner';
+$_SESSION['user_name'] = 'sliding-owner';
+$_SESSION['login_time'] = time() - 100;
+require_admin();
+T::ok('require_admin refreshes login_time on activity', $_SESSION['login_time'] >= time() - 5);
+$_SESSION = [];
+
+// A non-missing-table DB error fails closed even with correct config
+// credentials: the users table is swapped for a VIEW that breaks only
+// afterwards (MariaDB validates the SELECT at CREATE VIEW time, so the
+// view must start valid). Reading through it then throws HY000 — not
+// 42S02 — and the fresh-install fallback must answer 'fail', never 'ok'.
+// The finally below is deliberately bulletproof: an earlier version with a
+// bare DROP VIEW masked the restore and orphaned the renamed table.
+$db->exec('RENAME TABLE users TO users_scope_bak');
+try {
+    $db->exec('CREATE VIEW users AS SELECT * FROM users_scope_bak');
+    $db->exec('RENAME TABLE users_scope_bak TO users_scope_bak2');
+    T::eq('broken-view login fails closed', 'fail', admin_login('fallback_owner', 'fallback-pass-1'));
+} finally {
+    try {
+        $db->exec('DROP VIEW IF EXISTS users');
+    } catch (Throwable) {
+    }
+    foreach (['users_scope_bak2', 'users_scope_bak'] as $bak) {
+        try {
+            $db->exec("RENAME TABLE `$bak` TO users");
+        } catch (Throwable) {
+        }
+    }
+}
+T::ok('users table restored after scope probe',
+    $db->query("SHOW TABLES LIKE 'users'")->fetch() !== false);
 $_SESSION = [];
 
 // ── Rate limiter: disabled short-circuit + fail-closed branches ─────────────
@@ -163,6 +238,11 @@ with_table_hidden('rate_limits', function (): void {
 });
 
 // ── Session failure buckets ──────────────────────────────────────────────────
+// The bucket window follows the configured IP-limiter window, so pin it:
+// the assertions below assume the 15-minute default, and the shared test DB
+// may hold leftovers from limiter-lockout suites.
+$fc_prev_window = get_setting('rate_limit_window_min', '15');
+set_setting('rate_limit_window_min', '15');
 bucket_clear('b1');
 bucket_fail('b1'); // fresh window starts at 1
 bucket_fail('b1'); // same window increments
@@ -194,6 +274,14 @@ T::eq('stale bucket has no remaining time', 0, bucket_remaining('b5'));
 
 bucket_clear('b1');
 T::eq('clear empties the bucket', 0, bucket_status('b1')['count']);
+
+// The bucket window tracks the limiter setting instead of a constant.
+set_setting('rate_limit_window_min', '30');
+$_SESSION['pw_fail']['b6'] = ['n' => 1, 'ts' => time()];
+T::ok('bucket window follows the configured window', bucket_remaining('b6') > 1700);
+bucket_clear('b6');
+set_setting('rate_limit_window_min', '15');
+set_setting('rate_limit_window_min', $fc_prev_window);
 
 // ── Enrollment secrets ───────────────────────────────────────────────────────
 $enr = enrollment_secret_generate();

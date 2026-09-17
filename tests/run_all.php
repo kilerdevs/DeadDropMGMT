@@ -16,14 +16,14 @@ $failed = [];
 foreach ($files as $file) {
     $cmd = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($file);
     $code = 0;
-    echo "=== " . basename($file) . " ===\n";
+    echo '=== ' . basename($file) . " ===\n";
     passthru($cmd, $code);
     if ($code !== 0) {
         $failed[] = basename($file);
     }
 }
 
-echo "\n" . count($files) . " suite(s), " . count($failed) . " failed";
+echo "\n" . count($files) . ' suite(s), ' . count($failed) . ' failed';
 if ($failed) {
     echo ': ' . implode(', ', $failed);
 }

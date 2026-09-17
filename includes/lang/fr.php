@@ -1,4 +1,4 @@
-<?php
+<?php declare(strict_types=1);
 return [
     'common.expired' => 'Expiré',
 
@@ -204,7 +204,7 @@ return [
     'admin.proxies.flash.invalid_url'     => 'Adresse de proxy invalide.',
     'admin.proxies.flash.duplicate'       => 'Ce proxy est déjà dans le pool.',
     'admin.proxies.flash.save_failed'     => "Échec de l'enregistrement.",
-    'admin.proxies.flash.discover_failed' => "Échec de la découverte - listes de proxys inaccessibles.",
+    'admin.proxies.flash.discover_failed' => 'Échec de la découverte - listes de proxys inaccessibles.',
     'admin.proxies.js.added'        => 'Proxy ajouté.',
     'admin.proxies.js.discovering'  => 'Test en cours...',
     'admin.proxies.js.discovered'   => '{n} proxys fonctionnels ajoutés.',
@@ -414,10 +414,10 @@ return [
     'admin.settings.label.default_lang'            => 'Langue par défaut du site public',
     'admin.settings.label.order_ttl_hours'         => 'Durée de vie de la commande après livraison (heures)',
     'admin.settings.label.extend_hours_options'    => 'Options de prolongation (heures, séparées par des virgules)',
-    'admin.settings.label.rate_limit_enabled'      => "Activer la limitation des tentatives par IP",
+    'admin.settings.label.rate_limit_enabled'      => 'Activer la limitation des tentatives par IP',
     'admin.settings.label.rate_limit_max'          => 'Max. tentatives échouées avant blocage',
     'admin.settings.label.rate_limit_window_min'   => 'Fenêtre de blocage (minutes)',
-    'admin.settings.label.admin_session_hours'     => "Durée de la session admin (heures)",
+    'admin.settings.label.admin_session_hours'     => 'Durée de la session admin (heures)',
     'admin.settings.label.max_photo_mb'            => 'Taille max. des photos (Mo)',
     'admin.settings.label.compliance_note_enabled' => 'Afficher la note de conformité sur les pages publiques',
     'admin.settings.label.allow_status_lookup'     => 'Autoriser la vérification du statut sans mot de passe',

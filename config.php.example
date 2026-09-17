@@ -46,7 +46,10 @@ require_once __DIR__ . '/includes/logger.php';
 
 // ── Session ───────────────────────────────────────────────────────────────────
 define('SESSION_NAME',     'ddmgmt');
-define('SESSION_LIFETIME', 3600); // seconds
+// NOTE: there is intentionally no lifetime constant here — the admin session
+// window is the admin_session_hours setting (sliding inactivity), and the
+// cookie is session-scoped by design. A SESSION_LIFETIME line in older
+// copies of this file is a no-op and can be deleted.
 
 // ── Rate limiting ─────────────────────────────────────────────────────────────
 define('RATE_LIMIT_MAX',    10);

@@ -1,9 +1,6 @@
 <?php
 declare(strict_types=1);
-require_once dirname(__DIR__) . '/config.php';
-require_once dirname(__DIR__) . '/includes/db.php';
-require_once dirname(__DIR__) . '/includes/auth.php';
-require_once dirname(__DIR__) . '/includes/settings.php';
+require_once dirname(__DIR__) . '/includes/kernel.php';
 
 start_secure_session();
 require_owner();
@@ -26,9 +23,21 @@ header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store');
 
 [$valid, $checked, $broken, $reason] = verify_log_chain();
+try {
+    $cont = verify_log_continuity();
+} catch (Throwable $e) {
+    $cont = ['status' => 'error', 'detail' => 'continuity check failed'];
+}
 echo json_encode([
     'valid'       => $valid,
     'checked'     => $checked,
     'broken_line' => $broken,
     'reason'      => $reason,
+    // Truncation verdict against the newest DB checkpoint (extends /
+    // truncated / rotated / none / error) — chain validity above only
+    // covers modification, never pure tail deletion.
+    'continuity'            => $cont['status'] ?? 'error',
+    'continuity_detail'     => $cont['detail'] ?? '',
+    'continuity_tip_seq'    => $cont['tip_seq'] ?? null,
+    'continuity_anchor_seq' => $cont['checkpoint_seq'] ?? null,
 ], JSON_UNESCAPED_UNICODE);

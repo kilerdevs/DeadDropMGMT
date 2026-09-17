@@ -189,6 +189,175 @@ file_put_contents($live, $keep); // restore for later suites
 T::ok('writer recovers after repair',
       app_log('info', 'logger_test_recovered', ['msg' => 'again']) === true);
 
+// ── Sequence numbers ────────────────────────────────────────────────────────
+T::eq('sequenced tip increments', 8, _log_compute_seq('abc', 7, 0, 0));
+T::eq('legacy tip takes position after count', 6, _log_compute_seq('abc', 0, 5, 0));
+T::eq('fresh file continues rotation', 11, _log_compute_seq(APP_LOG_GENESIS, 0, 0, 10));
+T::eq('fresh file without rotation starts at 1', 1, _log_compute_seq(APP_LOG_GENESIS, 0, 0, 0));
+
+$seqDir = $tmpDir . '/seq';
+mkdir($seqDir, 0700, true);
+$leg = $seqDir . '/legacy.log';
+write_chain($leg, [$r1, $r2]); // r1/r2 predate seqs
+$fhL = fopen($leg, 'c+');
+[$lh, $ls] = _log_tail_tip($fhL);
+fclose($fhL);
+T::eq('legacy tip hash read', $r2['hash'], $lh);
+T::eq('legacy tip seq zero', 0, $ls);
+$fhC = fopen($leg, 'r');
+T::eq('legacy entries counted', 2, _log_count_entries($fhC));
+fclose($fhC);
+
+$sA = mk_chain_rec($genesis, ['ts' => '2026-08-26T00:00:05.000Z', 'level' => 'info', 'event' => 't_seq', 'msg' => 's', 'seq' => 41]);
+$seqP = $seqDir . '/seq.log';
+write_chain($seqP, [$sA]);
+$fhS = fopen($seqP, 'c+');
+T::eq('sequenced tip read', [$sA['hash'], 41], _log_tail_tip($fhS));
+fclose($fhS);
+$emptyP = $seqDir . '/empty.log';
+file_put_contents($emptyP, '');
+$fhE = fopen($emptyP, 'c+');
+T::eq('empty tip is genesis', [APP_LOG_GENESIS, 0], _log_tail_tip($fhE));
+fclose($fhE);
+file_put_contents($emptyP, "zzz\n");
+$fhG = fopen($emptyP, 'c+');
+T::eq('garbage-only tip empty', ['', 0], _log_tail_tip($fhG));
+fclose($fhG);
+$rotP = $seqDir . '/app.log.1';
+write_chain($rotP, [$sA]);
+T::eq('rotation tip continued', 41, _log_rot_tip_seq($rotP));
+T::eq('missing rotation reads zero', 0, _log_rot_tip_seq($seqDir . '/nope.1'));
+
+// ── Truncation continuity ───────────────────────────────────────────────────
+// Pure tail deletion leaves a shorter chain that still verifies — the
+// checkpoint comparison must catch what verify_log_chain() cannot.
+$db->exec('DELETE FROM log_checkpoints');
+$mkS = static function (string $prev, int $seq, string $msg): array {
+    return mk_chain_rec($prev, ['ts' => '2026-08-26T00:00:0' . $seq . '.000Z', 'level' => 'info',
+        'event' => 't_cont', 'msg' => $msg, 'seq' => $seq]);
+};
+$c1 = $mkS($genesis, 1, 'one');
+$c2 = $mkS($c1['hash'], 2, 'two');
+$c3 = $mkS($c2['hash'], 3, 'three');
+$c4 = $mkS($c3['hash'], 4, 'four');
+$c5 = $mkS($c4['hash'], 5, 'five');
+$cp = $tmpDir . '/cont.log';
+write_chain($cp, [$c1, $c2, $c3, $c4]);
+T::eq('no anchor yet', 'none', verify_log_continuity($cp)['status']);
+$db->prepare('INSERT INTO log_checkpoints (tip_hash, tip_seq) VALUES (?, ?)')->execute([$c4['hash'], 4]);
+T::eq('tip at anchor extends', 'extends', verify_log_continuity($cp)['status']);
+write_chain($cp, [$c1, $c2, $c3, $c4, $c5]);
+T::eq('tip past anchor extends', 'extends', verify_log_continuity($cp)['status']);
+// Lop the last two lines: shorter chain, still internally valid.
+$lines = file($cp);
+file_put_contents($cp, implode('', array_slice($lines, 0, 2)));
+[$vAfterCut] = verify_log_chain($cp);
+$r = verify_log_continuity($cp);
+T::ok('cut chain still verifies (the gap being closed)', $vAfterCut === true);
+T::eq('deleted tail reports truncated', 'truncated', $r['status']);
+// Anchor older than all surviving history: legitimate rotation, not an attack.
+$old = $tmpDir . '/old.log';
+$o1 = $mkS($genesis, 10, 'ten');
+$o2 = $mkS($o1['hash'], 11, 'eleven');
+write_chain($old, [$o1, $o2]);
+$db->exec('DELETE FROM log_checkpoints');
+$db->prepare('INSERT INTO log_checkpoints (tip_hash, tip_seq) VALUES (?, ?)')->execute([$c4['hash'], 4]);
+T::eq('aged-out anchor reports rotated', 'rotated', verify_log_continuity($old)['status']);
+// Checkpoint write-through anchors the live tip (best-effort, never throws).
+// Table cleared first: the assertion must see THIS write's row, not a
+// leftover anchor (a stale row would also let a neutered writer pass).
+$db->exec('DELETE FROM log_checkpoints');
+log_info('logger_test_checkpoint_probe', ['msg' => 'anchor me']);
+log_checkpoint_write();
+$row = $db->query('SELECT tip_hash, tip_seq FROM log_checkpoints ORDER BY id DESC LIMIT 1')->fetch();
+T::ok('checkpoint anchors the live tip',
+    $row !== false && preg_match('/^[0-9a-f]{64}$/', (string)$row['tip_hash']) === 1 && (int)$row['tip_seq'] >= 1);
+
+// Failure containment: hidden table degrades to silence ('none' later),
+// never to an exception out of cleanup or verification.
+$db->exec('RENAME TABLE log_checkpoints TO log_checkpoints_lg_bak');
+try {
+    log_checkpoint_write();
+    T::ok('checkpoint write survives missing table', true);
+    T::eq('continuity without store reports none',
+        'none', verify_log_continuity($cp)['status']);
+    // A broken VIEW throws a non-missing-table error (HY000): that surfaces
+    // as 'error', distinct from the pre-migration 'none'. The view must be
+    // created valid and broken afterwards — MariaDB rejects invalid views
+    // at CREATE time.
+    $db->exec('CREATE VIEW log_checkpoints AS SELECT * FROM log_checkpoints_lg_bak');
+    $db->exec('RENAME TABLE log_checkpoints_lg_bak TO log_checkpoints_lg_bak2');
+    T::eq('continuity reports store errors distinctly',
+        'error', verify_log_continuity($cp)['status']);
+} finally {
+    try {
+        $db->exec('DROP VIEW IF EXISTS log_checkpoints');
+    } catch (Throwable) {
+    }
+    foreach (['log_checkpoints_lg_bak2', 'log_checkpoints_lg_bak'] as $bak) {
+        try {
+            $db->exec("RENAME TABLE `$bak` TO log_checkpoints");
+        } catch (Throwable) {
+        }
+    }
+}
+T::ok('checkpoints table restored after failure probe',
+    $db->query("SHOW TABLES LIKE 'log_checkpoints'")->fetch() !== false);
+
+// Rewound history: the anchor is present but the tip predates it (an older
+// copy swapped in). A correctly chained later entry with a lower seq proves
+// the file does not extend past the anchor.
+$s6rew = mk_chain_rec($c4['hash'], ['ts' => '2026-08-26T00:00:06.000Z', 'level' => 'info',
+    'event' => 't_cont', 'msg' => 'rewound', 'seq' => 2]);
+write_chain($cp, [$c1, $c2, $c3, $c4, $s6rew]);
+$db->prepare('INSERT INTO log_checkpoints (tip_hash, tip_seq) VALUES (?, ?)')->execute([$c4['hash'], 4]);
+T::eq('rewound tip reports truncated', 'truncated', verify_log_continuity($cp)['status']);
+$db->exec('DELETE FROM log_checkpoints');
+
+// Anchor-tip reader, every no-anchor branch on scratch paths.
+T::ok('tip reader rejects missing file', _log_checkpoint_tip($tmpDir . '/no-such.log') === null);
+$tipEmpty = $tmpDir . '/tip-empty.log';
+file_put_contents($tipEmpty, '');
+T::ok('tip reader rejects empty file', _log_checkpoint_tip($tipEmpty) === null);
+$tipGarbage = $tmpDir . '/tip-garbage.log';
+file_put_contents($tipGarbage, "not json\n");
+T::ok('tip reader rejects broken tail', _log_checkpoint_tip($tipGarbage) === null);
+$tipGood = $tmpDir . '/tip-good.log';
+$g1 = mk_chain_rec($genesis, ['ts' => '2026-08-26T00:00:07.000Z', 'level' => 'info',
+    'event' => 't_tip', 'msg' => 'g', 'seq' => 9]);
+write_chain($tipGood, [$g1]);
+T::eq('tip reader returns hash and seq', [$g1['hash'], 9], _log_checkpoint_tip($tipGood));
+$db->exec('DELETE FROM log_checkpoints');
+
+// ── Rotation racing an in-progress append ───────────────────────────────────
+// Deterministic replay of the interleaving: A reads the tip under lock, B
+// rotates underneath, A completes into the renamed inode, B starts fresh.
+// Both generations must verify — the late entry lands in the old file with
+// intact linkage (misplaced, never corrupted).
+$ra = $tmpDir . '/race.log';
+write_chain($ra, [$c1, $c2]);
+$fhA = fopen($ra, 'c+');
+flock($fhA, LOCK_EX);
+[$tipH] = _log_tail_tip($fhA); // A computed prev before the rotation
+if (!@rename($ra, $ra . '.1')) {
+    // Windows cannot rename an open file — nothing to replay here.
+    flock($fhA, LOCK_UN);
+    fclose($fhA);
+    T::ok('race replay skipped (open-file rename unsupported)', true);
+} else {
+    $late = mk_chain_rec($tipH, ['ts' => '2026-08-26T00:00:09.000Z', 'level' => 'info',
+        'event' => 't_race', 'msg' => 'late', 'seq' => 3]);
+    fwrite($fhA, json_encode($late, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n");
+    fflush($fhA);
+    flock($fhA, LOCK_UN);
+    fclose($fhA);
+    $fresh = mk_chain_rec(APP_LOG_GENESIS, ['ts' => '2026-08-26T00:00:10.000Z', 'level' => 'info',
+        'event' => 't_fresh', 'msg' => 'new', 'seq' => 4]);
+    write_chain($ra, [$fresh]); // B starts the new generation continuing the seq
+    T::eq('old generation valid after raced append', [true, 3, null, null], verify_log_chain($ra . '.1'));
+    T::eq('new generation valid', [true, 1, null, null], verify_log_chain($ra));
+}
+
 // ── Audit trail ───────────────────────────────────────────────────────────────
 $_SESSION = [];
 start_secure_session();

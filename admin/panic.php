@@ -1,12 +1,6 @@
 <?php
 declare(strict_types=1);
-require_once dirname(__DIR__) . '/config.php';
-require_once dirname(__DIR__) . '/includes/db.php';
-require_once dirname(__DIR__) . '/includes/auth.php';
-require_once dirname(__DIR__) . '/includes/settings.php';
-require_once dirname(__DIR__) . '/includes/audit.php';
-require_once dirname(__DIR__) . '/includes/wipe.php';
-require_once dirname(__DIR__) . '/includes/i18n.php';
+require_once dirname(__DIR__) . '/includes/kernel.php';
 
 start_secure_session();
 require_owner();
@@ -35,7 +29,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $step === 3) {
 }
 
 if ($step === 2 && !$done) {
-    if (!verify_csrf($_POST['csrf_token'] ?? '')) { $step = 0; }
+    // A stale/failed token here used to drop back to step 1 silently, which
+    // reads as a broken button on a destructive flow — surface it instead.
+    if (!verify_csrf($_POST['csrf_token'] ?? '')) {
+        $error = t('admin.common.invalid_csrf');
+        $step = 0;
+    }
     else {
         try {
             $db = get_db();
@@ -46,7 +45,10 @@ if ($step === 2 && !$done) {
     }
 }
 
-if ($step === 1 && !verify_csrf($_POST['csrf_token'] ?? '')) { $step = 0; }
+if ($step === 1 && !verify_csrf($_POST['csrf_token'] ?? '')) {
+    $error = t('admin.common.invalid_csrf');
+    $step = 0;
+}
 
 $csrf = generate_csrf();
 ?>
@@ -121,6 +123,7 @@ $csrf = generate_csrf();
     <?php elseif ($step === 1): ?>
     <!-- ── Step 2/3 ──────────────────────────────────────────────────────── -->
     <div class="panic-wrap">
+        <?php if ($error): ?><div class="flash"><?= $error ?></div><?php endif; ?>
         <div class="panic-step"><?= t('admin.panic.step2.label') ?></div>
         <div class="panic-heading"><?= t('admin.panic.step2.heading') ?></div>
         <div class="panic-body">
@@ -139,6 +142,7 @@ $csrf = generate_csrf();
     <?php else: ?>
     <!-- ── Step 1/3 ──────────────────────────────────────────────────────── -->
     <div class="panic-wrap">
+        <?php if ($error): ?><div class="flash"><?= $error ?></div><?php endif; ?>
         <div class="panic-step"><?= t('admin.panic.step1.label') ?></div>
         <div class="panic-heading"><?= t('admin.sidebar.panic') ?></div>
         <div class="panic-body">

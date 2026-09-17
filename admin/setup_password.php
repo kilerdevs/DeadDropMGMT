@@ -1,10 +1,6 @@
 <?php
 declare(strict_types=1);
-require_once dirname(__DIR__) . '/config.php';
-require_once dirname(__DIR__) . '/includes/db.php';
-require_once dirname(__DIR__) . '/includes/auth.php';
-require_once dirname(__DIR__) . '/includes/audit.php';
-require_once dirname(__DIR__) . '/includes/i18n.php';
+require_once dirname(__DIR__) . '/includes/kernel.php';
 
 set_security_headers(false);
 start_secure_session();
@@ -27,7 +23,18 @@ $error = '';
 // Deliberately NOT consumed on render: a failed attempt (too short,
 // mismatch, bad CSRF) must re-show the code — this screen holds the only
 // copy the creator will ever see. Consumed on the terminal paths below.
-$enrollment_note = (string)($_SESSION['enrollment_flash'] ?? '');
+// Sealed at rest (see bootstrap.php); a bare string is still honored so a
+// setup started before the seal deploy completes instead of bricking.
+$flash_raw = $_SESSION['enrollment_flash'] ?? '';
+if (is_array($flash_raw)) {
+    $flash_dec = decrypt_secret(
+        (string)($flash_raw['ciphertext'] ?? ''),
+        (string)($flash_raw['iv'] ?? '')
+    );
+    $enrollment_note = is_string($flash_dec) ? $flash_dec : '';
+} else {
+    $enrollment_note = (string)$flash_raw;
+}
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!verify_csrf($_POST['csrf_token'] ?? '')) {

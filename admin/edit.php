@@ -1,12 +1,6 @@
 <?php
 declare(strict_types=1);
-require_once dirname(__DIR__) . '/config.php';
-require_once dirname(__DIR__) . '/includes/db.php';
-require_once dirname(__DIR__) . '/includes/auth.php';
-require_once dirname(__DIR__) . '/includes/crypto.php';
-require_once dirname(__DIR__) . '/includes/settings.php';
-require_once dirname(__DIR__) . '/includes/audit.php';
-require_once dirname(__DIR__) . '/includes/i18n.php';
+require_once dirname(__DIR__) . '/includes/kernel.php';
 
 start_secure_session();
 require_admin();
@@ -159,13 +153,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     ]);
                 }
 
-                // Handle new photo uploads
+                // Handle new photo uploads — same per-request cap as create.php.
                 if (!empty($_FILES['photos']['name'][0])) {
                     $db    = get_db();
                     $files = $_FILES['photos'];
                     $count = count($files['name']);
+                    $limit = max_photos_per_order();
                     $photo_errors = [];
-                    for ($i = 0; $i < $count; $i++) {
+                    for ($i = 0; $i < $count && $i < $limit; $i++) {
                         $entry = [
                             'name'     => $files['name'][$i],
                             'type'     => $files['type'][$i],
@@ -186,6 +181,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                     if (!empty($photo_errors)) {
                         $error = t('admin.new_order.flash.upload_errors', ['files' => implode(', ', $photo_errors)]);
+                    }
+                    if ($count > $limit) {
+                        // Same reporting rule as create.php: name every file
+                        // that was not saved.
+                        $skipped = [];
+                        for ($i = $limit; $i < $count; $i++) {
+                            $skipped[] = (string)$files['name'][$i];
+                        }
+                        $over = t('admin.new_order.flash.upload_errors', ['files' => implode(', ', $skipped)]);
+                        $error = ($error !== '' ? $error . ' | ' : '') . $over;
                     }
                 }
 

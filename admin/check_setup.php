@@ -1,8 +1,6 @@
 <?php
 declare(strict_types=1);
-require_once dirname(__DIR__) . '/config.php';
-require_once dirname(__DIR__) . '/includes/db.php';
-require_once dirname(__DIR__) . '/includes/auth.php';
+require_once dirname(__DIR__) . '/includes/kernel.php';
 
 // Tells the login form whether a username belongs to an account that is
 // still awaiting first-login password setup. CSRF-checked, read-only.

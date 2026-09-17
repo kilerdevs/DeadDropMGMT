@@ -12,9 +12,7 @@ declare(strict_types=1);
 // The HTTP assertions are what a real browser would see; the wipe assertions
 // read the storage truth behind it.
 
-require_once dirname(__DIR__) . '/config.php';
-require_once dirname(__DIR__) . '/includes/db.php';
-require_once dirname(__DIR__) . '/includes/logger.php'; // glob_list() — no implicit dependency via config
+require_once dirname(__DIR__) . '/includes/kernel.php';
 
 $base = getenv('JOURNEY_BASE_URL') ?: 'http://127.0.0.1';
 if (substr($base, -1) === '/') {
@@ -57,9 +55,17 @@ function _j_csrf(string $body): string {
     preg_match('/name="csrf_token"\s*value="([0-9a-f]{64})"/', $body, $m);
     return $m[1] ?? '';
 }
+// Public unlock/lookup POSTs carry the single-use CSRF token: harvest a
+// live one from a fresh GET first — rotation retires each token on use.
+function _j_unlock(string $base, array $f, string $cookie): array {
+    [, $g, $cookie] = _j_get("$base/", $cookie);
+    $f['csrf_token'] = _j_csrf($g);
+    [$st, $b, $cookie] = _j_post("$base/", $f, $cookie);
+    return [$st, $b, $cookie];
+}
 
 $fail = 0;
-function T(bool $cond, string $what): void {
+function jok(bool $cond, string $what): void {
     global $fail;
     echo ($cond ? '  ok  ' : '  FAIL') . " $what\n";
     if (!$cond) { $fail++; }
@@ -69,7 +75,7 @@ echo "=== DeadDropMGMT container journey ===\n";
 
 // ── 0. boot: the public page must render ─────────────────────────────────────
 [$st, $html] = _j_get("$base/");
-T($st === 200 && str_contains($html, '<!DOCTYPE'), 'container serves the public page');
+jok($st === 200 && str_contains($html, '<!DOCTYPE'), 'container serves the public page');
 
 // ── 1. DB migration: re-running the shipped schema must be a harmless no-op
 // on THIS database, in THIS container (compose loads setup.sql on first boot).
@@ -78,35 +84,35 @@ exec(
     escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(dirname(__DIR__) . '/tests/schema_loader.php') . ' 2>&1',
     $migOut, $migrated
 );
-T($migrated === 0, 'schema re-run (migration) is idempotent here'
+jok($migrated === 0, 'schema re-run (migration) is idempotent here'
     . ($migrated === 0 ? '' : ' [' . implode(' | ', array_slice($migOut, -3)) . ']'));
 
 // ── 2. first-run owner creation ───────────────────────────────────────────────
 [$st, $html, $ck] = _j_get("$base/admin/index.php");
 $hasBootstrapForm = str_contains($html, 'name="username"') && !str_contains($html, 'name="password"');
-T($hasBootstrapForm, 'fresh install shows the create-owner form');
+jok($hasBootstrapForm, 'fresh install shows the create-owner form');
 $csrf = _j_csrf($html);
-T($csrf !== '', 'first-run form carries a CSRF token');
+jok($csrf !== '', 'first-run form carries a CSRF token');
 
 $ownerName = 'journey_owner';
 $ownerPass = 'JourneyOwner1!';
 [$st,, $ck] = _j_post("$base/admin/bootstrap.php",
     ['csrf_token' => $csrf, 'username' => $ownerName], $ck);
-T($st === 302, 'owner creation redirects to the password step');
+jok($st === 302, 'owner creation redirects to the password step');
 
 // ── 3. finish setup: choose the password ─────────────────────────────────────
 [$st, $html, $ck] = _j_get("$base/admin/setup_password.php", $ck);
 $csrf = _j_csrf($html);
-T($csrf !== '', 'password step reachable and armed');
+jok($csrf !== '', 'password step reachable and armed');
 [$st,, $ck] = _j_post("$base/admin/setup_password.php",
     ['csrf_token' => $csrf, 'password' => $ownerPass, 'password2' => $ownerPass], $ck);
 [$st, $html, $ck] = _j_get("$base/admin/orders.php", $ck);
-T($st === 200, 'login works: orders page renders');
+jok($st === 200, 'login works: orders page renders');
 
 // ── 4. create an order (explicit password, no photos) ────────────────────────
 [$st, $html, $ck] = _j_get("$base/admin/new_order.php", $ck);
 $csrf = _j_csrf($html);
-T($csrf !== '', 'new-order form reachable');
+jok($csrf !== '', 'new-order form reachable');
 $orderPass = 'Recipient9!';
 [$st,, $ck] = _j_post("$base/admin/create.php", [
     'csrf_token'      => $csrf,
@@ -120,7 +126,7 @@ $orderPass = 'Recipient9!';
 $row = get_db()->query('SELECT id, order_token, status FROM orders ORDER BY id DESC LIMIT 1')->fetch();
 $token   = (string)$row['order_token'];
 $orderId = (int)$row['id'];
-T(strlen($token) === 16, "order created with token $token");
+jok(strlen($token) === 16, "order created with token $token");
 
 // ── 5. deliver the order through the admin UI ────────────────────────────────
 [$st, $html, $ck] = _j_get("$base/admin/edit.php?id=$orderId", $ck);
@@ -139,29 +145,29 @@ $csrf = _j_csrf($html);
 $st = get_db()->prepare('SELECT status FROM orders WHERE order_token = ?');
 $st->execute([$token]);
 $row = $st->fetch();
-T($row !== null && $row['status'] === 'delivered', 'order delivered through the admin UI');
+jok($row !== null && $row['status'] === 'delivered', 'order delivered through the admin UI');
 
 // ── 6. public lookup (no password) ───────────────────────────────────────────
-[$st, $html, $pubCookie] = _j_post("$base/", ['order_token' => $token], '');
-T($st === 200 && str_contains($html, 'status-badge delivered'), 'recipient sees the delivered badge');
+[$st, $html, $pubCookie] = _j_unlock($base, ['order_token' => $token], '');
+jok($st === 200 && str_contains($html, 'status-badge delivered'), 'recipient sees the delivered badge');
 
 // ── 7. password unlock → reveal ──────────────────────────────────────────────
-[$st,, $pubCookie] = _j_post("$base/",
+[$st,, $pubCookie] = _j_unlock($base,
     ['order_token' => $token, 'pickup_password' => $orderPass], $pubCookie);
-T($st === 302, 'correct pickup password redirects (PRG)');
+jok($st === 302, 'correct pickup password redirects (PRG)');
 [$st, $html] = _j_get("$base/", $pubCookie);
-T(str_contains($html, 'Journey drop: bench behind the station'), 'reveal shows the decrypted location');
+jok(str_contains($html, 'Journey drop: bench behind the station'), 'reveal shows the decrypted location');
 $rcsrf = _j_csrf($html);
-T($rcsrf !== '', 'reveal page offers the receipt confirmation form');
+jok($rcsrf !== '', 'reveal page offers the receipt confirmation form');
 
 // ── 8. receipt confirmation (step 1 + step 2) ────────────────────────────────
 [$st, $html, $pubCookie] = _j_post("$base/receive.php",
     ['csrf_token' => $rcsrf, 'order_token' => $token, 'step' => '1'], $pubCookie);
-T(str_contains($html, $token), 'confirmation page names the token');
+jok(str_contains($html, $token), 'confirmation page names the token');
 $rcsrf2 = _j_csrf($html);
 [$st, $html] = _j_post("$base/receive.php",
     ['csrf_token' => $rcsrf2, 'order_token' => $token, 'step' => '2'], $pubCookie);
-T(str_contains($html, 'delivered'), 'receipt confirmed (done page)');
+jok(str_contains($html, 'delivered'), 'receipt confirmed (done page)');
 
 // ── 9. assert wiped: the receipt must leave NOTHING behind ───────────────────
 $db = get_db();
@@ -170,20 +176,20 @@ $cnt = static function (string $sql, array $args) use ($db): int {
     $st->execute($args);
     return (int)$st->fetchColumn();
 };
-T($cnt('SELECT COUNT(*) FROM orders WHERE order_token = ?', [$token]) === 0,
+jok($cnt('SELECT COUNT(*) FROM orders WHERE order_token = ?', [$token]) === 0,
     'order row gone');
-T($cnt('SELECT COUNT(*) FROM order_photos WHERE order_id = ?', [$orderId]) === 0,
+jok($cnt('SELECT COUNT(*) FROM order_photos WHERE order_id = ?', [$orderId]) === 0,
     'photo rows gone');
-T($cnt('SELECT COUNT(*) FROM order_events WHERE order_token = ?', [$token]) >= 1,
+jok($cnt('SELECT COUNT(*) FROM order_events WHERE order_token = ?', [$token]) >= 1,
     'event log recorded the lifecycle');
 $uploadsDir = dirname(__DIR__) . '/uploads/' . $orderId;
-T(!is_dir($uploadsDir) || count(glob_list($uploadsDir . '/*')) === 0, 'no orphaned upload files');
-[$st, $html] = _j_post("$base/", ['order_token' => $token], '');
-T(str_contains($html, 'class="alert"'), 'public lookup now reports the order unknown');
+jok(!is_dir($uploadsDir) || count(glob_list($uploadsDir . '/*')) === 0, 'no orphaned upload files');
+[$st, $html] = _j_unlock($base, ['order_token' => $token], '');
+jok(str_contains($html, 'class="alert"'), 'public lookup now reports the order unknown');
 
 // Reveal cannot be replayed from the same session either.
 [$st, $html] = _j_get("$base/", $pubCookie);
-T(!str_contains($html, 'Journey drop: bench behind the station'), 'reveal does not survive the receipt');
+jok(!str_contains($html, 'Journey drop: bench behind the station'), 'reveal does not survive the receipt');
 
 echo $fail === 0 ? "\nJourney complete — all assertions passed.\n" : "\nJourney FAILED: $fail assertion(s).\n";
 exit($fail === 0 ? 0 : 1);
