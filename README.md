@@ -158,7 +158,7 @@ Browser ──[TLS, external]── Web server / PHP
 | XSS | `htmlspecialchars(..., ENT_QUOTES, 'UTF-8')` on all user-derived output; strict CSP with nonces | S5 | A1, A2 |
 | Clickjacking / sniffing | `X-Frame-Options: DENY`, `nosniff`, HSTS | S5 | A1 |
 | Error leakage | `display_errors=0`, exceptions caught and logged, generic user-facing messages | S1–S5 | A1 |
-| Direct file access | `.htaccess` blocks `includes/`, `config.php`, `logs/`, `cron/` | all local assets | A1 |
+| Direct file access | `.htaccess` blocks `includes/`, `config.php`, `logs/`, `cron/` (Apache only — see below) | all local assets | A1 |
 | Log tampering | Structured JSONL log chained with HMAC-SHA256; one-click verification reports first broken entry. HMAC key derived from AES key with domain separation | S6 | A5 |
 | Unaccountable writes | Every admin create/edit/delete/setting-change logged with actor, IP, timestamp | S6 | A2, A5 |
 | Admin IP exposure to OSM | Tile/geocode requests proxied server-side; optional fail-closed anonymity proxy pool (manual or auto-discovered) | owner/courier privacy | A3 |
@@ -510,6 +510,13 @@ define('AES_KEY_HEX', 'aabbcc...(64 hex chars)');
 define('ADMIN_USERNAME',      'admin');
 define('ADMIN_PASSWORD_HASH', '$2y$12$...');
 
+// Timing-attack dummies (required — login fatals without them): fixed
+// bcrypt/TOTP values burned when the account or token does not exist, so
+// "unknown identifier" costs the same CPU as "wrong password". Copy from
+// config.php.example; the plaintexts were never stored anywhere.
+define('DUMMY_AUTH_HASH', '$2y$12$' . 'JOfiPnfCGcrXUxs5MiJ81.' . 'vMz8Qs6n2qJpelljzdwVQJ8TVatrxTC');
+define('DUMMY_TOTP_SECRET', 'KRZGS5DQNZQXG2DDNZUW453FOV2GKY3O');
+
 define('ERROR_LOG_PATH', __DIR__ . '/logs/error.log');
 define('SESSION_NAME',     'ddmgmt');
 define('SESSION_LIFETIME', 3600);
@@ -535,6 +542,13 @@ ini_set('error_log',       ERROR_LOG_PATH);
 ```
 
 Enable `mod_rewrite` and `mod_headers`. Set `AllowOverride All`.
+
+> **nginx/Caddy installs — read this.** The shipped `.htaccess` files are
+> an Apache-only mechanism: nginx and Caddy ignore them completely. A manual
+> (non-Docker) nginx/Caddy install MUST replicate the blocks or `includes/`,
+> `logs/`, `cron/`, `tools/`, `config.php`, and PHP execution under
+> `uploads/` are exposed. Use `docker/nginx.conf` and `docker/Caddyfile` as
+> the reference — every `deny all` / `respond 403` there is load-bearing.
 
 ### 6. Permissions
 
@@ -564,6 +578,8 @@ No server setup needed — log in, open **2FA** in the sidebar, scan the QR code
 - PHP 8.2+ with `pdo_mysql`, `openssl`, `gd` extensions
 - MySQL 5.7+ or MariaDB 10.3+
 - Apache 2.4+ with `mod_rewrite`, `mod_headers`
+
+Stuck? Symptom → cause → fix lives in [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
 ---
 

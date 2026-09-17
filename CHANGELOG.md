@@ -28,6 +28,45 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   `DispatchTest` (structural contract + HTTP shim/dispatch parity) and the
   `FailClosedTest` gate check, which now arms the route flag instead of a
   script name
+
+### Added
+- Audit follow-ups (external review, all claims verified before acting):
+  order capability tokens use the full 62-symbol alphanumeric alphabet
+  (16 chars, ~95 bits — previously hex-only 64 bits despite what the threat
+  model promised; old tokens keep working), photo uploads are capped per
+  request (`max_photos_per_order`, default 10, enforced in `create.php` and
+  `edit.php` with over-cap files named in the flash), stale `rate_limits`
+  rows are purged on every cleanup pass, and the session failure bucket
+  follows the configured limiter window instead of a hardcoded 900 s
+- Auth hardening from the same review: the fresh-install config-owner
+  fallback now answers only for a genuinely absent `users` table (any other
+  DB failure fails closed, so an outage can never downgrade a TOTP-enrolled
+  owner to password-only login), and the admin session timeout is a sliding
+  inactivity window instead of absolute-since-login
+- Uploaded photo URLs hardened as bearer links: `Referrer-Policy:
+  no-referrer` on both header profiles (nothing server-side reads the
+  Referer) and `Cache-Control: private, no-store` on `/uploads/` across
+  Apache (`uploads/.htaccess`, now force-tracked in git and un-ignored for
+  Docker builds — it was silently absent from images), nginx, and Caddy
+- `docs/TROUBLESHOOTING.md`: symptom → cause → fix for the failures
+  operators actually hit (limiter lockouts, CSRF tab desync, DB-down
+  behaviour, key loss, broken log chains, idle cleanup, upload rejects,
+  2FA bounces, manual nginx/Caddy gaps)
+- `tools/mutation_probe.php`: curated mutation probe (12 logic-weakening
+  mutants over the security-critical code — CSRF, fail-closed limiter,
+  login fallback scope, token entropy, sweep guards, log linkage, i18n
+  escaping, session refresh, limiter purge, bucket window) that must all be
+  killed by the suite; runs report-only in CI while the MSI baseline
+  proves stable. Deliberately curated instead of infection/phpunit: the
+  harness is custom, and destructive mutants (unlink bypass) are excluded
+  by hand with reasons
+- `tests/PhotoCapTest.php`: HTTP end-to-end for the photo cap (12 uploads
+  leave exactly 10 rows)
+- Operational follow-ups: `docs/TROUBLESHOOTING.md` is linked from the
+  README; `uploads/.htaccess` is now force-tracked in git and re-included
+  in `.dockerignore` (it was silently absent from Docker images and fresh
+  clones, leaving the Apache variant without the uploads PHP-execution
+  block)
 - Automated formatting gate: `.php-cs-fixer.php` (conservative ruleset —
   whitespace, quotes, short arrays, strict-types; brace placement and line
   splitting deliberately out so the gate prevents drift without restyling

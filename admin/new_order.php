@@ -90,7 +90,7 @@ $csrf = generate_csrf();
                 <div class="form-group">
                     <label for="photos">
                         <?= t('public.index.reveal.photos') ?>
-                        <span class="hint">JPEG / PNG / WebP / GIF · <?= t('admin.new_order.photos_hint', ['mb' => (int)get_setting('max_photo_mb', '12')]) ?></span>
+                        <span class="hint">JPEG / PNG / WebP / GIF · <?= t('admin.new_order.photos_hint', ['mb' => (int)get_setting('max_photo_mb', '2')]) ?></span>
                     </label>
                     <input type="file" id="photos" name="photos[]" multiple
                            accept="image/jpeg,image/png,image/webp,image/gif">

@@ -83,6 +83,21 @@ T::ok('bcrypt cost 12 prefix', str_starts_with($h, '$2y$12$'));
 T::ok('verify correct password', verify_password('CorrectHorse1!', $h));
 T::ok('verify wrong password rejected', !verify_password('correcthorse1!', $h));
 
+// Order capability tokens: 16 chars over the full 62-symbol alphanumeric
+// alphabet (16 × log2(62) ≈ 95.3 bits) — hex-only generation used to leave
+// ~31 bits of the documented budget on the floor.
+$talpha = [];
+for ($i = 0; $i < 64; $i++) {
+    $tok = generate_order_token();
+    T::ok("order token format [$tok]",
+        strlen($tok) === 16 && preg_match('/^[0-9A-Za-z]{16}$/', $tok) === 1);
+    if (strlen($tok) !== 16 || preg_match('/^[0-9A-Za-z]{16}$/', $tok) !== 1) { break; }
+    foreach (str_split($tok) as $ch) { $talpha[$ch] = true; }
+}
+T::ok('order tokens use the full alphabet, not hex-only', count($talpha) > 16);
+T::ok('order tokens do not repeat in 64 draws',
+    count(array_unique(array_map(static fn(): string => generate_order_token(), range(1, 64)))) > 60);
+
 // Passphrase generator: 6 words + zero-padded 4-digit number + symbol
 $seen = [];
 for ($i = 0; $i < 300; $i++) {

@@ -263,7 +263,7 @@ INSERT INTO settings (key_name, value, label) VALUES
     ('rate_limit_max',          '10',      'Maks. nieudanych prób przed blokadą'),
     ('rate_limit_window_min',   '15',      'Okno blokady (minuty)'),
     ('admin_session_hours',     '4',       'Czas sesji admina (godziny)'),
-    ('max_photo_mb',            '12',      'Maks. rozmiar zdjęcia (MB)'),
+    ('max_photo_mb',            '2',       'Maks. rozmiar zdjęcia (MB)'),
     ('allow_status_lookup',     '1',       'Zezwól na sprawdzenie statusu bez hasła'),
     ('require_delivered_reveal','1',       'Ukryj lokalizację gdy W PRZYGOTOWANIU'),
     ('analytics_enabled',       '1',       'Włącz analitykę'),

@@ -187,9 +187,17 @@ function _delete_order_events(PDO $db, int $order_id, ?string $token): void {
 // from our own DB column and are additionally pattern-checked before any
 // unlink, so a tampered row can never point outside uploads/<id>/<hex>.<ext>.
 function _unlink_order_files(int $order_id, array $files): void {
+    $base = dirname(__DIR__) . '/uploads/';
     foreach ($files as $fn) {
         if (is_string($fn) && preg_match('#^\d+/[0-9a-f]+\.(jpg|jpeg|png|webp|gif)$#i', $fn)) {
-            overwrite_and_unlink(dirname(__DIR__) . '/uploads/' . $fn);
+            overwrite_and_unlink($base . $fn);
+            // The DB row is already gone (commit-then-sweep, by design), so a
+            // file that survives the sweep would sit orphaned forever with no
+            // row pointing at it — log it so the next admin log review shows
+            // a stub filename to remove by hand.
+            if (is_file($base . $fn)) {
+                log_err("Orphaned photo after order {$order_id} delete: {$fn}");
+            }
         }
     }
     $dir = dirname(__DIR__) . '/uploads/' . $order_id . '/';

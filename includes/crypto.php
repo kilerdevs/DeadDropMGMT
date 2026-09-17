@@ -195,6 +195,21 @@ function verify_password(string $password, string $hash): bool {
     return password_verify($password, $hash);
 }
 
+// ── Order capability tokens ───────────────────────────────────────────────────
+// 16 chars over [0-9a-zA-Z] (62 symbols): 16 × log2(62) ≈ 95.3 bits. Tokens
+// gate location reveals, so they get the full alphanumeric space — hex-only
+// generation would leave ~31 bits of the documented budget on the floor.
+// Validators accept ctype_alnum (index.php, receive.php), so previously
+// issued hex tokens keep working: they are a subset of this alphabet.
+function generate_order_token(int $len = 16): string {
+    static $alphabet = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    $out = '';
+    for ($i = 0; $i < $len; $i++) {
+        $out .= $alphabet[random_int(0, 61)];
+    }
+    return $out;
+}
+
 // ── Passphrase generator ──────────────────────────────────────────────────────
 // Produces e.g. "StormRavenVaultMossFern4721!" — six capitalized words from a
 // 256-word list (6 × log2(256) = 48 bits), plus a zero-padded 4-digit number

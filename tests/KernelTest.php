@@ -94,7 +94,7 @@ $others = array_merge(
 foreach ($others as $f) {
     $checked += _kernel_guarded('entry ' . basename($f), (string)file_get_contents($f));
 }
-T::ok('non-admin entry points scanned', count($others) === 8);
+T::ok('non-admin entry points scanned', count($others) === 9);
 
 // ── No function collisions with the service layer ───────────────────────────
 // PHP function names are case-insensitive: an entry script defining T()

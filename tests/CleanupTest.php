@@ -123,6 +123,21 @@ T::ok('non-empty directory survives the sweep', is_file($strayDir . 'stray.bin')
 @unlink($strayDir . 'stray.bin');
 @rmdir($strayDir);
 
+// ── Stale rate-limit rows are purged, live ones kept ──────────────────────
+// Rows are one-per-IP×scope and never swept on the cold path — without this
+// the table bloats forever under IP rotation. Exercised through do_cleanup()
+// (not the purge function directly) so the wiring itself is pinned: removing
+// the call must fail this block.
+$db->prepare("DELETE FROM rate_limits WHERE scope = 'purge_test'")->execute();
+$db->prepare("INSERT INTO rate_limits (ip_address, scope, count, window_start)
+              VALUES ('198.51.100.9', 'purge_test', 9, UTC_TIMESTAMP() - INTERVAL 10 HOUR)")->execute();
+$db->prepare("INSERT INTO rate_limits (ip_address, scope, count, window_start)
+              VALUES ('198.51.100.10', 'purge_test', 1, UTC_TIMESTAMP())")->execute();
+do_cleanup();
+T::eq('stale window purged', 0, (int)$db->query("SELECT COUNT(*) FROM rate_limits WHERE ip_address = '198.51.100.9'")->fetchColumn());
+T::eq('live window kept', 1, (int)$db->query("SELECT COUNT(*) FROM rate_limits WHERE ip_address = '198.51.100.10'")->fetchColumn());
+$db->prepare("DELETE FROM rate_limits WHERE scope = 'purge_test'")->execute();
+
 // Cleanup
 $db->prepare('DELETE FROM orders WHERE order_token LIKE "clstoken%"')->execute();
 

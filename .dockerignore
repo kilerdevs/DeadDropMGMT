@@ -9,6 +9,10 @@ tests/*
 config.php
 logs/*
 uploads/*
+# ... but the uploads/.htaccess IS load-bearing (PHP-execution block,
+# image-only allow-list, no-store on capability URLs): uploads/ must stay
+# servable, so no vhost-level rule can cover it. Tracked via git add -f.
+!uploads/.htaccess
 cache/*
 # Dev-only Composer tooling (php-code-coverage) must never ship: it is a
 # supply-chain surface with no runtime purpose (ADR-001).

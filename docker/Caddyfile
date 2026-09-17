@@ -13,6 +13,11 @@
 	@upload_php path /uploads/*.php /uploads/*.phtml /uploads/*.phar
 	respond @upload_php 403
 
+	# Same capability-URL reasoning as the Apache/nginx notes: bearer links
+	# must not persist in caches.
+	@uploads path /uploads/*
+	header @uploads Cache-Control "private, no-store"
+
 	request_body {
 		max_size 32MB
 	}
