@@ -97,6 +97,20 @@ main { width: 100%; max-width: 500px; }
     letter-spacing:  0.14em;
     text-transform:  uppercase;
     color:           var(--text-muted);
+    /* The row inherits body line-height 1.65: the label's line box then
+       stands 16px tall next to the ~24px select box, and flex centering
+       aligns the boxes while the glyphs drift ~2px apart. Tighten both to
+       the glyphs so centering aligns text, not line boxes. */
+    line-height:    1;
+}
+
+.lang-switch label {
+    /* The generic form label (12px + 10px bottom margin) otherwise wins by
+       direct match over inheritance — and that margin alone offset the text
+       5px above the select. Zero it here, match the row size. */
+    font-size:   10px;
+    line-height: 1;
+    margin:      0;
 }
 
 .lang-switch select {

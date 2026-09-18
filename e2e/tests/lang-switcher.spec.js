@@ -52,6 +52,26 @@ test('with JS: change auto-applies, footer-placed, no button rendered', async ({
   }
 });
 
+test('switcher label and control are vertically aligned', async ({ browser }) => {
+  // Pixel-diff baselines would be the classic net, but font rasterization
+  // differs Windows-vs-Linux and CI runs ubuntu: compare geometry instead.
+  // A 1.5px tolerance absorbs subpixel rounding, not a real drift (the
+  // footer row once shipped the label ~2px above the select).
+  const page = await freshPage(browser);
+  try {
+    await page.goto('/');
+    const label = page.locator('form.lang-switch label[for="lang"]');
+    const select = page.locator('form.lang-switch select#lang');
+    const lb = await label.boundingBox();
+    const sb = await select.boundingBox();
+    expect(lb && sb).toBeTruthy();
+    const drift = Math.abs(lb.y + lb.height / 2 - (sb.y + sb.height / 2));
+    expect(drift).toBeLessThanOrEqual(1.5);
+  } finally {
+    await closePage(page);
+  }
+});
+
 test('unknown language code is ignored', async ({ browser }) => {
   const page = await freshPage(browser);
   try {
