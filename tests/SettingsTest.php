@@ -7,6 +7,14 @@ require_once dirname(__DIR__) . '/includes/i18n.php';
 
 $db = get_db();
 
+// Hostile-value probes below clobber shared settings rows (rate_limit_max=0
+// once locked every later suite out of logins) — snapshot and restore so
+// this file never poisons the shared test database for whatever runs next.
+$prevSettings = [];
+foreach ($db->query('SELECT key_name, value FROM settings')->fetchAll() as $r) {
+    $prevSettings[$r['key_name']] = $r['value'];
+}
+
 // Cache coherence: a write is visible immediately even after the cache was built
 set_setting('t_cov_key', 'alpha');
 T::eq('write-through read-back', 'alpha', get_setting('t_cov_key'));
@@ -99,6 +107,15 @@ T::eq('probability gate skips the DB read', '1', trim((string)$skip));
 
 // ...and do_cleanup itself answers with a count, never throws.
 T::ok('do_cleanup returns a count', is_int(do_cleanup()));
+
+// Restore every row the hostile-value probes above clobbered, and drop the
+// scratch keys, so later suites inherit a sane database.
+foreach ($prevSettings as $k => $v) {
+    set_setting($k, $v);
+}
+$db->prepare("DELETE FROM settings WHERE key_name IN ('t_cov_key', 'max_photos_per_order')")->execute();
+$cache = &_settings_store();
+$cache = null;
 
 exit(T::done());
 

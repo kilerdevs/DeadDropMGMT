@@ -72,6 +72,15 @@ function require_admin(): void {
     // revived by the very request that should kill it.
     $_SESSION['login_time'] = time();
 
+    // Single active session: a newer login elsewhere supersedes this one.
+    // The superseded browser is logged out with an explanatory flag (not a
+    // silent bounce) so the legitimate owner notices the conflict.
+    if (admin_session_superseded()) {
+        admin_logout();
+        header('Location: /admin/index.php?superseded=1');
+        exit;
+    }
+
     // 2FA is mandatory for couriers (optional for the owner). Gate every
     // page but the enrollment page itself and routes flagged 2fa-exempt
     // (logout, self-service preferences touching only the caller's own
@@ -109,6 +118,30 @@ function courier_owns_order(int $order_id): bool {
     }
 }
 
+// True when another login has superseded this session: the session id the
+// account holder authenticated with no longer matches the id recorded at
+// the latest login. The config-fallback owner (user_id 0, no users row),
+// rows predating the column rollout (NULL), and unreadable rows (fail OPEN:
+// a transient read error must not log out every admin) never count as
+// superseded — the mismatch path still catches every real conflict.
+function admin_session_superseded(): bool {
+    $uid = (int)($_SESSION['user_id'] ?? 0);
+    if ($uid <= 0) {
+        return false;
+    }
+    try {
+        $stmt = get_db()->prepare('SELECT active_session_id FROM users WHERE id = ? LIMIT 1');
+        $stmt->execute([$uid]);
+        $active = $stmt->fetchColumn();
+    } catch (Exception $e) {
+        return false;
+    }
+    if (!is_string($active) || $active === '') {
+        return false;
+    }
+    return !hash_equals($active, session_id());
+}
+
 // ── Login / logout ────────────────────────────────────────────────────────────
 
 // Completes login: sets the full session and clears any pending-2FA state.
@@ -126,6 +159,19 @@ function admin_finish_login(int $user_id, string $role, string $username, bool $
     $_SESSION['login_time']   = time();
     unset($_SESSION['csrf_token'], $_SESSION['pending_2fa_user_id'], $_SESSION['pending_2fa_time'],
           $_SESSION['pending_setup_user_id'], $_SESSION['pending_setup_time']);
+    // Single active session: this login supersedes any other holding these
+    // credentials (stolen-cookie coexistence ends at the victim's next
+    // request). Best-effort — a record failure must not deny the login the
+    // session itself just granted; the config-fallback owner (user_id 0, no
+    // users row) has nothing to record against.
+    if ($user_id > 0) {
+        try {
+            get_db()->prepare('UPDATE users SET active_session_id = ? WHERE id = ?')
+                ->execute([session_id(), $user_id]);
+        } catch (Exception $e) {
+            log_err('Login session record failed: ' . $e->getMessage());
+        }
+    }
 }
 
 // True only when the users table itself is absent (fresh install, schema not

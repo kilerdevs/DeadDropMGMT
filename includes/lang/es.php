@@ -88,6 +88,7 @@ return [
     'admin.login.error.rate_limited'    => 'Demasiados intentos fallidos. Espere {min} min.',
     'admin.login.error.bad_credentials' => 'Credenciales de inicio de sesión no válidas.',
     'admin.login.error.session_expired' => 'Sesión caducada. Inicie sesión de nuevo.',
+    'admin.login.error.session_superseded' => 'Esta sesión se cerró porque la cuenta inició sesión en otro lugar. Si no fuiste tú, cambia la contraseña de inmediato.',
     'admin.login.title'          => 'Iniciar sesión',
     'admin.login.username_label' => 'Nombre de usuario',
     'admin.login.password_label' => 'Contraseña',

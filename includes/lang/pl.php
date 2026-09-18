@@ -88,6 +88,7 @@ return [
     'admin.login.error.rate_limited'    => 'Zbyt wiele nieudanych prób. Odczekaj {min} min.',
     'admin.login.error.bad_credentials' => 'Nieprawidłowe dane logowania.',
     'admin.login.error.session_expired' => 'Sesja wygasła. Zaloguj się ponownie.',
+    'admin.login.error.session_superseded' => 'Ta sesja została zakończona, ponieważ konto zalogowano w innym miejscu. Jeśli to nie Ty, natychmiast zmień hasło.',
     'admin.login.title'          => 'Logowanie',
     'admin.login.username_label' => 'Nazwa użytkownika',
     'admin.login.password_label' => 'Hasło',

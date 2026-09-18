@@ -99,6 +99,37 @@ $db->prepare('UPDATE users SET enrollment_expires = NOW() - INTERVAL 1 HOUR WHER
 $_SESSION = [];
 T::eq('expired enrollment secret fails', 'fail', admin_login('t_auth_pending', ''));
 
+// ── Single active session ───────────────────────────────────────────────────
+$db->prepare("DELETE FROM users WHERE username = 't_auth_sess'")->execute();
+$db->prepare("INSERT INTO users (username, password_hash, role) VALUES ('t_auth_sess', ?, 'owner')")->execute([$hash]);
+$sessId = (int)$db->lastInsertId();
+
+$_SESSION = [];
+start_secure_session();
+T::eq('first login ok', 'ok', admin_login('t_auth_sess', 'CorrectHorse1!'));
+$s1 = session_id();
+T::eq('login records the session id', $s1,
+    $db->query("SELECT active_session_id FROM users WHERE id = $sessId")->fetchColumn());
+
+T::eq('second login ok', 'ok', admin_login('t_auth_sess', 'CorrectHorse1!'));
+$s2 = session_id();
+T::ok('second login rotates the session id', $s2 !== $s1);
+T::eq('record follows the latest login', $s2,
+    $db->query("SELECT active_session_id FROM users WHERE id = $sessId")->fetchColumn());
+
+// Predicate: the live session matches the record — not superseded.
+T::ok('current session not superseded', !admin_session_superseded());
+// A newer login elsewhere moves the record forward; this session is stale.
+$db->prepare('UPDATE users SET active_session_id = ? WHERE id = ?')->execute(['elsewhere-sid', $sessId]);
+T::ok('stale record reads as superseded', admin_session_superseded());
+// Pre-rollout NULL rows and the config-fallback owner never trip it.
+$db->prepare('UPDATE users SET active_session_id = NULL WHERE id = ?')->execute([$sessId]);
+T::ok('NULL record never superseded', !admin_session_superseded());
+$_SESSION['user_id'] = 0;
+T::ok('config-fallback owner never superseded', !admin_session_superseded());
+$_SESSION = [];
+$db->prepare('DELETE FROM users WHERE id = ?')->execute([$sessId]);
+
 // Cleanup
 $_POST = [];
 $db->prepare('DELETE FROM users WHERE id = ?')->execute([$pendingId]);

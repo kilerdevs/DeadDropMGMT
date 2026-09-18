@@ -88,6 +88,7 @@ return [
     'admin.login.error.rate_limited'    => 'Troppi tentativi falliti. Attendi {min} min.',
     'admin.login.error.bad_credentials' => 'Credenziali di accesso non valide.',
     'admin.login.error.session_expired' => 'Sessione scaduta. Accedi di nuovo.',
+    'admin.login.error.session_superseded' => 'Questa sessione è stata terminata perché l’account ha effettuato l’accesso altrove. Se non sei stato tu, cambia subito la password.',
     'admin.login.title'          => 'Accedi',
     'admin.login.username_label' => 'Nome utente',
     'admin.login.password_label' => 'Password',

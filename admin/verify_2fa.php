@@ -64,9 +64,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 totp_verify(DUMMY_TOTP_SECRET, $code);
             }
             $hit = rl_hit('admin_2fa');
-            $error = $hit['blocked']
-                ? t('admin.verify2fa.error.rate_limited', ['min' => (int)ceil($hit['remaining'] / 60)])
-                : t('admin.verify2fa.error.invalid_code');
+            if ($hit['blocked']) {
+                $error = t('admin.verify2fa.error.rate_limited', ['min' => (int)ceil($hit['remaining'] / 60)]);
+            } else {
+                // Guessing visibility mirrors the password step: the audit
+                // row carries the targeted account, never the tried code.
+                audit('2fa_failed', $pending_uid, null, (string)($user['username'] ?? 'unknown'));
+                $error = t('admin.verify2fa.error.invalid_code');
+            }
         }
     }
 }

@@ -88,6 +88,7 @@ return [
     'admin.login.error.rate_limited'    => 'Too many failed attempts. Wait {min} min.',
     'admin.login.error.bad_credentials' => 'Invalid login credentials.',
     'admin.login.error.session_expired' => 'Session expired. Please log in again.',
+    'admin.login.error.session_superseded' => 'This session was ended because the account logged in elsewhere. If that was not you, change the password immediately.',
     'admin.login.title'          => 'Log in',
     'admin.login.username_label' => 'Username',
     'admin.login.password_label' => 'Password',

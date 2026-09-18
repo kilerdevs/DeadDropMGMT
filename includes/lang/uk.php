@@ -88,6 +88,7 @@ return [
     'admin.login.error.rate_limited'    => 'Забагато невдалих спроб. Зачекайте {min} хв.',
     'admin.login.error.bad_credentials' => 'Невірні облікові дані.',
     'admin.login.error.session_expired' => 'Сесія закінчилася. Увійдіть знову.',
+    'admin.login.error.session_superseded' => 'Цей сеанс завершено, оскільки в обліковий запис увійшли в іншому місці. Якщо це були не ви, негайно змініть пароль.',
     'admin.login.title'          => 'Вхід',
     'admin.login.username_label' => "Ім'я користувача",
     'admin.login.password_label' => 'Пароль',

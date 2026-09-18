@@ -131,6 +131,20 @@ $login = static function (string $user, string $pass) use ($B, $csrfOf): array {
 [$ck, $needs2fa] = $login('t_ah_courier_a', 'AzPass123!');
 T::ok('courier A logged in (gated to 2FA enrollment)', $needs2fa);
 
+// ── Failed logins are audited (brute-force visibility) ──────────────────────
+// The audit row carries the attempted username (never the password) plus the
+// client IP audit() always records; the limiter caps attempts per IP, so
+// this cannot be turned into log spam.
+$db->exec("DELETE FROM audit_log WHERE action = 'login_failed'");
+[, $bL, $ckL] = _az('GET', "$B/admin/index.php", null, '');
+[$stL] = _az('POST', "$B/admin/login.php",
+    ['csrf_token' => $csrfOf($bL), 'username' => 't_ah_owner', 'password' => 'WrongPass1!'], $ckL);
+T::eq('wrong password bounces to login', 302, $stL);
+$aud = $db->query("SELECT detail, ip_address FROM audit_log WHERE action = 'login_failed' ORDER BY id DESC LIMIT 1")->fetch();
+T::eq('failed login audited with attempted username', 't_ah_owner', $aud['detail'] ?? null);
+T::ok('failed login carries the client IP', ($aud['ip_address'] ?? '') !== '');
+$db->exec("DELETE FROM audit_log WHERE action = 'login_failed'");
+
 // 2FA is mandatory for couriers: every admin page bounces to the enrollment
 // form until TOTP is enabled. Enroll through the real UI flow: pull the
 // pending secret off the page, compute the current code, confirm.
@@ -218,6 +232,23 @@ $ocsrf = $csrfOf($b);
 T::ok('owner logged in', $ocsrf !== '');
 _az('POST', "$B/admin/delete.php", ['csrf_token' => $ocsrf, 'id' => $orderB, 'confirm' => '1'], $ock);
 T::ok('owner deletes foreign order (positive control)', !$orderBExists());
+
+// ── Stale keystroke poll across login must not clobber the auth cookie ─────
+// The login form polls check_setup.php per keystroke, so a poll is routinely
+// in flight across login's session_regenerate_id(true): it lands with a dead
+// session id, and a cookie-emitting start would mint an empty session whose
+// Set-Cookie overwrites the brand-new auth cookie (instant post-login
+// logout). Replay it deterministically: log in, then present the PRE-login
+// cookie to the poll endpoint.
+[, $bS, $ckS] = _az('GET', "$B/admin/index.php", null, '');
+[$stS,, $ckS2] = _az('POST', "$B/admin/login.php",
+    ['csrf_token' => $csrfOf($bS), 'username' => 't_ah_owner', 'password' => 'AzPass123!'], $ckS);
+T::eq('re-login for stale-poll probe', 302, $stS);
+[, , $ckAfter] = _az('GET', "$B/admin/check_setup.php?username=t_ah_owner", null, $ckS);
+T::eq('stale poll sends no Set-Cookie', $ckS, $ckAfter);
+[$stO, $bO] = _az('GET', "$B/admin/orders.php", null, $ckS2);
+T::ok('auth cookie survives the stale poll',
+    $stO === 200 && str_contains($bO, '/admin/logout.php'));
 
 // ── Cleanup ──────────────────────────────────────────────────────────────────
 $db->prepare("DELETE FROM orders WHERE order_token LIKE 'ahtoken%'")->execute();

@@ -35,8 +35,7 @@ module.exports = defineConfig({
   retries: process.env.CI ? 1 : 0,
   // Serial: the harness server is single-threaded `php -S`, so parallel
   // workers only contend on its accept queue (and on shared IP budgets)
-  // without going faster — and contention there once flaked an admin
-  // session between two sequential same-context requests.
+  // without going faster.
   workers: 1,
   use: {
     baseURL: `http://127.0.0.1:${PORT}`,

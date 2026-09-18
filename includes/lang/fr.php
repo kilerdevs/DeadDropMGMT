@@ -88,6 +88,7 @@ return [
     'admin.login.error.rate_limited'    => 'Trop de tentatives échouées. Attendez {min} min.',
     'admin.login.error.bad_credentials' => 'Identifiants de connexion invalides.',
     'admin.login.error.session_expired' => 'Session expirée. Veuillez vous reconnecter.',
+    'admin.login.error.session_superseded' => 'Cette session a été terminée car le compte s’est connecté ailleurs. Si ce n’était pas vous, changez immédiatement le mot de passe.',
     'admin.login.title'          => 'Connexion',
     'admin.login.username_label' => "Nom d'utilisateur",
     'admin.login.password_label' => 'Mot de passe',

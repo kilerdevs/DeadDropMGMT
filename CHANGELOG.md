@@ -5,6 +5,14 @@ All notable changes to DeadDropMGMT are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Single active session per account: a login elsewhere supersedes the old
+  one (`users.active_session_id`, set at every full login). The superseded
+  browser is logged out to the login page with an explanatory notice
+  (including a change-your-password nudge) instead of bouncing silently.
+- Failed password and 2FA-code guesses are audited (`login_failed`,
+  `2fa_failed`, attempted account + client IP, never secrets) — brute force
+  is now visible in the existing audit-log viewer. Volume is bounded by the
+  limiter, so it cannot become log spam.
 - Real-browser E2E (`e2e/`, Playwright/Chromium, `e2e` CI job): the no-JS
   language-switcher path, inline-handler absence in a live DOM, the
   mid-reveal switcher hide, and full public/admin lifecycles through actual
@@ -29,6 +37,16 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   can't pin the first request's language.
 
 ### Fixed
+- Stale keystroke poll no longer logs freshly-logged-in admins out: the
+  login form polls `check_setup.php` per keystroke, and a poll in flight
+  across login's session-regenerate landed with a dead session id — a
+  cookie-emitting start minted an empty session whose Set-Cookie clobbered
+  the auth cookie. The endpoint now opens its session without ever sending
+  cookies. Covered by a deterministic replay probe in
+  `AuthorizationHttpTest`.
+- `SettingsTest` restores the settings rows its hostile-value probes clobber
+  (it left `rate_limit_max=0`, locking later standalone suites out of
+  logins) — snapshot at start, restore at end, per the suite convention.
 - Language switcher was dead under its own CSP: `script-src 'self'` + nonce
   never authorizes inline `on*` handlers, so the `onchange` submit did
   nothing with JS enabled. Plain submit button now, no inline handlers

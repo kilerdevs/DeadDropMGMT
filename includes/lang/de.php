@@ -88,6 +88,7 @@ return [
     'admin.login.error.rate_limited'    => 'Zu viele fehlgeschlagene Versuche. Warten Sie {min} Min.',
     'admin.login.error.bad_credentials' => 'Ungültige Anmeldedaten.',
     'admin.login.error.session_expired' => 'Sitzung abgelaufen. Bitte erneut anmelden.',
+    'admin.login.error.session_superseded' => 'Diese Sitzung wurde beendet, weil sich das Konto anderswo angemeldet hat. Falls Sie das nicht waren, ändern Sie sofort das Passwort.',
     'admin.login.title'          => 'Anmelden',
     'admin.login.username_label' => 'Benutzername',
     'admin.login.password_label' => 'Passwort',

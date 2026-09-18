@@ -44,6 +44,11 @@ switch (admin_login($username, $password)) {
 // One atomic spend + verdict: a budget that fills with this very attempt
 // denies it immediately instead of leaking one extra try to a race.
 $hit = rl_hit('admin_login');
+// Brute-force visibility: every rejected password lands in the audit trail
+// (attempted username, never the password) next to the IP the audit row
+// always carries. Volume is inherently bounded — the limiter above caps
+// attempts per IP, so this cannot be turned into log spam.
+audit('login_failed', null, null, $username);
 $_SESSION['login_error'] = $hit['blocked']
     ? t('admin.login.error.rate_limited', ['min' => (int)ceil($hit['remaining'] / 60)])
     : t('admin.login.error.bad_credentials');

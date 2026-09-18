@@ -88,6 +88,7 @@ return [
     'admin.login.error.rate_limited'    => 'Слишком много неудачных попыток. Подождите {min} мин.',
     'admin.login.error.bad_credentials' => 'Неверные учётные данные.',
     'admin.login.error.session_expired' => 'Сессия истекла. Войдите снова.',
+    'admin.login.error.session_superseded' => 'Этот сеанс завершён, так как в учётную запись вошли в другом месте. Если это были не вы, немедленно смените пароль.',
     'admin.login.title'          => 'Вход',
     'admin.login.username_label' => 'Имя пользователя',
     'admin.login.password_label' => 'Пароль',

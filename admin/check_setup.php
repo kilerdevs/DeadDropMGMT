@@ -12,7 +12,23 @@ require_once dirname(__DIR__) . '/includes/kernel.php';
 // "awaiting setup" from "everything else"; the limiter caps how fast that
 // one bit can be polled per IP.
 set_security_headers(false);
-start_secure_session();
+// Poll endpoint: open the session WITHOUT emitting cookies. The login form
+// polls this on every keystroke, so a poll is routinely IN FLIGHT across
+// login's session_regenerate_id(true): it lands with a dead session id, and
+// a normal strict-mode start would mint a fresh EMPTY session whose
+// Set-Cookie clobbers the brand-new auth cookie — an instant post-login
+// logout for fast typists. Reads (the readonly CSRF check below) still
+// work; nothing here writes session state, so no cookie ever needs sending.
+$pollSid = (string)($_COOKIE[SESSION_NAME] ?? '');
+if ($pollSid !== '' && preg_match('/^[a-zA-Z0-9,-]{22,256}$/', $pollSid) === 1) {
+    session_name(SESSION_NAME);
+    session_id($pollSid);
+}
+ini_set('session.use_cookies', '0');
+ini_set('session.use_only_cookies', '1');
+ini_set('session.use_trans_sid', '0');
+ini_set('session.use_strict_mode', '1');
+session_start();
 
 header('Content-Type: application/json; charset=utf-8');
 

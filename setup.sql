@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS users (
     totp_secret_iv   CHAR(32)               DEFAULT NULL,
     totp_enabled     TINYINT(1)    NOT NULL DEFAULT 0,
     totp_last_counter INT                   DEFAULT NULL,
+    active_session_id VARCHAR(128)          DEFAULT NULL,
     enrollment_hash  CHAR(64)               DEFAULT NULL,
     enrollment_expires DATETIME             DEFAULT NULL,
     lang             CHAR(2)       NOT NULL DEFAULT 'en',
@@ -69,6 +70,11 @@ PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 SET @c = (SELECT COUNT(*) FROM information_schema.COLUMNS
     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'enrollment_expires');
 SET @s = IF(@c = 0, 'ALTER TABLE users ADD COLUMN enrollment_expires DATETIME DEFAULT NULL', 'SELECT 1');
+PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
+
+SET @c = (SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'active_session_id');
+SET @s = IF(@c = 0, 'ALTER TABLE users ADD COLUMN active_session_id VARCHAR(128) DEFAULT NULL', 'SELECT 1');
 PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 
 -- ── Orders ────────────────────────────────────────────────────────────────────

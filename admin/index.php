@@ -31,6 +31,9 @@ $lerr  = (string)($_SESSION['login_error'] ?? '');
 if (isset($_GET['timeout'])) {
     $lerr = t('admin.login.error.session_expired');
 }
+if (isset($_GET['superseded'])) {
+    $lerr = t('admin.login.error.session_superseded');
+}
 // login_error producers are all t()-built (HTML-safe); raw echo below.
 unset($_SESSION['login_error']);
 ?>

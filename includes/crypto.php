@@ -332,7 +332,9 @@ function save_uploaded_photo(array $file_entry, int $order_id, int $max_bytes = 
     $finfo = new finfo(FILEINFO_MIME_TYPE);
     $out_mime = $finfo->file($dest);
     if ($out_mime === false || !isset($allowed_mime[$out_mime])) {
-        @unlink($dest);
+        if (!@unlink($dest)) {
+            log_err('Upload rejected but artifact survived: ' . $dest);
+        }
         return false;
     }
     // If GD rendered into a different format than sniffed on input, rename
@@ -340,7 +342,9 @@ function save_uploaded_photo(array $file_entry, int $order_id, int $max_bytes = 
     if ($out_mime !== $mime) {
         $renamed = $dir . bin2hex(random_bytes(14)) . '.' . $allowed_mime[$out_mime];
         if (!@rename($dest, $renamed)) {
-            @unlink($dest);
+            if (!@unlink($dest)) {
+                log_err('Upload rename failed and artifact survived: ' . $dest);
+            }
             return false;
         }
         $dest = $renamed;

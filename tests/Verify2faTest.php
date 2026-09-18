@@ -100,6 +100,11 @@ $wrong = ($real === '000000') ? '000001' : '000000';
 T::ok('wrong code rejected', $st === 200 && str_contains($b, 'Invalid code.'));
 $csrf2 = $csrfOf($b);
 
+// Guessing visibility mirrors the password step: the rejected code lands in
+// the audit trail with the targeted account, never the tried code.
+$aud2 = $db->query("SELECT detail FROM audit_log WHERE action = '2fa_failed' ORDER BY id DESC LIMIT 1")->fetch();
+T::eq('rejected code audited with targeted account', 't_2fa_owner', $aud2['detail'] ?? null);
+
 // THE regression: the re-rendered form must carry a live token, so the
 // next attempt is judged on its code — not killed as "Invalid CSRF".
 [$st, $b, $ck] = _v2('POST', "$B/admin/verify_2fa.php",
