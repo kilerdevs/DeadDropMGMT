@@ -9,6 +9,8 @@ All notable changes to DeadDropMGMT are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-09-18
+
 ### Added
 - Self-hosted maps, Phase 1 (opt-in, OSM stays default): `map_provider`
   setting (`osm` | `selfhosted`, Settings → Maps), vendored MapLibre GL JS
@@ -321,6 +323,10 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   across a rotation: entries written under the old key do not verify under the
   new one, so it now tells the operator to verify and archive `logs/app.log`
   first. README, tool and ADR-016 agree.
+- `SetupPasswordTest` no longer fails the whole suite when its built-in server
+  is slow or blocked: it takes a free port from the OS instead of a fixed one,
+  waits up to 20 s, and prints the server's stderr when the boot fails (seen
+  once on the MySQL 8 CI job with no diagnostics).
 
 ### Security
 - Full code audit. Fixed below; deliberately left: the public "No tracking" wording
@@ -789,7 +795,8 @@ First tagged release: the security-hardened core, fully gated by CI.
 - Actions pinned by SHA, workflows read-only, Dependabot
   (actions + composer + docker)
 
-[Unreleased]: https://github.com/kilerdevs/DeadDropMGMT/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/kilerdevs/DeadDropMGMT/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/kilerdevs/DeadDropMGMT/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/kilerdevs/DeadDropMGMT/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/kilerdevs/DeadDropMGMT/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/kilerdevs/DeadDropMGMT/compare/v1.1.0...v1.2.0
