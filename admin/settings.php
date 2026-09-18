@@ -120,6 +120,7 @@ function s_label(array $s, string $key): string {
 <meta name="darkreader-lock">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Admin — <?= t('admin.settings.title') ?></title><link rel="stylesheet" href="/admin/style.css">
+<link rel="stylesheet" href="/admin/vendor/leaflet/leaflet.css">
 <meta name="csrf-token" content="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
 </head>
 <body>
@@ -310,7 +311,11 @@ function s_label(array $s, string $key): string {
                         </thead>
                         <tbody id="maps-tbody">
                         <?php foreach ($map_zones as $mz): ?>
-                        <tr data-id="<?= (int)$mz['id'] ?>">
+                        <tr data-id="<?= (int)$mz['id'] ?>"
+                            data-min-lon="<?= htmlspecialchars((string)$mz['min_lon'], ENT_QUOTES, 'UTF-8') ?>"
+                            data-min-lat="<?= htmlspecialchars((string)$mz['min_lat'], ENT_QUOTES, 'UTF-8') ?>"
+                            data-max-lon="<?= htmlspecialchars((string)$mz['max_lon'], ENT_QUOTES, 'UTF-8') ?>"
+                            data-max-lat="<?= htmlspecialchars((string)$mz['max_lat'], ENT_QUOTES, 'UTF-8') ?>">
                             <td class="px-url"><?= htmlspecialchars((string)$mz['name'], ENT_QUOTES, 'UTF-8') ?></td>
                             <td>z<?= (int)$mz['maxzoom'] ?></td>
                             <td class="mz-status"><?= htmlspecialchars(t('admin.maps.status.' . $mz['status']), ENT_QUOTES, 'UTF-8') ?></td>
@@ -343,6 +348,17 @@ function s_label(array $s, string $key): string {
                                     <option value="15"><?= t('admin.maps.z15') ?></option>
                                 </select></label>
                         </div>
+                        <div class="field-label" style="margin-top:12px"><?= htmlspecialchars(t('admin.maps.editor_title'), ENT_QUOTES, 'UTF-8') ?></div>
+                        <div class="proxies-hint"><?= t('admin.maps.editor_hint') ?></div>
+                        <div class="maps-search-row">
+                            <input type="text" id="mz-search" maxlength="200" autocomplete="off"
+                                placeholder="<?= htmlspecialchars(t('admin.maps.search_placeholder'), ENT_QUOTES, 'UTF-8') ?>">
+                            <button type="button" id="mz-find" class="action-btn"><?= t('admin.maps.search_button') ?></button>
+                            <button type="button" id="mz-draw" class="action-btn"><?= t('admin.maps.draw_button') ?></button>
+                            <button type="button" id="mz-clear" class="action-btn"><?= t('admin.maps.clear_button') ?></button>
+                        </div>
+                        <div id="mz-map" class="maps-editor-map"></div>
+                        <div class="maps-overlap" id="mz-overlap" hidden></div>
                         <fieldset class="maps-route">
                             <legend><?= t('admin.maps.route_legend') ?></legend>
                             <label><input type="radio" name="mz-via" value="1" <?= osm_proxy_enabled() ? 'checked' : '' ?>>
@@ -404,6 +420,7 @@ function s_label(array $s, string $key): string {
     </main>
 </div>
 
+<script src="/admin/vendor/leaflet/leaflet.js"></script>
 <script nonce="<?= htmlspecialchars($csp_nonce, ENT_QUOTES, 'UTF-8') ?>">
 (function () {
     var I = <?= json_encode([
@@ -432,6 +449,11 @@ function s_label(array $s, string $key): string {
         'mz_delete'         => t('admin.maps.delete_button'),
         'mz_no_zones'       => t('admin.maps.no_zones_yet'),
         'mz_disk_free'      => t('admin.maps.disk_free'),
+        'mz_overlap_warn'   => t('admin.maps.js.overlap_warning'),
+        'mz_geo_not_found'  => t('admin.maps.js.geocode_not_found'),
+        'mz_geo_error'      => t('admin.maps.js.geocode_error'),
+        'mz_draw'           => t('admin.maps.draw_button'),
+        'mz_drawing'        => t('admin.maps.drawing_button'),
         'mz_s_queued'      => t('admin.maps.status.queued'),
         'mz_s_sizing'      => t('admin.maps.status.sizing'),
         'mz_s_downloading' => t('admin.maps.status.downloading'),
@@ -680,6 +702,10 @@ function s_label(array $s, string $key): string {
             if (z.status === 'queued' || z.status === 'sizing' || z.status === 'downloading') active = true;
             var tr = document.createElement('tr');
             tr.dataset.id = z.id;
+            tr.dataset.minLon = z.min_lon;
+            tr.dataset.minLat = z.min_lat;
+            tr.dataset.maxLon = z.max_lon;
+            tr.dataset.maxLat = z.max_lat;
             var size, speed, eta, actions;
             if (z.status === 'ready' && z.bytes_expected !== null) {
                 size = mzFmtBytes(z.bytes_done || z.bytes_expected);
@@ -711,6 +737,10 @@ function s_label(array $s, string $key): string {
         });
         if (mzTable) mzTable.hidden = zones.length === 0;
         if (mzEmpty) mzEmpty.hidden = zones.length !== 0;
+        // Re-rendered rows carry fresh bboxes — re-check a live draft.
+        // (Function declaration, hoisted: safe while the editor block below
+        // has not executed yet — it no-ops on an empty draft.)
+        if (typeof mzRefreshOverlap === 'function') mzRefreshOverlap();
         return active;
     }
 
@@ -773,6 +803,250 @@ function s_label(array $s, string $key): string {
                 }
             });
         });
+    }
+    // ── Zone rectangle editor (OSM canvas, same-origin tiles only) ────────────
+    // Leaflet core has no editable rectangles, so this is hand-rolled: a
+    // draft rectangle with four draggable corner handles. Dragging the body
+    // moves it, corners resize against the opposite corner. Every change
+    // syncs the numeric inputs above (the queue button reads those, so the
+    // editor needs no separate submit path) and re-checks overlap against
+    // the server-rendered rows (warning only — the worker happily stores
+    // shared tiles twice, the admin just deserves to know).
+    var mzMapEl = document.getElementById('mz-map');
+    if (mzMapEl && typeof L !== 'undefined') {
+        var mzMap = L.map('mz-map').setView([52.23, 21.01], 10);
+        L.tileLayer('/admin/tile_proxy.php?z={z}&x={x}&y={y}', {
+            maxZoom: 18, attribution: '© OpenStreetMap contributors',
+        }).addTo(mzMap);
+        var mzDraft = null;   // L.rectangle, the editable draft (or null)
+        var mzHandles = [];   // corner circleMarkers for the draft
+        var mzDrawing = false;
+        var mzDrawBtn = document.getElementById('mz-draw');
+        var mzClearBtn = document.getElementById('mz-clear');
+        var mzOverlap = document.getElementById('mz-overlap');
+        var mzFields = {
+            min_lon: document.getElementById('mz-min-lon'),
+            min_lat: document.getElementById('mz-min-lat'),
+            max_lon: document.getElementById('mz-max-lon'),
+            max_lat: document.getElementById('mz-max-lat'),
+        };
+
+        function mzNum(v) {
+            var n = parseFloat(String(v).replace(',', '.'));
+            return isNaN(n) ? null : n;
+        }
+        function mzRound(v) { return Math.round(v * 1e5) / 1e5; }
+
+        function mzExistingZones() {
+            var out = [];
+            document.querySelectorAll('#maps-tbody tr[data-id]').forEach(function (tr) {
+                var b = {
+                    min_lon: mzNum(tr.dataset.minLon), min_lat: mzNum(tr.dataset.minLat),
+                    max_lon: mzNum(tr.dataset.maxLon), max_lat: mzNum(tr.dataset.maxLat),
+                };
+                if (b.min_lon !== null && b.min_lat !== null && b.max_lon !== null && b.max_lat !== null) {
+                    out.push(b);
+                }
+            });
+            return out;
+        }
+        // Same fraction as maps_overlap_frac(): overlap area over $b's area.
+        function mzOverlapFrac(a, b) {
+            var w = Math.max(0, Math.min(a.max_lon, b.max_lon) - Math.max(a.min_lon, b.min_lon));
+            var h = Math.max(0, Math.min(a.max_lat, b.max_lat) - Math.max(a.min_lat, b.min_lat));
+            var area = Math.max(0, (b.max_lon - b.min_lon) * (b.max_lat - b.min_lat));
+            if (area <= 0) return 0;
+            return Math.min(1, (w * h) / area);
+        }
+        // Existing zones as red context rectangles (read-only).
+        mzExistingZones().forEach(function (b) {
+            L.rectangle([[b.min_lat, b.min_lon], [b.max_lat, b.max_lon]],
+                { color: '#c0392b', weight: 2, fillOpacity: 0.08, interactive: false }).addTo(mzMap);
+        });
+
+        function mzReadDraft() {
+            if (!mzDraft) return null;
+            var b = mzDraft.getBounds();
+            return { min_lon: mzRound(b.getWest()), min_lat: mzRound(b.getSouth()),
+                     max_lon: mzRound(b.getEast()), max_lat: mzRound(b.getNorth()) };
+        }
+        function mzRefreshOverlap() {
+            if (!mzOverlap) return;
+            var d = mzReadDraft();
+            if (!d) { mzOverlap.hidden = true; return; }
+            var worst = 0;
+            mzExistingZones().forEach(function (z) {
+                worst = Math.max(worst, mzOverlapFrac(d, z), mzOverlapFrac(z, d));
+            });
+            if (worst > 0) {
+                mzOverlap.textContent = I.mz_overlap_warn.replace('{n}', Math.round(worst * 100));
+                mzOverlap.hidden = false;
+            } else {
+                mzOverlap.hidden = true;
+            }
+        }
+        function mzSyncInputs() {
+            var d = mzReadDraft();
+            if (!d) return;
+            mzFields.min_lon.value = d.min_lon;
+            mzFields.min_lat.value = d.min_lat;
+            mzFields.max_lon.value = d.max_lon;
+            mzFields.max_lat.value = d.max_lat;
+            mzRefreshOverlap();
+        }
+        function mzClearHandles() {
+            mzHandles.forEach(function (h) { mzMap.removeLayer(h); });
+            mzHandles = [];
+        }
+        function mzClearDraft() {
+            if (mzDraft) { mzMap.removeLayer(mzDraft); mzDraft = null; }
+            mzClearHandles();
+            if (mzOverlap) mzOverlap.hidden = true;
+        }
+        function mzAddHandles() {
+            mzClearHandles();
+            if (!mzDraft) return;
+            var b = mzDraft.getBounds();
+            [['sw', b.getSouthWest()], ['nw', b.getNorthWest()],
+             ['ne', b.getNorthEast()], ['se', b.getSouthEast()]].forEach(function (pair) {
+                var h = L.circleMarker(pair[1], {
+                    radius: 8, color: '#1a73e8', fillColor: '#fff',
+                    fillOpacity: 1, weight: 3,
+                }).addTo(mzMap);
+                h.mzCorner = pair[0];
+                h.on('mousedown', function (e) {
+                    mzMap.dragging.disable();
+                    mzMap.on('mousemove', mzOnHandleDrag, h);
+                    mzMap.once('mouseup', function () {
+                        mzMap.off('mousemove', mzOnHandleDrag, h);
+                        mzMap.dragging.enable();
+                        mzSyncInputs();
+                    });
+                    L.DomEvent.stopPropagation(e);
+                });
+                mzHandles.push(h);
+            });
+        }
+        // `this` is the dragged handle: resize against the opposite corner.
+        function mzOnHandleDrag(e) {
+            if (!mzDraft) return;
+            var b = mzDraft.getBounds();
+            var opp = { sw: b.getNorthEast(), nw: b.getSouthEast(),
+                        ne: b.getSouthWest(), se: b.getNorthWest() }[this.mzCorner];
+            mzDraft.setBounds([opp, e.latlng]);
+            mzAddHandles();
+            mzSyncInputs();
+        }
+        function mzSetDraft(bounds) {
+            mzClearDraft();
+            mzDraft = L.rectangle(bounds, { color: '#1a73e8', weight: 2 }).addTo(mzMap);
+            mzAddHandles();
+            mzDraft.on('mousedown', function (e) {
+                // Move the whole rectangle; corners have their own handlers.
+                mzMap.dragging.disable();
+                var start = e.latlng, orig = mzDraft.getBounds();
+                function move(ev) {
+                    var dLat = ev.latlng.lat - start.lat, dLng = ev.latlng.lng - start.lng;
+                    mzDraft.setBounds([
+                        [orig.getSouth() + dLat, orig.getWest() + dLng],
+                        [orig.getNorth() + dLat, orig.getEast() + dLng],
+                    ]);
+                    mzHandles.forEach(function (h) { h.setLatLng(h.getLatLng().add([dLat, dLng])); });
+                    start = ev.latlng;
+                    orig = mzDraft.getBounds();
+                }
+                mzMap.on('mousemove', move);
+                mzMap.once('mouseup', function () {
+                    mzMap.off('mousemove', move);
+                    mzMap.dragging.enable();
+                    mzAddHandles();
+                    mzSyncInputs();
+                });
+                L.DomEvent.stopPropagation(e);
+            });
+            mzSyncInputs();
+        }
+
+        function mzSetDrawing(on) {
+            mzDrawing = on;
+            if (mzDrawBtn) {
+                mzDrawBtn.textContent = on ? I.mz_drawing : I.mz_draw;
+                mzDrawBtn.classList.toggle('action-btn--active', on);
+            }
+            mzMapEl.style.cursor = on ? 'crosshair' : '';
+        }
+        if (mzDrawBtn) {
+            mzDrawBtn.addEventListener('click', function () { mzSetDrawing(!mzDrawing); });
+        }
+        if (mzClearBtn) {
+            mzClearBtn.addEventListener('click', function () {
+                mzSetDrawing(false);
+                mzClearDraft();
+            });
+        }
+        mzMap.on('mousedown', function (e) {
+            if (!mzDrawing) return;
+            mzMap.dragging.disable();
+            var start = e.latlng, temp = L.rectangle([start, start], { color: '#1a73e8', weight: 2, dashArray: '4 4' }).addTo(mzMap);
+            function draw(ev) { temp.setBounds([start, ev.latlng]); }
+            mzMap.on('mousemove', draw);
+            mzMap.once('mouseup', function (ev) {
+                mzMap.off('mousemove', draw);
+                mzMap.removeLayer(temp);
+                mzMap.dragging.enable();
+                mzSetDrawing(false);
+                var end = (ev && ev.latlng) || start;
+                if (Math.abs(end.lat - start.lat) < 1e-7 || Math.abs(end.lng - start.lng) < 1e-7) return;
+                mzSetDraft([start, end]);
+            });
+        });
+        // Numeric inputs stay the source of truth for queueing — typing a
+        // valid bbox redraws the draft so both stay in sync.
+        ['min_lon', 'min_lat', 'max_lon', 'max_lat'].forEach(function (k) {
+            var inp = mzFields[k];
+            if (!inp) return;
+            inp.addEventListener('change', function () {
+                var b = { min_lon: mzNum(mzFields.min_lon.value), min_lat: mzNum(mzFields.min_lat.value),
+                          max_lon: mzNum(mzFields.max_lon.value), max_lat: mzNum(mzFields.max_lat.value) };
+                if (b.min_lon === null || b.min_lat === null || b.max_lon === null || b.max_lat === null) return;
+                if (!(b.min_lon < b.max_lon && b.min_lat < b.max_lat)) return;
+                if (Math.abs(b.min_lon) > 180 || Math.abs(b.max_lon) > 180) return;
+                if (Math.abs(b.min_lat) > 90 || Math.abs(b.max_lat) > 90) return;
+                mzSetDraft([[b.min_lat, b.min_lon], [b.max_lat, b.max_lon]]);
+            });
+        });
+        // Place search rides the existing proxied Nominatim path (no key, no
+        // direct third-party contact from the browser).
+        var mzSearch = document.getElementById('mz-search');
+        var mzFind = document.getElementById('mz-find');
+        function mzSearchPlace() {
+            if (!mzSearch || !mzSearch.value.trim()) return;
+            fetch('/admin/geocode_proxy.php?q=' + encodeURIComponent(mzSearch.value.trim()))
+                .then(function (r) { return r.json(); })
+                .then(function (j) {
+                    var hit = Array.isArray(j) ? j[0] : null;
+                    if (hit && hit.lat !== undefined && hit.lon !== undefined) {
+                        mzMap.setView([parseFloat(hit.lat), parseFloat(hit.lon)], Math.max(mzMap.getZoom(), 12));
+                    } else {
+                        showPopup(I.mz_geo_not_found, true);
+                    }
+                })
+                .catch(function () { showPopup(I.mz_geo_error, true); });
+        }
+        if (mzFind) mzFind.addEventListener('click', mzSearchPlace);
+        if (mzSearch) mzSearch.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') { e.preventDefault(); mzSearchPlace(); }
+        });
+        // Pre-draw the bbox if the inputs already hold one (e.g. after a
+        // failed queue attempt keeps the values).
+        (function () {
+            var b = { min_lon: mzNum(mzFields.min_lon.value), min_lat: mzNum(mzFields.min_lat.value),
+                      max_lon: mzNum(mzFields.max_lon.value), max_lat: mzNum(mzFields.max_lat.value) };
+            if (b.min_lon !== null && b.min_lat !== null && b.max_lon !== null && b.max_lat !== null
+                && b.min_lon < b.max_lon && b.min_lat < b.max_lat) {
+                mzSetDraft([[b.min_lat, b.min_lon], [b.max_lat, b.max_lon]]);
+            }
+        })();
     }
     // ── Log integrity verification ─────────────────────────────────────────────
     var vBtn    = document.getElementById('verify-log-btn');

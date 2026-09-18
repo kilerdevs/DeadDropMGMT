@@ -21,6 +21,15 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   proxy consent (fail-closed), Settings → Maps zone manager with polling,
   and a `maps-zones` Playwright spec for the hermetic UI paths. Page visits
   never download — the hourly steward only fails stalled jobs.
+- Self-hosted maps, Phase 3 (zone editor): draw the download rectangle
+  directly on an OSM canvas in Settings → Maps (same-origin tiles via
+  tile_proxy.php, zero third-party contact) — drag to draw, drag the body
+  to move, corners to resize, Clear to drop; every change syncs the
+  numeric bbox inputs that the queue button reads. Overlapping drafts
+  warn with the shared-tiles percentage (warning only), existing zones
+  render in red, and a place search pans through the proxied Nominatim
+  path. Pinned by a `maps-editor` Playwright spec (tile traffic aborted,
+  queued zones deleted again).
 - Single active session per account: a login elsewhere supersedes the old
   one (`users.active_session_id`, set at every full login). The superseded
   browser is logged out to the login page with an explanatory notice

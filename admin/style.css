@@ -1591,6 +1591,37 @@ h1 {
     align-items: baseline;
 }
 
+.maps-editor-map {
+    height:        320px;
+    border:        1px solid var(--border);
+    border-radius: 4px;
+    margin:        8px 0 4px;
+    background:    #0d1117;
+}
+
+.maps-search-row {
+    display:   flex;
+    gap:       8px;
+    flex-wrap: wrap;
+    align-items: center;
+    margin:    8px 0 4px;
+}
+
+.maps-search-row input[type="text"] {
+    flex:      1 1 180px;
+    min-width: 140px;
+}
+
+.maps-overlap {
+    font-size: 12px;
+    color:     #e0a100;
+    margin:    4px 0 8px;
+}
+
+.action-btn--active {
+    outline: 2px solid var(--accent, #1a73e8);
+}
+
 .map-coords {
     font-family:    'IBM Plex Mono', monospace;
     font-size:      11px;
