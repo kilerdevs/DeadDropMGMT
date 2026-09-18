@@ -98,36 +98,33 @@ all without the underlying data ever leaving the server in readable form.
 ### How an order travels
 
 ```mermaid
+%%{init: {"sequence": {"mirrorActors": false, "width": 110, "actorMargin": 30, "messageMargin": 28}}}%%
 sequenceDiagram
     autonumber
-    actor C as Owner / Courier
-    participant A as Admin panel
-    participant DB as MariaDB / MySQL
+    actor C as Owner /<br/>Courier
+    participant A as App
+    participant DB as Database
     actor R as Recipient
-    participant P as Public pages
 
-    C->>A: Create order (map pin, photos)
-    A->>DB: Location encrypted (AES-256-GCM)<br/>passphrase stored as bcrypt hash only
-    A-->>C: Passphrase shown exactly once
-    C->>A: Mark delivered (TTL starts)
-    R->>P: Look up order by token
-    R->>P: Unlock with passphrase (CSRF + rate limits)
-    P->>DB: Verify hash, decrypt location server-side
-    P-->>R: Reveal map and photos
-    R->>P: Confirm receipt
-    P->>DB: Order, photos and events deleted
+    C->>A: Create order<br/>(pin, photos)
+    A->>DB: Store encrypted<br/>location + hash
+    A-->>C: Passphrase<br/>shown once
+    C->>A: Mark delivered<br/>(TTL starts)
+    R->>A: Look up by token
+    R->>A: Unlock with passphrase<br/>(CSRF + rate limits)
+    A->>DB: Verify hash,<br/>decrypt
+    A-->>R: Reveal map<br/>and photos
+    R->>A: Confirm receipt
+    A->>DB: Delete order,<br/>photos, events
 ```
 
 ### Order lifecycle
 
 ```mermaid
-stateDiagram-v2
-    direction LR
-    [*] --> preparing: order created
-    preparing --> delivered: deliver (TTL starts)
-    delivered --> [*]: receipt confirmed
-    delivered --> [*]: closed by owner / courier
-    delivered --> [*]: TTL expired (cleanup sweep)
+flowchart TB
+    N(["order created"]) --> P["preparing"]
+    P -- "deliver (TTL starts)" --> D["delivered"]
+    D -- "receipt confirmed<br/>closed by owner / courier<br/>TTL expired (cleanup sweep)" --> G(["deleted"])
 ```
 
 Every transition is a conditional `UPDATE` / row-locked transaction, so concurrent or replayed requests are harmless no-ops.
@@ -492,28 +489,17 @@ The model assumes adversaries ranging from opportunistic to well-resourced:
 ### 3. Trust boundaries
 
 ```mermaid
-flowchart LR
+flowchart TB
     B(["Browser"]) -- "TLS (external)" --> W["Web server + PHP"]
-
-    subgraph PUB["Public zone"]
-        I["index.php<br/>receive.php"]
-    end
-    subgraph ADM["Admin zone"]
-        AD["admin/*<br/>session + CSRF + 2FA + role checks"]
-    end
-    subgraph LOC["Server-local"]
-        F["config.php · includes/<br/>logs/ · uploads/"]
-    end
-
-    W --> I
-    W --> AD
+    W --> I["Public zone<br/>index.php · receive.php"]
+    W --> AD["Admin zone<br/>session + CSRF + 2FA + roles"]
     I --> DB[("MySQL / MariaDB<br/>prepared statements only")]
     AD --> DB
-    I --- F
-    AD --- F
     AD -. "server-side only" .-> OSM["OSM tiles / Nominatim<br/>(optional proxy pool)"]
-    B -. "map iframe: leaks visitor IP" .-> OSM2["www.openstreetmap.org"]
+    B -. "map iframe:<br/>leaks visitor IP" .-> EMB["www.openstreetmap.org"]
 ```
+
+Server-local files (`config.php`, `includes/`, `logs/`, `uploads/`) are never served to browsers — see the filesystem boundary below.
 
 - **Public ↔ PHP**: no accounts — but sessions exist: the unlock form carries a single-use CSRF token (verified before any limiter budget is spent), and the reveal lives server-side sealed. Only token entropy + rate limiting protect S3 itself
 - **Admin ↔ PHP**: session cookie + CSRF token + TOTP; owner vs courier role split
