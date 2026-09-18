@@ -24,9 +24,14 @@ const PMTILES_JS_VERSION = '4.5.0';
 // MapLibre renders vector tiles with WebGL workers built from Blob URLs,
 // which the default CSP (script-src 'self' + nonce, no worker-src) blocks.
 // Both CSP profiles therefore carry worker-src 'self' blob: (see auth.php).
-// The glyph path below is reserved for Phase 3 (labels); the Phase 1 style
-// deliberately has no symbol layers so it renders with zero font files.
+// Label glyphs are vendored SDF fonts (Noto Sans, OFL — see
+// THIRD-PARTY-NOTICES.md), served same-origin so labels cost zero third-party
+// requests. A font named in a symbol layer must exist under fonts/glyphs/
+// (MapsTest walks the style and checks).
 const MAPS_GLYPHS_URL = '/fonts/glyphs/{fontstack}/{range}.pbf';
+const MAPS_FONT_REGULAR = 'Noto Sans Regular';
+const MAPS_FONT_MEDIUM  = 'Noto Sans Medium';
+const MAPS_FONT_ITALIC  = 'Noto Sans Italic';
 
 // Native detail of our extracts; the client overzooms crisply beyond it.
 const MAPS_SOURCE_MAXZOOM = 14;
@@ -38,19 +43,97 @@ function map_provider(): string {
     return $v === MAP_PROVIDER_SELFHOSTED ? MAP_PROVIDER_SELFHOSTED : MAP_PROVIDER_OSM;
 }
 
+// ── Zone file names ─────────────────────────────────────────────────────────
+// Zone files are served straight from /tiles/ so browsers can Range-fetch
+// them, and the public reveal page loads them anonymously — no session can
+// gate that. What CAN be kept private is the name: every zone file is
+// zone_<id>_<token>.pmtiles with a random 128-bit token in map_zones.file_token,
+// so files cannot be enumerated (or their coverage discovered) by walking ids.
+// The token reaches a browser only inside a style the server chose to send:
+// admins get every ready zone, a recipient only the zones covering their pin.
+// Same bearer-name model as the photo URLs.
+
+function maps_zone_valid_token(mixed $t): bool {
+    return is_string($t) && preg_match('/^[0-9a-f]{32}$/', $t) === 1;
+}
+
+function maps_zone_file_base(int $id, string $token): string {
+    return 'zone_' . $id . '_' . $token;
+}
+
+// The zone's secret file token, minted on first use for rows that predate the
+// column (their legacy zone_<id>.pmtiles / .part files are renamed to match,
+// so nothing stays reachable under the old guessable name). Race-safe: the
+// UPDATE only lands on a NULL token and the winner's value is what is read
+// back. Null when the row does not exist or the store is unreadable.
+function maps_zone_ensure_token(int $id): ?string {
+    try {
+        $db = get_db();
+        $st = $db->prepare('SELECT file_token FROM map_zones WHERE id = ? LIMIT 1');
+        $st->execute([$id]);
+        $tok = $st->fetchColumn();
+        if ($tok === false) {
+            return null;
+        }
+        if (!maps_zone_valid_token($tok)) {
+            $db->prepare('UPDATE map_zones SET file_token = ? WHERE id = ? AND (file_token IS NULL OR file_token = "")')
+               ->execute([bin2hex(random_bytes(16)), $id]);
+            $st->execute([$id]);
+            $tok = $st->fetchColumn();
+            if (!maps_zone_valid_token($tok)) {
+                return null;
+            }
+        }
+    } catch (Throwable $e) {
+        log_err('Zone token: ' . $e->getMessage());
+        return null;
+    }
+    foreach (['pmtiles', 'part'] as $ext) {
+        $legacy = maps_tiles_dir() . '/zone_' . $id . '.' . $ext;
+        $named  = maps_tiles_dir() . '/' . maps_zone_file_base($id, $tok) . '.' . $ext;
+        if (is_file($legacy) && !is_file($named)) {
+            @rename($legacy, $named);
+        }
+    }
+    return $tok;
+}
+
+// Absolute path of a zone's published file / in-flight download. Never
+// touches disk beyond the token lookup; unknown zones answer a path that
+// cannot exist (nothing is served, nothing is deleted).
+function maps_zone_path(int $id, bool $part = false): string {
+    $tok = maps_zone_ensure_token($id);
+    $base = $tok === null ? 'zone_' . $id . '_missing' : maps_zone_file_base($id, $tok);
+    return maps_tiles_dir() . '/' . $base . ($part ? '.part' : '.pmtiles');
+}
+
 // Ready-to-render zones: each ['id' => 'zone_<n>', 'file' => '<name>.pmtiles'].
 /** @return array<int,array{id:string,file:string}> */
 function maps_ready_zones(): array {
     try {
         $rows = get_db()->query(
-            "SELECT id FROM map_zones WHERE status = 'ready' ORDER BY id ASC"
+            "SELECT id, file_token FROM map_zones WHERE status = 'ready' ORDER BY id ASC"
         )->fetchAll();
     } catch (Throwable) {
         return []; // table missing (setup.sql not re-run) — no zones, no crash
     }
+    return maps_zone_entries($rows);
+}
+
+// Shared row → style-entry mapping for the two listings above and below.
+/**
+ * @param array<int,array<string,mixed>> $rows
+ * @return array<int,array{id:string,file:string}>
+ */
+function maps_zone_entries(array $rows): array {
     $out = [];
     foreach ($rows as $r) {
-        $out[] = ['id' => 'zone_' . (int)$r['id'], 'file' => 'zone_' . (int)$r['id'] . '.pmtiles'];
+        $id = (int)$r['id'];
+        $tok = maps_zone_valid_token($r['file_token'] ?? null) ? (string)$r['file_token'] : maps_zone_ensure_token($id);
+        if ($tok === null) {
+            continue; // no usable name — better no zone than a guessable one
+        }
+        $out[] = ['id' => 'zone_' . $id, 'file' => maps_zone_file_base($id, $tok) . '.pmtiles'];
     }
     return $out;
 }
@@ -67,7 +150,7 @@ function maps_covering_zones(float $lat, float $lng): array {
     }
     try {
         $st = get_db()->prepare(
-            "SELECT id FROM map_zones WHERE status = 'ready'
+            "SELECT id, file_token FROM map_zones WHERE status = 'ready'
              AND min_lon <= ? AND min_lat <= ? AND max_lon >= ? AND max_lat >= ?
              ORDER BY id ASC"
         );
@@ -76,26 +159,26 @@ function maps_covering_zones(float $lat, float $lng): array {
     } catch (Throwable) {
         return []; // table missing (setup.sql not re-run) — no zones, no crash
     }
-    $out = [];
-    foreach ($rows as $r) {
-        $out[] = ['id' => 'zone_' . (int)$r['id'], 'file' => 'zone_' . (int)$r['id'] . '.pmtiles'];
-    }
-    return $out;
+    return maps_zone_entries($rows);
 }
 
 // Build a MapLibre v8 style array for the given zones. One vector source per
-// zone file; the dark layer stack is emitted per source (later zones paint
-// over earlier ones where they overlap — the zone list warns about that).
+// zone file. Geometry for every zone is emitted first and every zone's labels
+// after it, so a later zone's ground never paints over an earlier zone's
+// street names where the two overlap (the zone list still warns about the
+// shared tiles). Dark theme, tuned for contrast: a road hierarchy with
+// casings, buildings under the roads, and street/place/POI labels.
 /** @param array<int,array{id:string,file:string}> $zones */
 function maps_style(array $zones): array {
     $style = [
         'version' => 8,
+        'glyphs'  => MAPS_GLYPHS_URL,
         'sources' => [],
         'layers'  => [
             [
                 'id'    => 'background',
                 'type'  => 'background',
-                'paint' => ['background-color' => '#111418'],
+                'paint' => ['background-color' => '#161a20'],
             ],
         ],
     ];
@@ -107,57 +190,419 @@ function maps_style(array $zones): array {
             'maxzoom'     => MAPS_SOURCE_MAXZOOM,
             'attribution' => '© OpenStreetMap contributors',
         ];
-        foreach (maps_layer_stack($src) as $layer) {
+        foreach (maps_base_layers($src) as $layer) {
+            $style['layers'][] = $layer;
+        }
+    }
+    foreach ($zones as $zone) {
+        foreach (maps_label_layers((string)$zone['id']) as $layer) {
             $style['layers'][] = $layer;
         }
     }
     return $style;
 }
 
-// The dark layer stack for one source. Geometry only (fill/line) — symbol/
-// text layers wait for vendored glyphs in Phase 3.
+// Road classes by Protomaps `kind_detail`: [fill colour, width in px at z14].
+// Widths scale with zoom in maps_road_width(); casing colour is shared.
+const MAPS_ROAD_CLASSES = [
+    'motorway'       => ['#c79a52', 6.0],
+    'motorway_link'  => ['#c79a52', 3.0],
+    'trunk'          => ['#bd9660', 5.2],
+    'trunk_link'     => ['#bd9660', 2.8],
+    'primary'        => ['#93a0af', 5.0],
+    'primary_link'   => ['#93a0af', 2.6],
+    'secondary'      => ['#7b8795', 4.2],
+    'secondary_link' => ['#7b8795', 2.4],
+    'tertiary'       => ['#687482', 3.4],
+    'tertiary_link'  => ['#687482', 2.2],
+    'residential'    => ['#556170', 2.5],
+    'unclassified'   => ['#556170', 2.5],
+    'living_street'  => ['#556170', 2.2],
+    'pedestrian'     => ['#4d5865', 2.0],
+    'service'        => ['#414b58', 1.4],
+    'taxiway'        => ['#414b58', 2.4],
+    'runway'         => ['#414b58', 5.0],
+];
+const MAPS_ROAD_FALLBACK = ['#556170', 2.0];
+const MAPS_ROAD_CASING   = '#0d1014';
+
+// Zoom → width multiplier relative to the z14 base of MAPS_ROAD_CLASSES.
+const MAPS_ROAD_ZOOM_SCALE = [8 => 0.1, 11 => 0.3, 14 => 1.0, 16 => 1.9, 19 => 5.6];
+
+// json_encode() writes a whole float such as 3.0 as `3`, so the style would
+// not survive its own JSON round trip. Emit whole numbers as ints up front.
+function maps_num(float $v): int|float {
+    return floor($v) === $v ? (int)$v : $v;
+}
+
+/** Data-driven width: a `match` on kind_detail per zoom stop, interpolated. */
+function maps_road_width(float $extra = 0.0): array {
+    $expr = ['interpolate', ['exponential', 1.4], ['zoom']];
+    foreach (MAPS_ROAD_ZOOM_SCALE as $zoom => $scale) {
+        $match = ['match', ['get', 'kind_detail']];
+        foreach (MAPS_ROAD_CLASSES as $detail => [, $w]) {
+            $match[] = $detail;
+            $match[] = maps_num(round($w * $scale + $extra, 2));
+        }
+        $match[] = maps_num(round(MAPS_ROAD_FALLBACK[1] * $scale + $extra, 2));
+        $expr[] = $zoom;
+        $expr[] = $match;
+    }
+    return $expr;
+}
+
+function maps_road_color(): array {
+    $match = ['match', ['get', 'kind_detail']];
+    foreach (MAPS_ROAD_CLASSES as $detail => [$color]) {
+        $match[] = $detail;
+        $match[] = $color;
+    }
+    $match[] = MAPS_ROAD_FALLBACK[0];
+    return $match;
+}
+
+// Membership filter. to-string turns a missing property into '' — a bare
+// null needle would make the whole filter error out and drop the feature.
+/** @param array<int,string> $values */
+function maps_in(string $prop, array $values): array {
+    return ['in', ['to-string', ['get', $prop]], ['literal', $values]];
+}
+
+// Ground, water, buildings, roads, rails, boundaries — no text.
 /** @return array<int,array<string,mixed>> */
-function maps_layer_stack(string $source): array {
+function maps_base_layers(string $source): array {
     $s = $source;
+    $hidden = ['platform', 'driveway', 'crossing', 'sidewalk', 'corridor', 'pier'];
     return [
         [
             'id' => "earth_$s", 'type' => 'fill', 'source' => $s,
             'source-layer' => 'earth',
-            'paint' => ['fill-color' => '#1a1e24'],
+            'paint' => ['fill-color' => '#161a20'],
         ],
         [
+            // Only present up to z7 — carries the ground at country scale.
+            'id' => "landcover_$s", 'type' => 'fill', 'source' => $s,
+            'source-layer' => 'landcover', 'maxzoom' => 8,
+            'paint' => ['fill-color' => ['match', ['get', 'kind'],
+                'forest', '#15221c', 'grassland', '#171f1a', 'scrub', '#171f1a',
+                'farmland', '#191f19', 'barren', '#1c2027', 'glacier', '#202730',
+                '#181c22']],
+        ],
+        [
+            // Residential / commercial stay earth-coloured on purpose: only
+            // land with a meaning of its own (green, water, campus, hospital)
+            // is tinted, so the map reads as places, not as noise.
             'id' => "landuse_$s", 'type' => 'fill', 'source' => $s,
             'source-layer' => 'landuse',
-            'paint' => ['fill-color' => '#1e242c'],
+            'filter' => ['!', maps_in('kind', ['residential', 'commercial', 'retail', 'kindergarten', 'pedestrian', 'platform', 'railway', 'construction', 'brownfield'])],
+            'layout' => ['fill-sort-key' => ['coalesce', ['get', 'sort_rank'], 0]],
+            'paint' => ['fill-color' => ['match', ['get', 'kind'],
+                ['park', 'nature_reserve', 'national_park', 'protected_area', 'garden', 'dog_park', 'recreation_ground', 'grass', 'meadow', 'grassland'], '#1a2b22',
+                ['wood', 'forest', 'scrub'], '#16251c',
+                ['pitch', 'playground'], '#1c2e26',
+                ['farmland', 'allotments'], '#1c221b',
+                'cemetery', '#1b2420',
+                'wetland', '#15252a',
+                ['sand', 'beach'], '#282b28',
+                'hospital', '#2b2029',
+                ['school', 'university', 'college'], '#29261c',
+                ['industrial', 'military'], '#1b1f26',
+                '#181c22']],
         ],
         [
             'id' => "water_$s", 'type' => 'fill', 'source' => $s,
             'source-layer' => 'water',
-            'paint' => ['fill-color' => '#0e2a3f'],
+            'filter' => ['==', ['geometry-type'], 'Polygon'],
+            'paint' => ['fill-color' => '#0f2b40'],
         ],
         [
-            'id' => "roads_$s", 'type' => 'line', 'source' => $s,
-            'source-layer' => 'roads',
+            'id' => "waterway_$s", 'type' => 'line', 'source' => $s,
+            'source-layer' => 'water',
+            'filter' => ['==', ['geometry-type'], 'LineString'],
+            'layout' => ['line-cap' => 'round', 'line-join' => 'round'],
             'paint' => [
-                'line-color' => '#5a636e',
-                'line-width' => ['interpolate', ['linear'], ['zoom'], 8, 0.5, 14, 3],
+                'line-color' => '#174463',
+                'line-width' => ['interpolate', ['linear'], ['zoom'],
+                    9, ['match', ['get', 'kind'], ['river', 'canal'], 0.7, 0.3],
+                    14, ['match', ['get', 'kind'], ['river', 'canal'], 3, 1],
+                    18, ['match', ['get', 'kind'], ['river', 'canal'], 12, 4]],
             ],
         ],
         [
             'id' => "buildings_$s", 'type' => 'fill', 'source' => $s,
-            'source-layer' => 'buildings',
-            'paint' => ['fill-color' => '#2a2f37'],
+            'source-layer' => 'buildings', 'minzoom' => 12,
+            'filter' => ['==', ['get', 'kind'], 'building'],
+            'paint' => [
+                'fill-color' => ['interpolate', ['linear'], ['zoom'], 13, '#1c2128', 17, '#262d36'],
+                'fill-outline-color' => ['interpolate', ['linear'], ['zoom'], 14, '#1c2128', 16, '#36404c'],
+            ],
+        ],
+        [
+            'id' => "rail_$s", 'type' => 'line', 'source' => $s,
+            'source-layer' => 'roads', 'minzoom' => 10,
+            'filter' => ['==', ['get', 'kind'], 'rail'],
+            'paint' => [
+                'line-color' => '#56606c',
+                'line-opacity' => ['match', ['get', 'kind_detail'], 'subway', 0.35, 1],
+                'line-width' => ['interpolate', ['linear'], ['zoom'], 10, 0.5, 14, 1.3, 18, 3.2],
+            ],
+        ],
+        [
+            'id' => "rail_ties_$s", 'type' => 'line', 'source' => $s,
+            'source-layer' => 'roads', 'minzoom' => 14.5,
+            'filter' => ['all', ['==', ['get', 'kind'], 'rail'], ['!=', ['get', 'kind_detail'], 'subway']],
+            'paint' => [
+                'line-color' => '#6d7885',
+                'line-dasharray' => [1.5, 2.5],
+                'line-width' => ['interpolate', ['linear'], ['zoom'], 14, 0.9, 18, 2.2],
+            ],
+        ],
+        [
+            'id' => "paths_$s", 'type' => 'line', 'source' => $s,
+            'source-layer' => 'roads', 'minzoom' => 15,
+            'filter' => ['all', ['==', ['get', 'kind'], 'path'], ['!', maps_in('kind_detail', $hidden)]],
+            'layout' => ['line-cap' => 'round'],
+            'paint' => [
+                'line-color' => '#76838f',
+                'line-dasharray' => [1.2, 1.6],
+                'line-width' => ['interpolate', ['linear'], ['zoom'], 15, 0.8, 18, 2.2],
+            ],
+        ],
+        [
+            'id' => "road_casing_$s", 'type' => 'line', 'source' => $s,
+            'source-layer' => 'roads', 'minzoom' => 6,
+            'filter' => ['all', maps_in('kind', ['highway', 'major_road', 'minor_road', 'other', 'aeroway']),
+                ['!', maps_in('kind_detail', $hidden)]],
+            'layout' => ['line-cap' => 'round', 'line-join' => 'round',
+                'line-sort-key' => ['coalesce', ['get', 'sort_rank'], 0]],
+            'paint' => [
+                'line-color' => MAPS_ROAD_CASING,
+                'line-opacity' => ['case', ['==', ['get', 'is_tunnel'], true], 0.4, 1],
+                'line-width' => maps_road_width(1.2),
+            ],
+        ],
+        [
+            'id' => "road_fill_$s", 'type' => 'line', 'source' => $s,
+            'source-layer' => 'roads', 'minzoom' => 6,
+            'filter' => ['all', maps_in('kind', ['highway', 'major_road', 'minor_road', 'other', 'aeroway']),
+                ['!', maps_in('kind_detail', $hidden)]],
+            'layout' => ['line-cap' => 'round', 'line-join' => 'round',
+                'line-sort-key' => ['coalesce', ['get', 'sort_rank'], 0]],
+            'paint' => [
+                'line-color' => maps_road_color(),
+                'line-opacity' => ['case', ['==', ['get', 'is_tunnel'], true], 0.45, 1],
+                'line-width' => maps_road_width(),
+            ],
         ],
         [
             'id' => "boundaries_$s", 'type' => 'line', 'source' => $s,
             'source-layer' => 'boundaries',
             'paint' => [
-                'line-color'   => '#3a4552',
-                'line-width'   => 1,
+                'line-color'     => ['match', ['get', 'kind'], 'country', '#6b7290', '#3d4658'],
+                'line-width'     => ['match', ['get', 'kind'], 'country', 1.2, 0.8],
                 'line-dasharray' => [3, 2],
             ],
         ],
     ];
+}
+
+// POI kinds by prominence and category. Tier A is drawn from z14 with a dot,
+// tier B from z15.5 with a dot, tier C from z17 as a small label only — the
+// same collision-checked layers stack, so a crowded block never turns to soup.
+const MAPS_POI_TIER_A = ['hospital', 'university', 'college', 'station', 'aerodrome', 'museum',
+    'castle', 'attraction', 'stadium', 'mall', 'townhall', 'zoo', 'park', 'nature_reserve'];
+const MAPS_POI_TIER_B = ['place_of_worship', 'library', 'police', 'fire_station', 'marketplace',
+    'supermarket', 'hotel', 'cinema', 'theatre', 'arts_centre', 'sports_centre', 'fuel',
+    'clinic', 'school', 'garden', 'cemetery', 'recreation_ground', 'courthouse', 'embassy',
+    'community_centre'];
+const MAPS_POI_TIER_C = ['restaurant', 'cafe', 'fast_food', 'bar', 'pub', 'convenience',
+    'doctors', 'pharmacy', 'dentist', 'kindergarten', 'bank', 'car_repair', 'bakery', 'hairdresser',
+    'post_office'];
+
+/** Category colour for a POI kind: health, transit, education, nature, shops & food, civic, culture. */
+function maps_poi_color(): array {
+    return ['match', ['get', 'kind'],
+        ['hospital', 'clinic', 'doctors', 'pharmacy', 'dentist'], '#e5787a',
+        ['station', 'aerodrome', 'railway'], '#5fa8e8',
+        ['university', 'college', 'school', 'kindergarten', 'library'], '#e3b04b',
+        ['park', 'nature_reserve', 'garden', 'cemetery', 'recreation_ground', 'zoo'], '#78b978',
+        ['supermarket', 'mall', 'marketplace', 'convenience', 'restaurant', 'cafe', 'fast_food',
+            'bar', 'pub', 'bakery', 'hairdresser', 'hotel', 'fuel'], '#e58f5c',
+        ['police', 'fire_station', 'townhall', 'post_office', 'courthouse', 'embassy', 'bank'], '#9aa5dd',
+        ['museum', 'theatre', 'cinema', 'attraction', 'castle', 'arts_centre', 'stadium',
+            'sports_centre', 'place_of_worship', 'community_centre'], '#c690d8',
+        '#9aa4b1'];
+}
+
+// Text-only layers, all placed above every zone's geometry. Later layers win
+// label collisions, so the order is: minor roads, roads, water, POIs, places.
+/** @return array<int,array<string,mixed>> */
+function maps_label_layers(string $source): array {
+    $s = $source;
+    $text = static fn (array $font, array $size, array $extra = []): array => array_merge([
+        'text-font'      => $font,
+        'text-size'      => $size,
+        'text-max-width' => 8,
+    ], $extra);
+    $roadSize = ['interpolate', ['linear'], ['zoom'], 13, 9, 15, 11, 17, 13, 19, 15];
+    $hasName = ['has', 'name'];
+    $roadName = ['coalesce', ['get', 'name'], ['get', 'ref']];
+    $roadHalo = ['text-color' => '#c3cbd6', 'text-halo-color' => '#11151a', 'text-halo-width' => 1.6];
+
+    $poiLayers = static function (string $id, array $kinds, int|float $minzoom, bool $dot) use ($s, $text): array {
+        $filter = maps_in('kind', $kinds);
+        $out = [];
+        if ($dot) {
+            $out[] = [
+                'id' => "{$id}_dot_$s", 'type' => 'circle', 'source' => $s,
+                'source-layer' => 'pois', 'minzoom' => $minzoom,
+                'filter' => ['all', ['has', 'name'], $filter],
+                'paint' => [
+                    'circle-color' => maps_poi_color(),
+                    'circle-radius' => ['interpolate', ['linear'], ['zoom'], 14, 2.6, 18, 4.5],
+                    'circle-stroke-color' => '#0d1014',
+                    'circle-stroke-width' => 1,
+                ],
+            ];
+        }
+        $out[] = [
+            'id' => "{$id}_label_$s", 'type' => 'symbol', 'source' => $s,
+            'source-layer' => 'pois', 'minzoom' => $minzoom,
+            'filter' => ['all', ['has', 'name'], $filter],
+            'layout' => $text([MAPS_FONT_REGULAR],
+                ['interpolate', ['linear'], ['zoom'], 14, 10, 18, 12.5],
+                [
+                    'text-field'  => ['get', 'name'],
+                    'text-anchor' => $dot ? 'top' : 'center',
+                    'text-offset' => $dot ? [0, 0.55] : [0, 0],
+                    'text-max-width' => 7,
+                    'text-padding' => 3,
+                ]),
+            'paint' => [
+                'text-color' => maps_poi_color(),
+                'text-halo-color' => '#0d1014',
+                'text-halo-width' => 1.5,
+            ],
+        ];
+        return $out;
+    };
+
+    $place = static fn (string $id, array $filter, array $minmax, array $size, string $color, array $font = [MAPS_FONT_MEDIUM], array $extra = []): array => [
+        'id' => "{$id}_$s", 'type' => 'symbol', 'source' => $s,
+        'source-layer' => 'places'] + $minmax + [
+        'filter' => $filter,
+        'layout' => $text($font, $size, array_merge([
+            'text-field' => ['get', 'name'],
+            'symbol-sort-key' => ['-', ['coalesce', ['get', 'population_rank'], 0]],
+        ], $extra)),
+        'paint' => ['text-color' => $color, 'text-halo-color' => '#0d1014', 'text-halo-width' => 1.8],
+    ];
+    $upper = ['text-transform' => 'uppercase', 'text-letter-spacing' => 0.12];
+
+    return array_merge(
+        [
+            [
+                'id' => "road_label_minor_$s", 'type' => 'symbol', 'source' => $s,
+                'source-layer' => 'roads', 'minzoom' => 14.5,
+                'filter' => ['all', $hasName, maps_in('kind', ['minor_road', 'other']),
+                    ['!', maps_in('kind_detail', ['platform', 'driveway', 'service'])]],
+                'layout' => $text([MAPS_FONT_REGULAR], $roadSize, [
+                    'symbol-placement' => 'line', 'text-field' => ['get', 'name'],
+                    'symbol-spacing' => 260, 'text-max-angle' => 35, 'text-padding' => 8,
+                ]),
+                'paint' => ['text-color' => '#a8b1bd', 'text-halo-color' => '#11151a', 'text-halo-width' => 1.5],
+            ],
+            [
+                'id' => "road_label_$s", 'type' => 'symbol', 'source' => $s,
+                'source-layer' => 'roads', 'minzoom' => 12.5,
+                'filter' => ['all', ['any', $hasName, ['has', 'ref']],
+                    maps_in('kind', ['highway', 'major_road'])],
+                'layout' => $text([MAPS_FONT_MEDIUM], $roadSize, [
+                    'symbol-placement' => 'line', 'text-field' => $roadName,
+                    'symbol-spacing' => 300, 'text-max-angle' => 35, 'text-padding' => 8,
+                    'symbol-sort-key' => ['match', ['get', 'kind'], 'highway', 0, 1],
+                ]),
+                'paint' => $roadHalo,
+            ],
+            [
+                'id' => "water_line_label_$s", 'type' => 'symbol', 'source' => $s,
+                'source-layer' => 'water', 'minzoom' => 12,
+                'filter' => ['all', $hasName, ['==', ['geometry-type'], 'LineString']],
+                'layout' => $text([MAPS_FONT_ITALIC], ['interpolate', ['linear'], ['zoom'], 12, 10, 17, 13], [
+                    'symbol-placement' => 'line', 'text-field' => ['get', 'name'],
+                    'symbol-spacing' => 350, 'text-letter-spacing' => 0.1,
+                ]),
+                'paint' => ['text-color' => '#6f9dc4', 'text-halo-color' => '#0c2233', 'text-halo-width' => 1.4],
+            ],
+            [
+                'id' => "water_label_$s", 'type' => 'symbol', 'source' => $s,
+                'source-layer' => 'water', 'minzoom' => 11,
+                'filter' => ['all', $hasName, ['==', ['geometry-type'], 'Polygon'],
+                    ['!', maps_in('kind', ['swimming_pool', 'fountain'])]],
+                'layout' => $text([MAPS_FONT_ITALIC], ['interpolate', ['linear'], ['zoom'], 11, 10, 16, 14], [
+                    'text-field' => ['get', 'name'], 'text-letter-spacing' => 0.08,
+                ]),
+                'paint' => ['text-color' => '#6f9dc4', 'text-halo-color' => '#0c2233', 'text-halo-width' => 1.4],
+            ],
+            [
+                // Street numbers on buildings once the map is zoomed to street level.
+                'id' => "housenumber_$s", 'type' => 'symbol', 'source' => $s,
+                'source-layer' => 'buildings', 'minzoom' => 17,
+                'filter' => ['has', 'addr_housenumber'],
+                'layout' => $text([MAPS_FONT_REGULAR], ['interpolate', ['linear'], ['zoom'], 17, 9, 19, 12], [
+                    'text-field' => ['get', 'addr_housenumber'], 'text-max-width' => 4,
+                ]),
+                'paint' => ['text-color' => '#8a94a1', 'text-halo-color' => '#141920', 'text-halo-width' => 1.2],
+            ],
+            [
+                // Named residential estates: quiet italic area labels.
+                'id' => "area_label_$s", 'type' => 'symbol', 'source' => $s,
+                'source-layer' => 'pois', 'minzoom' => 15.5,
+                'filter' => ['all', $hasName, maps_in('kind', ['residential'])],
+                'layout' => $text([MAPS_FONT_ITALIC], ['interpolate', ['linear'], ['zoom'], 15.5, 9.5, 18, 12], [
+                    'text-field' => ['get', 'name'], 'text-max-width' => 6,
+                ]),
+                'paint' => ['text-color' => '#7f8896', 'text-halo-color' => '#0d1014', 'text-halo-width' => 1.4],
+            ],
+        ],
+        $poiLayers('poi_c', MAPS_POI_TIER_C, 17, false),
+        $poiLayers('poi_b', MAPS_POI_TIER_B, 15.5, true),
+        $poiLayers('poi_a', MAPS_POI_TIER_A, 14, true),
+        [
+            $place('place_neighbourhood',
+                ['all', ['==', ['get', 'kind'], 'neighbourhood']],
+                ['minzoom' => 13.5, 'maxzoom' => 18],
+                ['interpolate', ['linear'], ['zoom'], 13.5, 9.5, 16, 12], '#7f8a99', [MAPS_FONT_MEDIUM], $upper),
+            $place('place_district',
+                ['==', ['get', 'kind'], 'macrohood'],
+                ['minzoom' => 10.5, 'maxzoom' => 15],
+                ['interpolate', ['linear'], ['zoom'], 10.5, 10, 14, 13], '#9aa5b5', [MAPS_FONT_MEDIUM], $upper),
+            $place('place_hamlet',
+                ['all', ['==', ['get', 'kind'], 'locality'], ['==', ['get', 'kind_detail'], 'hamlet']],
+                ['minzoom' => 12],
+                ['interpolate', ['linear'], ['zoom'], 12, 10, 16, 13], '#aab3c0', [MAPS_FONT_REGULAR]),
+            $place('place_village',
+                ['all', ['==', ['get', 'kind'], 'locality'], ['==', ['get', 'kind_detail'], 'village']],
+                ['minzoom' => 9.5],
+                ['interpolate', ['linear'], ['zoom'], 9.5, 10.5, 15, 15], '#c2c9d4'),
+            $place('place_town',
+                ['all', ['==', ['get', 'kind'], 'locality'], ['==', ['get', 'kind_detail'], 'town']],
+                ['minzoom' => 7],
+                ['interpolate', ['linear'], ['zoom'], 7, 11, 13, 17], '#d6dbe3'),
+            $place('place_city',
+                ['all', ['==', ['get', 'kind'], 'locality'], ['==', ['get', 'kind_detail'], 'city']],
+                ['minzoom' => 3],
+                ['interpolate', ['linear'], ['zoom'], 3, 11, 8, 16, 13, 24], '#eef1f6'),
+            $place('place_region',
+                ['==', ['get', 'kind'], 'region'],
+                ['minzoom' => 4, 'maxzoom' => 9],
+                ['interpolate', ['linear'], ['zoom'], 4, 10, 8, 13], '#7c8698', [MAPS_FONT_REGULAR], $upper),
+            $place('place_country',
+                ['==', ['get', 'kind'], 'country'],
+                ['minzoom' => 1, 'maxzoom' => 8],
+                ['interpolate', ['linear'], ['zoom'], 1, 10, 6, 16], '#a6afbe', [MAPS_FONT_MEDIUM], $upper),
+        ],
+    );
 }
 
 // ── Phase 2: zone downloads ─────────────────────────────────────────────────
@@ -197,6 +642,38 @@ function maps_arch(): ?string {
         return 'Linux_arm64';
     }
     return null;
+}
+
+// SHA-256 pins for the release v1.31.2 assets: the .tar.gz as downloaded and
+// the `pmtiles` binary inside it (both computed from the upstream release and
+// cross-checked against the binary a live install fetched on its own). The
+// binary runs as the web user, so it is never trusted on first use where a
+// pin exists. Bumping PMTILES_CLI_VERSION means re-pinning here.
+const PMTILES_CLI_PINS = [
+    'Linux_x86_64' => [
+        'tgz' => '3ed7dbf4ec2e6dfe5e25b6f70d1ffc932729f93c86db353bf514dd71010a312f',
+        'bin' => 'a7e9ae10184d109c83f456ccdf6df4f3e2a64ba6cf69d9ed0f9f1840305055c1',
+    ],
+    'Linux_arm64' => [
+        'tgz' => 'f8bd47e7ea866863489cad588fbaf2f31f42e5821f7a03f009b3769f05801cb1',
+        'bin' => '8cd0affde1ba5380b7cea6de0f94c674f88e4f586c77ae5820ea9652862691f4',
+    ],
+];
+
+// The pin for this host, or null when none applies: unsupported arch, or a
+// test/operator override (DDMGMT_PMTILES_URL / DDMGMT_PMTILES_BIN) that
+// deliberately points somewhere else — those keep the trust-on-first-use
+// record below.
+/** @return ?array{tgz:string,bin:string} */
+function maps_cli_pin(): ?array {
+    foreach (['DDMGMT_PMTILES_URL', 'DDMGMT_PMTILES_BIN'] as $override) {
+        $env = getenv($override);
+        if (is_string($env) && $env !== '') {
+            return null;
+        }
+    }
+    $arch = maps_arch();
+    return $arch !== null ? (PMTILES_CLI_PINS[$arch] ?? null) : null;
 }
 
 function maps_cli_asset(): ?string {
@@ -289,6 +766,13 @@ function maps_ensure_cli(bool $viaProxy, ?string $proxy): array {
         return [false, 'code:no_curl'];
     }
     $bin = maps_cli_bin();
+    // Pin first, execute second: an installed binary that is not the pinned
+    // release is deleted BEFORE the version probe would run it, and the
+    // fetch below replaces it.
+    $pin = maps_cli_pin();
+    if ($pin !== null && is_file($bin) && !hash_equals($pin['bin'], (string)hash_file('sha256', $bin))) {
+        @unlink($bin);
+    }
     // A test runner installed via maps_cli_runner() answers the version
     // probe below, so the file check is skipped in that case — hermetic
     // suites must never reach the network for a CLI download.
@@ -299,9 +783,12 @@ function maps_ensure_cli(bool $viaProxy, ?string $proxy): array {
             if (!is_file($bin)) {
                 return [true, '']; // stubbed CLI under test
             }
-            // Trust-on-first-use pin: record the hash, verify it on every
-            // later run. (Upstream publishes no checksums file; the release
-            // tag itself is maintainer-signed and the fetch is TLS.)
+            // Pinned builds were verified against their pin before the probe
+            // above ran; without a pin (override / other arch) the hash
+            // recorded at first use is the reference instead.
+            if ($pin !== null) {
+                return [true, ''];
+            }
             $hash = hash_file('sha256', $bin);
             $known = get_setting('maps_cli_sha256', '');
             if ($known === '') {
@@ -330,6 +817,12 @@ function maps_ensure_cli(bool $viaProxy, ?string $proxy): array {
     if (!$ok) {
         return [false, 'code:fetch_failed|' . $err];
     }
+    // Verify the archive against its pin BEFORE anything is unpacked: the
+    // download may have crossed a public pool proxy.
+    if ($pin !== null && !hash_equals($pin['tgz'], (string)hash_file('sha256', $tmp))) {
+        @unlink($tmp);
+        return [false, 'code:hash_mismatch'];
+    }
     try {
         $phar = new PharData($tmp);
         $phar->extractTo($dir, 'pmtiles', true);
@@ -344,6 +837,14 @@ function maps_ensure_cli(bool $viaProxy, ?string $proxy): array {
         return [false, 'code:version_mismatch'];
     }
     $hash = hash_file('sha256', $bin);
+    if ($pin !== null) {
+        if (!hash_equals($pin['bin'], (string)$hash)) {
+            @unlink($bin);
+            return [false, 'code:hash_mismatch'];
+        }
+        audit('maps_cli_fetch', null, null, 'v' . PMTILES_CLI_VERSION . ' sha256=' . substr((string)$hash, 0, 16) . '… (pinned)');
+        return [true, ''];
+    }
     $known = get_setting('maps_cli_sha256', '');
     if ($known === '') {
         set_setting('maps_cli_sha256', (string)$hash);
@@ -472,9 +973,9 @@ function maps_zone_add(string $name, float $minLon, float $minLat, float $maxLon
     try {
         $db = get_db();
         $db->prepare(
-            'INSERT INTO map_zones (name, min_lon, min_lat, max_lon, max_lat, maxzoom, via_proxy)
-             VALUES (?, ?, ?, ?, ?, ?, ?)'
-        )->execute([$name, $minLon, $minLat, $maxLon, $maxLat, $maxzoom, $viaProxy ? 1 : 0]);
+            'INSERT INTO map_zones (name, min_lon, min_lat, max_lon, max_lat, maxzoom, via_proxy, file_token)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        )->execute([$name, $minLon, $minLat, $maxLon, $maxLat, $maxzoom, $viaProxy ? 1 : 0, bin2hex(random_bytes(16))]);
         $id = (int)$db->lastInsertId();
     } catch (Throwable $e) {
         log_err('Zone add: ' . $e->getMessage());
@@ -493,18 +994,65 @@ function maps_zone_list(): array {
     }
 }
 
+// Whether the zone's row still exists. A zone deleted while its download runs
+// must not be published afterwards (an orphan file no row would ever remove).
+// Unreadable store answers true: never destroy work on a transient DB error.
+// It reads live state, so two calls in one pass may differ (row deleted in
+// between) — hence impure for static analysis.
+/** @phpstan-impure */
+function maps_zone_exists(int $id): bool {
+    try {
+        $st = get_db()->prepare('SELECT 1 FROM map_zones WHERE id = ? LIMIT 1');
+        $st->execute([$id]);
+        return (bool)$st->fetchColumn();
+    } catch (Throwable) {
+        return true;
+    }
+}
+
+// Removes zone files no row claims any more (deleted mid-download, crashed
+// publish). Only files older than an hour go: a fresh .part may belong to a
+// worker that has not written its row state yet.
+function maps_sweep_orphan_files(): int {
+    $removed = 0;
+    foreach (glob_list(maps_tiles_dir() . '/zone_*') as $f) {
+        if (!preg_match('/^zone_(\d+)(?:_([0-9a-f]{32}))?\.(pmtiles|part)$/', basename($f), $m)) {
+            continue;
+        }
+        if ((time() - (int)@filemtime($f)) < 3600) {
+            continue;
+        }
+        // Kept only while a row claims THIS name: a live zone's own file (or
+        // its legacy name, which the token lookup renames on first touch).
+        if (maps_zone_exists((int)$m[1])) {
+            $tok = $m[2] === '' ? null : $m[2];
+            $current = maps_zone_ensure_token((int)$m[1]);
+            if ($tok === null || $current === null || $tok === $current) {
+                continue;
+            }
+        }
+        if (@unlink($f)) {
+            $removed++;
+        }
+    }
+    return $removed;
+}
+
 function maps_zone_delete(int $id): bool {
     if ($id <= 0) {
         return false;
     }
+    // Resolve the file names while the row (and its token) still exists.
+    $final = maps_zone_path($id);
+    $part  = maps_zone_path($id, true);
     try {
         get_db()->prepare('DELETE FROM map_zones WHERE id = ?')->execute([$id]);
     } catch (Throwable $e) {
         log_err('Zone delete: ' . $e->getMessage());
         return false;
     }
-    @unlink(maps_tiles_dir() . '/zone_' . $id . '.pmtiles');
-    @unlink(maps_tiles_dir() . '/zone_' . $id . '.part');
+    @unlink($final);
+    @unlink($part);
     audit('maps_zone_delete', null, null, "id={$id}");
     return true;
 }
@@ -682,18 +1230,46 @@ function maps_parse_dur(string $s): int {
 // A lock older than the stall window belongs to a dead process — stealable.
 /** @return array{bool,string} [acquired, holder-or-error] */
 function maps_worker_lock(): array {
-    $raw = get_setting('maps_worker_lock', '');
-    if ($raw !== '') {
-        try {
-            $lock = json_decode($raw, true, 4, JSON_THROW_ON_ERROR);
-            if (is_array($lock) && (time() - (int)($lock['at'] ?? 0)) < MAPS_WORKER_STALL_SECS) {
-                return [false, 'worker already running (' . substr((string)($lock['by'] ?? '?'), 0, 32) . ')'];
+    $mine = json_encode(['by' => php_uname('n') . ':' . getmypid(), 'at' => time()]);
+    try {
+        $db = get_db();
+        // Read the row itself (never the per-process settings cache) and win
+        // it with a compare-and-swap: the INSERT / UPDATE succeeds for exactly
+        // one of any number of workers started at the same instant — a plain
+        // read-then-write let two of them both "acquire" and extract the same
+        // zone into the same .part file.
+        $st = $db->query("SELECT value FROM settings WHERE key_name = 'maps_worker_lock' LIMIT 1");
+        $raw = $st === false ? false : $st->fetchColumn();
+        if ($raw === false) {
+            $win = $db->prepare("INSERT IGNORE INTO settings (key_name, value, label) VALUES ('maps_worker_lock', ?, '')");
+            $win->execute([$mine]);
+        } else {
+            $raw = (string)$raw;
+            if ($raw !== '') {
+                try {
+                    $lock = json_decode($raw, true, 4, JSON_THROW_ON_ERROR);
+                    if (is_array($lock) && (time() - (int)($lock['at'] ?? 0)) < MAPS_WORKER_STALL_SECS) {
+                        return [false, 'worker already running (' . substr((string)($lock['by'] ?? '?'), 0, 32) . ')'];
+                    }
+                } catch (Throwable) {
+                    // Corrupt lock — stealable like a stale one.
+                }
             }
-        } catch (Throwable) {
-            // Corrupt lock — fall through and overwrite it.
+            $win = $db->prepare("UPDATE settings SET value = ? WHERE key_name = 'maps_worker_lock' AND value = ?");
+            $win->execute([$mine, $raw]);
         }
+        if ($win->rowCount() !== 1) {
+            return [false, 'worker already running (lock taken a moment ago)'];
+        }
+    } catch (Throwable $e) {
+        log_err('Maps worker lock: ' . $e->getMessage());
+        return [false, 'lock store unavailable'];
     }
-    set_setting('maps_worker_lock', json_encode(['by' => php_uname('n') . ':' . getmypid(), 'at' => time()]));
+    // Keep this process's settings cache coherent with what it just wrote.
+    $cache = &_settings_store();
+    if ($cache !== null) {
+        $cache['maps_worker_lock'] = (string)$mine;
+    }
     return [true, ''];
 }
 
@@ -713,7 +1289,9 @@ function maps_worker_unlock(): void {
 
 // Hourly steward (called from the pseudo-cron slot): fail jobs whose CLI
 // died without a word, release the lock behind them. Never downloads.
-function maps_steward(): void {    try {
+function maps_steward(): void {
+    maps_sweep_orphan_files();
+    try {
         $db = get_db();
         $cutoff = gmdate('Y-m-d H:i:s', time() - MAPS_WORKER_STALL_SECS);
         $st = $db->prepare(
@@ -732,7 +1310,7 @@ function maps_steward(): void {    try {
 
 // Throttled wrapper for page visits: a dice roll first (same rationale as
 // _cleanup_roll — no DB touch on most visits), then an hourly timestamp.
-function maps_steward_if_due(float $chance = 0.01): void {
+function maps_steward_if_due(float $chance = 1.0): void {
     static $ran = false;
     if ($ran) {
         return;
@@ -759,13 +1337,40 @@ function maps_steward_if_due(float $chance = 0.01): void {
     }
 }
 
+// A php the worker can run under. PHP_BINARY is only runnable from the CLI
+// SAPI: under mod_php it is empty (or the Apache binary) and under FPM it is
+// php-fpm, so a detached `$PHP_BINARY script &` would die silently while the
+// admin is told the worker started. Fall back to the CLI next to the install.
+function maps_php_cli(): ?string {
+    $candidates = [];
+    // constant(): PHPStan knows PHP_BINARY only as a non-empty string, but
+    // under mod_php it really is '' — the case this guard exists for.
+    $running = (string)constant('PHP_BINARY');
+    if (PHP_SAPI === 'cli' && $running !== '') {
+        $candidates[] = $running;
+    }
+    $candidates[] = PHP_BINDIR . '/php';
+    $candidates[] = '/usr/local/bin/php';
+    $candidates[] = '/usr/bin/php';
+    foreach ($candidates as $bin) {
+        if (is_file($bin) && is_executable($bin)) {
+            return $bin;
+        }
+    }
+    return null;
+}
+
 // Detached kick after queueing (Linux + exec only): the worker then runs
 // without holding any request. False = admin waits for system cron.
 function maps_kick_worker(): bool {
     if (PHP_OS_FAMILY !== 'Linux' || !function_exists('exec')) {
         return false;
     }
-    $php = escapeshellarg(PHP_BINARY);
+    $cli = maps_php_cli();
+    if ($cli === null) {
+        return false;
+    }
+    $php = escapeshellarg($cli);
     $script = escapeshellarg(dirname(__DIR__) . '/cron/maps_sync.php');
     @exec($php . ' ' . $script . ' > /dev/null 2>&1 &');
     return true;
@@ -810,13 +1415,17 @@ function maps_process_one(array $zone): array {
         return [false, $err];
     }
     $planet = MAPS_PLANET_FILE_URL . $build . '.pmtiles';
+    // File names carry the zone's secret token (see maps_zone_ensure_token):
+    // resolved once, so a delete mid-run cannot redirect later steps.
+    $partPath  = maps_zone_path($id, true);
+    $finalPath = maps_zone_path($id);
     $bbox = $zone['min_lon'] . ',' . $zone['min_lat'] . ',' . $zone['max_lon'] . ',' . $zone['max_lat'];
     $maxzoom = (int)$zone['maxzoom'];
 
     // ── Sizing: exact bytes before a single tile is kept ──
     $mark('sizing', ['build_key' => $build]);
     [$ok, $out] = maps_cli_exec(
-        ['extract', $planet, maps_tiles_dir() . '/zone_' . $id . '.part',
+        ['extract', $planet, $partPath,
          '--bbox=' . $bbox, '--maxzoom=' . $maxzoom, '--dry-run'],
         $viaProxy ? ['HTTP_PROXY' => $proxy, 'HTTPS_PROXY' => $proxy] : null
     );
@@ -861,17 +1470,22 @@ function maps_process_one(array $zone): array {
         }
     };
     [$ok, $out] = maps_cli_exec(
-        ['extract', $planet, maps_tiles_dir() . '/zone_' . $id . '.part',
+        ['extract', $planet, $partPath,
          '--bbox=' . $bbox, '--maxzoom=' . $maxzoom,
          '--download-threads=' . ($viaProxy ? '1' : '4')],
         $viaProxy ? ['HTTP_PROXY' => $proxy, 'HTTPS_PROXY' => $proxy] : null,
         $onChunk
     );
-    $part = maps_tiles_dir() . '/zone_' . $id . '.part';
+    $part = $partPath;
     if (!$ok || !is_file($part)) {
         $mark('failed', ['error' => 'code:download_failed|' . substr($out, -160)]);
         @unlink($part);
         return [false, 'code:download_failed'];
+    }
+    // Deleted while it downloaded: nothing may publish for a row that is gone.
+    if (!maps_zone_exists($id)) {
+        @unlink($part);
+        return [false, 'code:deleted'];
     }
 
     // ── Verify + publish atomically ──
@@ -881,11 +1495,15 @@ function maps_process_one(array $zone): array {
         @unlink($part);
         return [false, 'code:verify_failed'];
     }
-    $final = maps_tiles_dir() . '/zone_' . $id . '.pmtiles';
+    $final = $finalPath;
     if (!@rename($part, $final)) {
         $mark('failed', ['error' => 'code:publish_failed']);
         @unlink($part);
         return [false, 'code:publish_failed'];
+    }
+    if (!maps_zone_exists($id)) { // deleted during verify/publish
+        @unlink($final);
+        return [false, 'code:deleted'];
     }
     $mark('ready', [
         'bytes_done' => filesize($final),

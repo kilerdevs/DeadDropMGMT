@@ -1,6 +1,13 @@
 <?php
 declare(strict_types=1);
 
+// CLI only: this script must never be runnable over HTTP, whatever the
+// web server happens to serve.
+if (PHP_SAPI !== 'cli') {
+    http_response_code(404);
+    exit;
+}
+
 // Coverage runner: executes every *Test.php inside ONE process with
 // php-code-coverage collecting line data over includes/ (the security-critical
 // library code). Dev-only — requires `composer install` first.

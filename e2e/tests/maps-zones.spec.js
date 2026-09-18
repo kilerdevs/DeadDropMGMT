@@ -2,7 +2,7 @@
 // and server-side bbox validation — all without queueing anything, so no
 // worker can ever fire and the run stays hermetic (no network, no disk).
 const { test, expect } = require('@playwright/test');
-const { freshPage, closePage } = require('../helpers');
+const { freshPage, closePage, setZoneBbox } = require('../helpers');
 
 async function login(page) {
   await page.goto('/admin/index.php');
@@ -29,16 +29,29 @@ test('zones section renders with route consent defaulting to proxy', async ({ br
   }
 });
 
+test('queueing with nothing drawn asks to draw on the map', async ({ browser }) => {
+  const page = await freshPage(browser);
+  try {
+    await login(page);
+    await page.goto('/admin/settings.php');
+    await page.locator('#mz-name').fill('E2E Undrawn Zone');
+    await page.locator('#mz-add').click();
+    const popup = page.locator('#save-popup.visible.error');
+    await expect(popup).toBeVisible({ timeout: 10000 });
+    expect(await popup.textContent()).toMatch(/draw on the map/i);
+    expect(await page.locator('#maps-table tbody tr', { hasText: 'E2E Undrawn Zone' }).count()).toBe(0);
+  } finally {
+    await closePage(page);
+  }
+});
+
 test('non-numeric bbox is rejected with an error popup', async ({ browser }) => {
   const page = await freshPage(browser);
   try {
     await login(page);
     await page.goto('/admin/settings.php');
     await page.locator('#mz-name').fill('E2E Bad Zone');
-    await page.locator('#mz-min-lon').fill('not-a-number');
-    await page.locator('#mz-min-lat').fill('52.05');
-    await page.locator('#mz-max-lon').fill('21.30');
-    await page.locator('#mz-max-lat').fill('52.40');
+    await setZoneBbox(page, 'not-a-number', '52.05', '21.30', '52.40', { fireChange: false });
     await page.locator('#mz-add').click();
     const popup = page.locator('#save-popup.visible.error');
     await expect(popup).toBeVisible({ timeout: 10000 });

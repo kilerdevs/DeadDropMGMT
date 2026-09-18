@@ -1547,6 +1547,68 @@ h1 {
     pointer-events:   none;
 }
 
+/* Settings → Maps: zones list. Eight columns cannot fit the 600px settings
+   panel in every language (long headers such as SZCZEGÓŁOWOŚĆ alone overflow
+   it), so each zone is a two-line card instead of a table row: name and
+   actions on the first line, the facts (each prefixed with its column title
+   from data-label) wrapping freely below. The header row stays for screen
+   readers but is visually hidden. */
+.maps-table thead {
+    position: absolute;
+    width:    1px;
+    height:   1px;
+    overflow: hidden;
+    clip:     rect(0 0 0 0);
+}
+.maps-table,
+.maps-table tbody { display: block; }
+.maps-table tr {
+    display:     flex;
+    flex-wrap:   wrap;
+    align-items: center;
+    gap:         4px 16px;
+    padding:     12px 0;
+    border-bottom: 1px solid var(--border);
+}
+.maps-table td {
+    display:   block;
+    order:     3;
+    padding:   0;
+    border:    0;
+    min-width: 0;
+    font-size: 11px;
+    overflow-wrap: anywhere;
+}
+.maps-table td:empty { display: none; }
+.maps-table td[data-label]::before {
+    content:        attr(data-label) ' ';
+    font-family:    'IBM Plex Mono', monospace;
+    font-size:      9px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color:          var(--text-muted);
+}
+/* Line one: zone name (grows) + actions; the ::after item is a full-width
+   break that pushes every fact onto the next line. */
+.maps-table td:first-child {
+    order:       1;
+    flex:        1 1 0;
+    font-size:   13px;
+    color:       var(--text);
+}
+.maps-table td:first-child::before { content: none; }
+.maps-table .px-actions {
+    order:       1;
+    flex:        0 0 auto;
+    white-space: nowrap;
+}
+.maps-table tr::after {
+    content:    '';
+    order:      2;
+    flex-basis: 100%;
+    height:     0;
+}
+
 /* Settings → Maps: zones table + add form */
 .maps-disk {
     font-family:    'IBM Plex Mono', monospace;

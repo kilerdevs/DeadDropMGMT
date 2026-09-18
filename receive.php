@@ -60,10 +60,18 @@ function receipt_capability_valid(?array $cap, string $token): bool {
 // A token alone proves nothing: only a DELIVERED order may be received, so
 // anything else (preparing, already received/deleted, unknown) is bounced
 // with the same redirect — no existence or state oracle.
+// Only the two real steps render anything: an unknown step used to fall
+// through to the confirmation card for ANY well-formed token, no existence
+// or state check at all.
+if ($step !== 1 && $step !== 2) {
+    header('Location: /');
+    exit;
+}
+
 if ($step === 1 && $error === '') {
     try {
         $stmt = get_db()->prepare(
-            "SELECT id FROM orders WHERE order_token = ? AND status = 'delivered' LIMIT 1"
+            "SELECT id FROM orders WHERE order_token = ? AND status = 'delivered' AND " . ORDER_LIVE_SQL . ' LIMIT 1'
         );
         $stmt->execute([$raw_token]);
         $order = $stmt->fetch();

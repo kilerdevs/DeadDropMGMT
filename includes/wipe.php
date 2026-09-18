@@ -23,7 +23,7 @@ function do_panic_wipe(): array {
     // Every count is guarded: an unreadable table must surface as -1 in the
     // report (still wiped below if possible), never as a raw PDOException
     // escaping before the transaction with SQL text attached.
-    $report = ['orders' => -1, 'photos' => -1, 'events' => -1, 'audit' => -1, 'files' => 0, 'files_failed' => 0];
+    $report = ['orders' => -1, 'photos' => -1, 'events' => -1, 'audit' => -1, 'files' => 0, 'files_failed' => 0, 'tiles' => 0];
     foreach (['orders' => 'orders', 'photos' => 'order_photos', 'events' => 'order_events', 'audit' => 'audit_log'] as $k => $table) {
         try {
             $report[$k] = (int)$db->query("SELECT COUNT(*) FROM {$table}")->fetchColumn();
@@ -68,6 +68,10 @@ function do_panic_wipe(): array {
         @rmdir($dir);
     }
 
+    // The admin tile cache remembers every map area an admin looked at — at
+    // street zoom around a drop that IS the location. It dies with the rest.
+    _panic_wipe_tile_cache(dirname(__DIR__) . '/cache/osm_tiles', $report);
+
     // On-disk logs carry IPs and tokens — destroyed along with everything
     // else. Same overwrite treatment as photo files (finding: truncation
     // alone leaves the old blocks recoverable); both daemons reopen their
@@ -80,6 +84,28 @@ function do_panic_wipe(): array {
     }
 
     return $report;
+}
+
+// Empties the tile cache (the directory itself stays — tile_proxy.php
+// recreates subdirectories on demand). Counted apart from photo files so the
+// photo report keeps its meaning; failures still land in files_failed.
+function _panic_wipe_tile_cache(string $dir, array &$report): void {
+    if (!is_dir($dir) || is_link($dir)) {
+        return;
+    }
+    foreach (glob_list($dir . '/*') as $entry) {
+        if (is_dir($entry) && !is_link($entry)) {
+            _panic_wipe_tile_cache($entry, $report);
+            @rmdir($entry);
+            continue;
+        }
+        overwrite_and_unlink($entry);
+        if (@file_exists($entry) || is_link($entry)) {
+            $report['files_failed']++;
+        } else {
+            $report['tiles']++;
+        }
+    }
 }
 
 // Recursive sweep: only one level was walked before, so a nested directory

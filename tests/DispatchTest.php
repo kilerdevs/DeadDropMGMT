@@ -13,7 +13,7 @@ $root = dirname(__DIR__);
 /** @var array<string,array<string,mixed>> */
 $routes = require $root . '/admin/routes.php';
 
-T::ok('nine routes', count($routes) === 9);
+T::ok('eight routes', count($routes) === 8);
 foreach ($routes as $name => $r) {
     T::ok("route $name auth domain", in_array($r['auth'] ?? null, ['admin', 'owner', null], true));
     T::ok("route $name headers domain", in_array($r['headers'] ?? null, [true, false, 'json'], true));

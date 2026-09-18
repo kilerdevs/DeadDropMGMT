@@ -1,6 +1,13 @@
 <?php
 declare(strict_types=1);
 
+// CLI only: this script must never be runnable over HTTP, whatever the
+// web server happens to serve.
+if (PHP_SAPI !== 'cli') {
+    http_response_code(404);
+    exit;
+}
+
 // (Re)creates the browser-test database and its fixtures. Isolated from the
 // PHP suites by name (deaddrops_e2e, never deaddrops_test): the two harnesses
 // may run side by side, and neither may observe the other's rows.
@@ -51,17 +58,18 @@ $ins->execute(['E2EADMDELIV00001', $pw, $enc['ciphertext'], $enc['iv'], 'deliver
 // copied under its fresh name. maps-zones.spec.js accounts for this row —
 // it asserts the bad zone was NOT queued, not an empty table.
 $db->prepare("DELETE FROM map_zones WHERE name = 'E2E Reveal Zone'")->execute();
+$revealToken = bin2hex(random_bytes(16));
 $db->prepare(
-    "INSERT INTO map_zones (name, min_lon, min_lat, max_lon, max_lat, maxzoom, status)
-     VALUES ('E2E Reveal Zone', 20.95, 52.20, 21.10, 52.28, 14, 'ready')"
-)->execute();
+    "INSERT INTO map_zones (name, min_lon, min_lat, max_lon, max_lat, maxzoom, status, file_token)
+     VALUES ('E2E Reveal Zone', 20.95, 52.20, 21.10, 52.28, 14, 'ready', ?)"
+)->execute([$revealToken]);
 $revealZoneId = (int)$db->lastInsertId();
 foreach (glob(__DIR__ . '/../tiles/zone_*.pmtiles') ?: [] as $staleZone) {
     @unlink($staleZone);
 }
 copy(
     __DIR__ . '/fixtures/micro.pmtiles',
-    __DIR__ . '/../tiles/zone_' . $revealZoneId . '.pmtiles'
+    __DIR__ . '/../tiles/zone_' . $revealZoneId . '_' . $revealToken . '.pmtiles'
 );
 
 // Phase 5 freshness fixture: the cached planet build is newer than anything

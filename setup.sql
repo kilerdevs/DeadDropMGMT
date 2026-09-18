@@ -217,7 +217,11 @@ DEALLOCATE PREPARE src_stmt;
 -- downloading = CLI extract in flight (progress in bytes_done/speed_bps/
 -- eta_secs), ready = served, failed = see error. Written by the owner via
 -- Settings → Maps (admin/maps_action.php), advanced by cron/maps_sync.php.
--- No ALTER needed on upgrades: fresh installs and re-runs share this shape.
+-- file_token is the secret half of the zone's public file name
+-- (zone_<id>_<token>.pmtiles): the files are fetched anonymously by
+-- recipients, so the name — not the URL space — is what keeps them from being
+-- enumerated. Rows from before it existed get a token (and their file a new
+-- name) the first time the app touches them.
 
 CREATE TABLE IF NOT EXISTS map_zones (
     id             INT           AUTO_INCREMENT PRIMARY KEY,
@@ -235,11 +239,17 @@ CREATE TABLE IF NOT EXISTS map_zones (
     build_key      VARCHAR(16)            DEFAULT NULL,
     via_proxy      TINYINT(1)    NOT NULL DEFAULT 1,
     error          VARCHAR(255)           DEFAULT NULL,
+    file_token     CHAR(32)               DEFAULT NULL,
     created_at     DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at     DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
     INDEX idx_status (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+SET @c = (SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'map_zones' AND COLUMN_NAME = 'file_token');
+SET @s = IF(@c = 0, 'ALTER TABLE map_zones ADD COLUMN file_token CHAR(32) DEFAULT NULL', 'SELECT 1');
+PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 
 -- ── Event log ─────────────────────────────────────────────────────────────────
 -- event_type is VARCHAR (not ENUM) for forward compatibility.
@@ -337,7 +347,6 @@ INSERT INTO settings (key_name, value, label) VALUES
     ('admin_session_hours',     '4',       'Czas sesji admina (godziny)'),
     ('max_photo_mb',            '2',       'Maks. rozmiar zdjęcia (MB)'),
     ('allow_status_lookup',     '1',       'Zezwól na sprawdzenie statusu bez hasła'),
-    ('require_delivered_reveal','1',       'Ukryj lokalizację gdy W PRZYGOTOWANIU'),
     ('analytics_enabled',       '1',       'Włącz analitykę'),
     ('compliance_note_enabled', '0',       'Pokaż notę o zgodności na stronach publicznych'),
     ('osm_proxy_enabled',       '0',       'Przekieruj ruch OSM przez serwery proxy'),
@@ -345,3 +354,7 @@ INSERT INTO settings (key_name, value, label) VALUES
     ('show_error_log',          '0',       'Pokaż log błędów w ustawieniach'),
     ('last_cleanup',            '0',       '')
 ON DUPLICATE KEY UPDATE label = VALUES(label);
+
+-- Retired setting: 'require_delivered_reveal' never gated anything (a
+-- preparing order has never revealed its location). Drop the leftover row.
+DELETE FROM settings WHERE key_name = 'require_delivered_reveal';

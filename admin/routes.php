@@ -46,15 +46,6 @@ return [
             'deny' => ['flash_redirect' => '/admin/orders.php', 'flash_key' => 'admin.orders.flash.no_access'],
         ],
     ],
-    'order_remove' => [
-        'handler' => 'order_remove', 'auth' => 'admin', 'headers' => true,
-        'method' => 'POST', 'method_fail' => ['redirect' => '/admin/orders.php'],
-        'csrf' => true, 'csrf_fail' => ['flash_redirect' => '/admin/orders.php'],
-        'owns_order' => [
-            'source' => ['POST', 'id'],
-            'deny' => ['flash_redirect' => '/admin/orders.php', 'flash_key' => 'admin.orders.flash.no_access'],
-        ],
-    ],
     'photo_delete' => [
         'handler' => 'photo_delete', 'auth' => 'admin', 'headers' => true,
         'method' => 'POST', 'method_fail' => ['redirect' => '/admin/orders.php'],

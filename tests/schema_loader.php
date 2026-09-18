@@ -1,6 +1,13 @@
 <?php
 declare(strict_types=1);
 
+// CLI only: this script must never be runnable over HTTP, whatever the
+// web server happens to serve.
+if (PHP_SAPI !== 'cli') {
+    http_response_code(404);
+    exit;
+}
+
 // Loads setup.sql into the isolated test database (DDMGMT_DB_NAME, default
 // deaddrops_test). setup.sql hardcodes "deaddrops", so the token is replaced
 // with the target database name before execution. Idempotent — safe to rerun.

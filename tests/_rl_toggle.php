@@ -1,6 +1,13 @@
 <?php
 declare(strict_types=1);
 
+// CLI only: this script must never be runnable over HTTP, whatever the
+// web server happens to serve.
+if (PHP_SAPI !== 'cli') {
+    http_response_code(404);
+    exit;
+}
+
 // Probe spawned as a child process by RateLimitTest: flips the limiter
 // kill switch in a fresh process (get_settings() caches per process),
 // then reports rl_status() for the shared test IP/scope as JSON.

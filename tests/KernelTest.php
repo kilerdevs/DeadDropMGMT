@@ -81,7 +81,7 @@ foreach (glob($root . '/admin/*.php') as $f) {
     }
     $checked += _kernel_guarded($name, $src);
 }
-T::ok('admin entry pages scanned', $checked === 34);
+T::ok('admin entry pages scanned', $checked === 33);
 
 // ── Same rule for every other entry point: public pages, cron, CLI tools,
 // and the docker journey script. Deliberate exceptions (not scanned):
@@ -96,6 +96,31 @@ foreach ($others as $f) {
     $checked += _kernel_guarded('entry ' . basename($f), (string)file_get_contents($f));
 }
 T::ok('non-admin entry points scanned', count($others) === 10);
+
+// ── CLI-only scripts refuse every non-CLI SAPI, and the web server config
+// keeps developer/ops material off the wire (Apache .htaccess, nginx, Caddy).
+$cliOnly = array_merge(
+    glob($root . '/tools/*.php') ?: [],
+    glob($root . '/cron/*.php') ?: [],
+    [$root . '/docker/e2e_journey.php', $root . '/e2e/seed.php'],
+    glob($root . '/tests/*.php') ? array_values(array_filter(
+        glob($root . '/tests/*.php'),
+        static fn(string $f): bool => !str_ends_with($f, 'Test.php')
+    )) : [],
+);
+foreach ($cliOnly as $f) {
+    T::ok('CLI guard in ' . basename(dirname($f)) . '/' . basename($f),
+        str_contains((string)file_get_contents($f), "PHP_SAPI !== 'cli'"));
+}
+$htaccess = (string)file_get_contents($root . '/.htaccess');
+$nginx    = (string)file_get_contents($root . '/docker/nginx.conf');
+$caddy    = (string)file_get_contents($root . '/docker/Caddyfile');
+foreach (['tools', 'tests', 'docker', 'e2e', 'backups', 'data'] as $blocked) {
+    T::ok("Apache blocks /$blocked/", str_contains($htaccess, $blocked . '|') || str_contains($htaccess, '|' . $blocked));
+    T::ok("nginx blocks /$blocked/", (bool)preg_match('#\^/\([^)]*\b' . $blocked . '\b[^)]*\)/#', $nginx));
+    T::ok("Caddy blocks /$blocked/", str_contains($caddy, "/$blocked/*"));
+}
+T::ok('Apache blocks setup.sql and config.php.example', str_contains($htaccess, 'setup\.sql') && str_contains($htaccess, 'config\\.php\\.example'));
 
 // ── No function collisions with the service layer ───────────────────────────
 // PHP function names are case-insensitive: an entry script defining T()

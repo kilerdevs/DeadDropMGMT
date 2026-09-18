@@ -6,9 +6,7 @@ start_secure_session();
 require_admin();
 $csp_nonce = set_security_headers(true);
 
-$flash    = $_SESSION['flash']    ?? '';
-$flash_ok = $_SESSION['flash_ok'] ?? false;
-unset($_SESSION['flash'], $_SESSION['flash_ok']);
+[$flash, $flash_ok] = flash_take();
 
 $csrf = generate_csrf();
 ?>

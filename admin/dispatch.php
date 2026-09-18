@@ -28,6 +28,9 @@ define('DDMGMT_DISPATCH', $action);
 $headers = $route['headers'] ?? true;
 if ($headers === 'json') {
     header('Content-Type: application/json');
+    // JSON answers are never cached or sniffed into something else.
+    header('X-Content-Type-Options: nosniff');
+    header('Cache-Control: no-store');
 } else {
     set_security_headers($headers === true);
 }

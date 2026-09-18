@@ -377,6 +377,57 @@ $db->prepare('DELETE FROM orders WHERE order_token = ?')->execute([$tokD2]);
 T::ok('deleted order reveals nothing after unlock',
     !str_contains($bodyR, 'reveal-value') && !str_contains($bodyR, 'PUBLICFLOWTEST skrzynka'));
 
+// 10. Expiry is exact: an order past its lifetime is gone for recipients even
+// though the periodic sweep has not deleted the row yet.
+$tokX = 'PFTOKENEXPIRED01';
+$db->prepare('DELETE FROM orders WHERE order_token = ?')->execute([$tokX]);
+$db->prepare(
+    'INSERT INTO orders (order_token, pickup_password_hash, location_encrypted, location_iv, status, delivered_at, expires_at, notes)
+     VALUES (?, ?, ?, ?, "delivered", NOW() - INTERVAL 30 HOUR, NOW() - INTERVAL 1 HOUR, "")'
+)->execute([$tokX, $hash, $enc['ciphertext'], $enc['iv']]);
+set_setting('rate_limit_max', '50');
+$db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
+$ckX = '';
+[$stX, $bX, $ckX] = $pf_unlock($tokX, $pass, $ckX);
+T::ok('expired order refuses the correct password', $stX !== 302 && str_contains($bX, 'class="alert"'));
+[, $bX] = $pf_unlock($tokX, '', $ckX);
+T::ok('expired order shows no status card', !str_contains($bX, 'status-badge'));
+[, $bX] = _pf_get("http://127.0.0.1:$port/?token=$tokX");
+T::ok('expired order token link prefills nothing', !str_contains($bX, 'status-badge') && preg_match('/id="order_token"[^>]*value="' . $tokX . '"/s', $bX) !== 1);
+T::ok('the row itself is still there (sweep has not run)',
+    (bool)$db->query("SELECT 1 FROM orders WHERE order_token = '$tokX'")->fetch());
+$db->prepare('DELETE FROM orders WHERE order_token = ?')->execute([$tokX]);
+
+// 11. Free requests cannot launder guesses: with a budget of 3, wrong
+// passwords interleaved with token-only lookups AND with successful unlocks
+// of another (the attacker's own) order must still exhaust the IP budget.
+// Every guess uses a fresh session, so only the per-IP counter can be what
+// blocks. Dedicated orders: the shared ones above were consumed by earlier
+// steps, which would turn "successful unlock" into a mere unknown token.
+$tokG1 = 'PFTOKENGUESS0001'; // the victim's order
+$tokG2 = 'PFTOKENGUESS0002'; // the attacker's own, legitimately unlockable
+foreach ([$tokG1, $tokG2] as $tg) {
+    $db->prepare('DELETE FROM orders WHERE order_token = ?')->execute([$tg]);
+    $ins->execute([$tg, $hash, $enc['ciphertext'], $enc['iv'], 'delivered', date('Y-m-d H:i:s'), '']);
+}
+set_setting('rate_limit_max', '3');
+$db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
+$ckLook = '';
+for ($i = 0; $i < 3; $i++) {
+    $ckG = '';
+    $pf_unlock($tokG1, 'wrong-guess-' . $i, $ckG);
+    $pf_unlock($tokG1, '', $ckLook);          // status lookup between guesses
+    if ($i < 2) { // (a third one would rightly meet the exhausted budget)
+        $ckOk = '';
+        [$stOwn] = $pf_unlock($tokG2, $pass, $ckOk); // the attacker's own valid unlock
+        T::eq("attacker's own unlock really succeeds [$i]", 302, $stOwn);
+    }
+}
+$ckFinal = '';
+[, $bFinal] = $pf_unlock($tokG1, 'wrong-guess-final', $ckFinal);
+T::ok('interleaved lookups and unlocks did not reset the budget', str_contains($bFinal, 'cooldown-heading'));
+$db->prepare('DELETE FROM orders WHERE order_token IN (?, ?)')->execute([$tokG1, $tokG2]);
+
 // Cleanup
 $db->prepare('DELETE FROM orders WHERE order_token IN (?, ?, ?, ?, ?)')->execute([$tokD, $tokD2, $tokD3, $tokD4, $tokP]);
 $db->exec("DELETE FROM rate_limits WHERE scope = 'public'");

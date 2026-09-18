@@ -49,6 +49,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if (strlen($pw1) < 8) {
             $error = t('admin.setup.error.min8');
+        } elseif (!password_length_ok($pw1)) {
+            $error = t('admin.common.password_too_long');
         } elseif ($pw1 !== $pw2) {
             $error = t('admin.setup.error.mismatch');
         } else {

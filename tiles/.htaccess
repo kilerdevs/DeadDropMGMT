@@ -1,5 +1,23 @@
 # Self-hosted map zones (*.pmtiles) are public OSM-derived data, served
 # directly so browsers can issue HTTP Range requests against them.
-# (Location secrecy lives in the token gate, not tile secrecy.)
-# Listing off; style.php itself enforces the admin gate in code.
+# The FILE NAMES are the access control: zone_<id>_<128-bit token>.pmtiles,
+# handed out only inside styles the server chose to send (admins: all ready
+# zones; a recipient: the zones covering their pin), so files cannot be
+# enumerated or their coverage discovered. Listing off; style.php itself
+# enforces the admin gate in code.
 Options -Indexes
+
+# Only style.php (admin-gated in code) and the static *.pmtiles files belong
+# here. The directory is writable by the map worker, so nothing else may ever
+# execute or download: no other PHP-ish file, no half-finished .part transfer.
+<FilesMatch "^(?!style\.php$).+\.(php[0-9]?|phtml|phar)$">
+    Require all denied
+</FilesMatch>
+<FilesMatch "\.part$">
+    Require all denied
+</FilesMatch>
+# Pre-token names (zone_<id>.pmtiles / .part) are guessable by counting: the app
+# renames them on first touch, and until then they are not served at all.
+<FilesMatch "^zone_[0-9]+\.(pmtiles|part)$">
+    Require all denied
+</FilesMatch>

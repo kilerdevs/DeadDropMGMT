@@ -1,6 +1,13 @@
 <?php
 declare(strict_types=1);
 
+// CLI only: this script must never be runnable over HTTP, whatever the
+// web server happens to serve.
+if (PHP_SAPI !== 'cli') {
+    http_response_code(404);
+    exit;
+}
+
 // ── One-time migration: raw master key → HKDF purpose subkeys (ADR-016) ───────
 // Older versions encrypted location data and TOTP secrets directly with the
 // master key. The runtime now refuses raw-master rows and expects rows keyed

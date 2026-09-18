@@ -26,17 +26,36 @@ if ($rl['blocked']) {
 $username = trim(post_string('username'));
 $password = post_string('password');
 
+// Second budget, per ACCOUNT: the IP limiter alone is beaten by rotating
+// addresses. The threshold is deliberately looser than the IP one (an
+// attacker can spend it to lock a victim out for one window, so it must not
+// bite on a handful of typos), and it is keyed on the submitted name whether
+// or not the account exists.
+const LOGIN_ACCOUNT_MAX = 20;
+$acct = rl_account_subject('l:', $username);
+$acctRl = rl_status('admin_login_acct', $acct);
+// (rl_status()'s own 'blocked' trips at the IP threshold — only a fail-closed
+// verdict, which carries count 0, or the account threshold itself denies here.)
+if ($acctRl['count'] >= LOGIN_ACCOUNT_MAX || ($acctRl['blocked'] && $acctRl['count'] === 0)) {
+    $_SESSION['login_error'] = t('admin.login.error.rate_limited', ['min' => (int)ceil($acctRl['remaining'] / 60)]);
+    header('Location: /admin/index.php');
+    exit;
+}
+
+// Successful steps do NOT reset the IP budget: a valid credential of one's
+// own (a courier account, say) would otherwise wipe the counter between
+// guesses against the owner and the limiter would never bite. Failed
+// attempts age out with the window.
 switch (admin_login($username, $password)) {
     case 'ok':
-        rl_reset('admin_login');
+        rl_reset('admin_login_acct', $acct);
         header('Location: /admin/orders.php');
         exit;
     case 'need_2fa':
-        rl_reset('admin_login');
+        rl_reset('admin_login_acct', $acct);
         header('Location: /admin/verify_2fa.php');
         exit;
     case 'need_setup':
-        rl_reset('admin_login');
         header('Location: /admin/setup_password.php');
         exit;
 }
@@ -44,6 +63,7 @@ switch (admin_login($username, $password)) {
 // One atomic spend + verdict: a budget that fills with this very attempt
 // denies it immediately instead of leaking one extra try to a race.
 $hit = rl_hit('admin_login');
+rl_hit('admin_login_acct', LOGIN_ACCOUNT_MAX, null, $acct);
 // Brute-force visibility: every rejected password lands in the audit trail
 // (attempted username, never the password) next to the IP the audit row
 // always carries. Volume is inherently bounded — the limiter above caps

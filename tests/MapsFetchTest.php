@@ -195,15 +195,41 @@ $cache = null;
 // instead of re-downloading: hash recorded once, verified thereafter.
 @mkdir(maps_data_dir(), 0750, true);
 file_put_contents(maps_data_dir() . '/pmtiles', 'P2FAKEBIN');
+putenv('DDMGMT_PMTILES_BIN=' . maps_data_dir() . '/pmtiles'); // an override opts out of the release pin
 maps_cli_runner(static fn(): array => [true, 'pmtiles ' . PMTILES_CLI_VERSION]);
 [$ok, $err] = maps_ensure_cli(false, null);
 maps_cli_runner(null, true);
+putenv('DDMGMT_PMTILES_BIN');
 T::ok('present stub binary verifies: ' . $err, $ok);
 T::eq('TOFU hash pinned', hash('sha256', 'P2FAKEBIN'), get_setting('maps_cli_sha256', ''));
 $db->prepare("DELETE FROM settings WHERE key_name = 'maps_cli_sha256'")->execute();
 $cache = &_settings_store();
 $cache = null;
 @unlink(maps_data_dir() . '/pmtiles');
+
+// ── Release pin: no trust-on-first-use where a pin exists ───────────────────
+if (maps_arch() !== null) {
+    $pin = maps_cli_pin();
+    T::ok('a pin exists for this architecture',
+        is_array($pin) && preg_match('/^[0-9a-f]{64}$/', $pin['tgz']) === 1 && preg_match('/^[0-9a-f]{64}$/', $pin['bin']) === 1);
+    putenv('DDMGMT_PMTILES_URL=http://127.0.0.1:1/x.tgz');
+    T::eq('a URL override opts out of the pin', null, maps_cli_pin());
+    putenv('DDMGMT_PMTILES_URL');
+    putenv('DDMGMT_PMTILES_BIN=/nonexistent/pmtiles');
+    T::eq('a binary override opts out of the pin', null, maps_cli_pin());
+    putenv('DDMGMT_PMTILES_BIN');
+    // An installed binary that is not the pinned release is removed BEFORE
+    // the version probe could execute it.
+    @mkdir(maps_data_dir(), 0750, true);
+    file_put_contents(maps_data_dir() . '/pmtiles', 'NOT-THE-RELEASE');
+    maps_cli_runner(static fn(): array => [true, 'pmtiles ' . PMTILES_CLI_VERSION]);
+    maps_ensure_cli(false, null);
+    maps_cli_runner(null, true);
+    T::ok('binary off the pin is deleted, not run', !is_file(maps_data_dir() . '/pmtiles'));
+    @unlink(maps_data_dir() . '/pmtiles');
+    $cache = &_settings_store();
+    $cache = null;
+}
 
 // ── Worker lock / retry / kick ──────────────────────────────────────────────
 [$locked] = maps_worker_lock();
@@ -229,12 +255,51 @@ maps_worker_unlock();
 [$rid] = maps_zone_add('P2 Retry Zone', 20.85, 52.05, 21.30, 52.40, 14, false);
 $db->prepare("UPDATE map_zones SET status = 'failed', error = 'code:stalled' WHERE id = ?")->execute([$rid]);
 T::ok('failed zone retries', maps_zone_retry((int)$rid));
+
+// A zone deleted mid-download must not leave an orphan; the steward sweeps
+// files no row claims, but only aged ones (a fresh .part may be a worker's).
+T::ok('existing zone reads as existing', maps_zone_exists((int)$rid));
+T::ok('missing zone reads as missing', !maps_zone_exists(2147000000));
+@mkdir(maps_tiles_dir(), 0775, true);
+$orphan = maps_tiles_dir() . '/zone_2147000001.pmtiles';
+$liveFile = maps_zone_path((int)$rid);
+file_put_contents($orphan, 'x');
+file_put_contents($liveFile, 'x');
+maps_sweep_orphan_files();
+T::ok('fresh orphan is kept', is_file($orphan));
+touch($orphan, time() - 7200);
+touch($liveFile, time() - 7200);
+maps_sweep_orphan_files();
+T::ok('aged orphan is swept', !is_file($orphan));
+T::ok('aged file of a live zone is kept', is_file($liveFile));
+
+// A file wearing a token its zone no longer has (token regenerated, stale
+// copy) is an orphan even though the zone id is live.
+$staleTok = maps_tiles_dir() . '/zone_' . (int)$rid . '_' . str_repeat('a', 32) . '.pmtiles';
+file_put_contents($staleTok, 'x');
+touch($staleTok, time() - 7200);
+maps_sweep_orphan_files();
+T::ok('aged file with a foreign token is swept', !is_file($staleTok));
+T::ok('the live zone keeps its own file through that sweep', is_file($liveFile));
+
+// Deleting a zone removes both of its files under their secret names.
+$livePart = maps_zone_path((int)$rid, true);
+file_put_contents($livePart, 'p');
+T::ok('zone delete succeeds', maps_zone_delete((int)$rid));
+T::ok('delete removed the published file and the partial download', !is_file($liveFile) && !is_file($livePart));
+@unlink($liveFile);
+[$rid] = maps_zone_add('P2 Retry Zone 2', 20.85, 52.05, 21.30, 52.40, 14, false);
 $row = $db->query('SELECT status, error FROM map_zones WHERE id = ' . (int)$rid)->fetch();
 T::eq('retry resets to queued', 'queued', $row['status']);
 T::ok('queued zone does not retry', !maps_zone_retry((int)$rid));
 T::ok('retry rejects bad ids', !maps_zone_retry(0) && !maps_zone_retry(999999999));
 T::ok('delete rejects bad ids', !maps_zone_delete(0) && !maps_zone_delete(-5));
 T::ok('kick answers bool', is_bool(maps_kick_worker()));
+// The worker must never be launched through a non-CLI PHP_BINARY (empty under
+// mod_php): the resolver returns a runnable CLI or nothing, never ''.
+$cli = maps_php_cli();
+T::ok('php cli resolves to an executable', $cli !== null && $cli !== '' && is_executable($cli));
+T::eq('cli under CLI SAPI is the running binary', PHP_BINARY, $cli);
 $db->prepare('DELETE FROM map_zones WHERE id = ?')->execute([$rid]);
 
 // ── process_one failure arms (stub runner, no network) ──────────────────────
@@ -320,7 +385,7 @@ maps_cli_runner(null, true);
 $st = get_db()->query('SELECT status, error, bytes_done FROM map_zones WHERE id = ' . (int)$rid2)->fetch();
 T::ok('full pipeline reaches ready: ' . $err, $ok && $err === '' && $st['status'] === 'ready');
 T::eq('ready row carries byte count', 8, (int)$st['bytes_done']);
-$final = maps_tiles_dir() . '/zone_' . $rid2 . '.pmtiles';
+$final = maps_zone_path((int)$rid2);
 T::ok('published pmtiles kept', is_file($final) && file_get_contents($final) === 'PARTDATA');
 @unlink($final);
 get_db()->prepare('DELETE FROM map_zones WHERE id = ?')->execute([$rid2]);

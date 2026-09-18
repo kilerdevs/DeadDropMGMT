@@ -15,7 +15,7 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   workers. Pinned by `MapsTest` + a `maps-selfhosted` Playwright spec that
   renders a committed Warsaw fixture with zero third-party requests.
 - Self-hosted maps, Phase 2 (zone downloads): `map_zones` manifest,
-  `pmtiles` CLI auto-fetch (pinned v1.31.2, TOFU hash pin), `cron/maps_sync.php`
+  `pmtiles` CLI auto-fetch (pinned v1.31.2, SHA-256-pinned per architecture), `cron/maps_sync.php`
   worker (system cron + detached kick, one-at-a-time lock), exact dry-run
   sizing with disk-budget enforcement, live speed/ETA progress, per-download
   proxy consent (fail-closed), Settings → Maps zone manager with polling,
@@ -83,13 +83,151 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   staff, then the visitor choice, then the cookie, then the site default.
   `current_lang()` is no longer statically memoized so long-lived SAPIs
   can't pin the first request's language.
+- Self-hosted maps, Phase 6 (readable, labelled map): the dark style is
+  rebuilt for contrast and information density. Street names run along the
+  roads (motorway/trunk refs included), house numbers appear at street
+  zoom, and places are labelled by rank — city, town, village, hamlet, plus
+  district and neighbourhood names in spaced capitals — with water and
+  waterway names in italics. Points of interest are colour-coded by category
+  (health, transit, education, nature, shops & food, civic, culture) in
+  three prominence tiers so a dense block stays legible: major sites from
+  z14 with a dot, common ones from z15.5, small shops and cafés from z17 as
+  quiet text. Roads get a real hierarchy — casings, data-driven widths per
+  class, warm motorways, dimmed tunnels, dashed footpaths, ticked rail —
+  and buildings now paint *under* the roads (they used to sit on top,
+  which turned the map into grey blobs). Only meaningful land is tinted
+  (parks, woods, pitches, cemeteries, hospitals, campuses, water); housing
+  stays the ground colour. Labels are drawn from vendored Noto Sans SDF
+  glyphs (`fonts/glyphs/`, Latin, Latin Extended and Cyrillic — Polish,
+  Ukrainian and Russian names render), served same-origin, so the zero
+  third-party-request guarantee holds. With several zones, every zone's
+  labels are stacked above every zone's ground. `MapsTest` pins unique
+  layer ids, real basemap source layers, geometry-before-labels ordering
+  and that each font the style names ships its glyph ranges.
+
+### Security
+- Full code audit. Fixed below; deliberately left: the public "No tracking" wording
+  vs. retained lookup events, the compose file's default DB passwords / plain HTTP
+  (the entrypoint now warns), the base-image digest pin, and the config-fallback
+  owner login.
+  **CLI-only files were web-executable**: `tools/*`, `cron/*`, `docker/e2e_journey.php`,
+  `e2e/seed.php` and the `tests/` harness carried no auth and the default Apache
+  setup served them — `tools/mutation_probe.php` rewrites security code in place,
+  `purge_pickup_password_recovery.php` and `separate_keys.php` mutate data. Every
+  one now exits 404 unless `PHP_SAPI === 'cli'` (pinned over HTTP by
+  `AuthorizationHttpTest` and structurally by `KernelTest`), and the root
+  `.htaccess`, `docker/nginx.conf` and `docker/Caddyfile` deny `tools`, `tests`,
+  `docker`, `e2e`, `data`, `backups`, `.semgrep`, `.github`, `setup.sql`,
+  `composer.*`, `package*.json`, `auto-update.*` and friends.
+- **Expiry is exact**: lookup, unlock, the reveal re-check and receipt
+  confirmation refuse orders past `expires_at` (`ORDER_LIVE_SQL`) even before
+  the sweep deletes the row. The pseudo-cron no longer rolls a 1-in-100 die
+  (it made the sweep effectively daily on a quiet site — expired drops stayed
+  retrievable for days), and the Docker entrypoint runs `cron/cleanup.php`
+  every 15 minutes.
+- **Rate limits cannot be laundered**: a status lookup or a successful unlock
+  used to `rl_reset()` the whole per-IP counter, so guesses interleaved with
+  free requests (or with a valid login of one's own — a courier account) were
+  never throttled. They now `rl_refund()` exactly the one attempt spent, on the
+  public page and in admin login alike. Admin login gains a per-account budget
+  (20 failures / window, keyed on the submitted name whether or not it exists)
+  and 2FA a per-account budget next to the per-IP one, so rotating addresses
+  no longer buys unlimited guesses. Regression tests fail on the old code.
+- **Sessions belong to live accounts**: `require_admin()` re-reads the user row
+  every request — a deleted account is refused immediately, role and 2FA flag
+  follow the row, and an owner-triggered revoke (password change, 2FA reset)
+  ends every session of that account (the actor's own is kept). A 12-hour
+  absolute lifetime caps sessions that activity would otherwise keep alive
+  forever.
+- **Map zone files are no longer enumerable**: they were public at
+  `/tiles/zone_<id>.pmtiles`, so anyone could walk ids and learn which regions
+  the operation covers. Files are now `zone_<id>_<128-bit token>.pmtiles`
+  (`map_zones.file_token`); the name reaches a browser only inside a style the
+  server chose to send (admins: all ready zones, a recipient: only the zones
+  covering their pin) — the same bearer-name model as photo URLs. Existing
+  zones are migrated on first touch (token minted, files renamed), the old
+  names and `.part` files are denied by `tiles/.htaccess`, nginx and Caddy.
+- The `pmtiles` binary is verified against a pinned SHA-256 per architecture —
+  the archive before unpacking, the binary before it is ever executed — instead
+  of trust-on-first-use (override env vars keep TOFU for tests).
+- Owner bootstrap can be guarded with `DDMGMT_SETUP_TOKEN` (the first visitor
+  otherwise claims a fresh instance); unguarded bootstraps log a warning.
+- `auto-update.sh` deploys only tags signed by a key in `.allowed_signers`
+  (`ALLOW_UNSIGNED_TAGS=1` to opt out) and writes its dumps private (`umask 077`).
+- Panic wipe now also destroys the admin tile cache (it remembers every map area
+  viewed — at street zoom, the drop). Cache misses are budgeted per admin (600 /
+  min), only genuine PNGs are served or cached, and the hourly cleanup prunes the
+  cache by age and size.
+- Credentials no longer rest in the session store in plaintext: flashes carrying
+  a generated pickup password or an enrollment secret are sealed (`flash_set()` /
+  `flash_take()`). Passwords over bcrypt's 72 bytes are refused instead of being
+  silently truncated.
+- CSP gains `form-action 'self'` (both profiles); JSON endpoints send `nosniff` +
+  `no-store`; `tiles/.htaccess` denies every PHP file but `style.php`; the docroot
+  is mode 755 instead of the base image's world-writable 1777.
+- Retention: events for tokens that never matched an order (nothing else ever
+  deleted them) go after 30 days, audit rows after 365.
+- Photo cap is per order, not per request; `audit()` cuts on a character boundary
+  (a byte cut could make the INSERT fail and drop the row); zone retry is audited.
 
 ### Fixed
+- Settings → Maps zones list no longer overflows the settings card. Eight
+  table columns needed ~645 px inside a 600 px panel (long headers such as
+  SZCZEGÓŁOWOŚĆ alone were wider than their values), pushing the action
+  buttons past the border. Each zone is now a two-line card — name and
+  actions on the first line, the facts (detail, status, size, speed, ETA,
+  route, each prefixed with its column title) wrapping freely below — so it
+  fits in every language and state. Empty speed/ETA/size cells are hidden
+  instead of printing a column of dashes; the header row stays for screen
+  readers.
+- Queued zones sat on "Queued" forever under Apache: `maps_kick_worker()`
+  launched the worker as `$PHP_BINARY cron/maps_sync.php &`, but under
+  mod_php `PHP_BINARY` is empty (php-fpm: the fpm binary), so the detached
+  command died silently while the UI announced the worker had started. It
+  now resolves a real CLI (`maps_php_cli()`: the running binary under CLI,
+  else `PHP_BINDIR/php`, `/usr/local/bin/php`, `/usr/bin/php`) and reports
+  `false` — the honest "waits for cron" message — when none exists.
+- Docker image: `data/` and `tiles/` shipped root-owned via `COPY` and were
+  missing from the `chown`, so `www-data` could not write the downloaded
+  `pmtiles` CLI or extracted zones and every zone download failed. Both are
+  created and chowned at build time now.
+- `it`, `pl`, `ru` and `uk` were missing the 84 strings added with the
+  self-hosted maps UI (zone manager, editor, errors, pin status texts), so
+  Settings → Maps rendered in English for those languages; translated, and
+  the stale `admin.edit.current_pin` key dropped. `I18nTest` now fails when
+  any language lacks a key that `en` has or keeps one it does not (pl/ru/uk
+  pluralise with `.few`/`.many` in place of `.other`).
 - `pmtiles` CLI version probe used a `--version` flag the real tool never
   had (it takes a `version` subcommand), so every freshly downloaded tool
   failed its check and all zone downloads died as `code:version_mismatch`.
   The probe now runs `pmtiles version` (whose `pmtiles 1.31.2, commit …`
   line still contains the pinned version); the test doubles mirror it.
+- **The AES key vanished on every container restart**: the entrypoint exported
+  `DDMGMT_AES_KEY_HEX` only on first boot, so after `docker restart` or a host
+  reboot (container filesystem — `config.php` — survives, shell exports do not)
+  the app ran with the placeholder key and every location decrypt failed. The key
+  is resolved on every start (env > config volume > first-boot generation) and an
+  existing install without any key now refuses loudly instead of generating one.
+- The container shipped without a `php.ini`, so PHP's defaults contradicted the
+  app's own limits: `memory_limit` 128M against a 16-megapixel photo pipeline,
+  `upload_max_filesize` 2M / `post_max_size` 8M against phone photos (an
+  over-limit POST arrives empty and surfaces as "invalid CSRF token"), and
+  `session.gc_maxlifetime` 1440 s ended admin sessions after ~24 min idle whatever
+  `admin_session_hours` said. `docker/php-ddmgmt.ini` sets 256M / 20M / 64M /
+  6 h and turns `display_errors` off (early-bootstrap fatals printed paths).
+  `Dockerfile.fpm` also gains the `data/` and `tiles/` directories the map worker
+  needs.
+- Map worker lock was read-then-write, so two workers started together could
+  both "acquire" it and extract into the same `.part`; it is a compare-and-swap
+  now. A zone deleted mid-download is no longer published (orphan file no row
+  would ever remove), and the steward sweeps orphan zone files.
+- `receive.php` rendered the confirmation card for any well-formed token when
+  `step` was neither 1 nor 2 (no existence or state check); it redirects now.
+- `osm_reverse_url()` printed tiny coordinates in scientific notation
+  (`1.0E-5`), which Nominatim rejects.
+- The retired `require_delivered_reveal` setting (a toggle that never gated
+  anything) is gone from Settings, `save_setting` and `setup.sql` (the leftover
+  row is deleted on upgrade). `reveal_capability()` (unused) removed.
 - Stale keystroke poll no longer logs freshly-logged-in admins out: the
   login form polls `check_setup.php` per keystroke, and a poll in flight
   across login's session-regenerate landed with a dead session id — a
@@ -126,6 +264,23 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   Covered by a no-spend probe in `PublicFlowTest`.
 
 ### Changed
+- The duplicate `order_remove` admin endpoint (route, handler and legacy shim)
+  is gone: it was byte-for-byte `order_close`, and no page posted to either.
+  `order_close` stays.
+- Behaviour to know about: changing a password or resetting 2FA ends that
+  account's other sessions; a failed guess counts against an account or IP for
+  the whole window (successful logins no longer wipe it); zone files carry their
+  token in the name, so anything that hard-coded `/tiles/zone_<id>.pmtiles` must
+  read the URL from the style instead.
+- Settings → Maps: the four coordinate fields (west/south/east/north) are
+  gone from the "queue a new zone" form — the rectangle is drawn on the map,
+  which was already the primary path. The values now travel in hidden inputs
+  the editor writes and the queue button reads. **Clear** resets them (a
+  stale rectangle can no longer be queued invisibly), and queueing with
+  nothing drawn shows "Draw on the map" instead of a server-side "must be
+  numbers". The four label strings are dropped from all eight languages; the
+  e2e specs set the bbox through a `setZoneBbox` helper, with new specs for
+  the hidden fields, Clear, and the nothing-drawn guard.
 - Public language switcher restyled and relocated: a quiet footer row under
   the trust bar instead of a header control (plus `color-scheme: dark`, which
   is what actually keeps the native select out of the OS light theme). With

@@ -130,6 +130,51 @@ T::ok('config-fallback owner never superseded', !admin_session_superseded());
 $_SESSION = [];
 $db->prepare('DELETE FROM users WHERE id = ?')->execute([$sessId]);
 
+// ── Account state behind a session ──────────────────────────────────────────
+// A session is only as good as the account it was issued to: role and 2FA
+// flag come from the row on every request, a deleted account is refused, and
+// the owner can revoke every session of an account at once.
+$db->prepare("DELETE FROM users WHERE username = 't_auth_state'")->execute();
+$db->prepare("INSERT INTO users (username, password_hash, role) VALUES ('t_auth_state', ?, 'courier')")->execute([$hash]);
+$stId = (int)$db->lastInsertId();
+$_SESSION = [];
+start_secure_session();
+$_SESSION['user_id']      = $stId;
+$_SESSION['user_role']    = 'owner';   // a stale/forged cookie value
+$_SESSION['totp_enabled'] = true;
+T::eq('live account reads ok', 'ok', admin_session_status());
+T::eq('role follows the account row, not the session copy', 'courier', $_SESSION['user_role']);
+T::ok('2FA flag follows the account row', $_SESSION['totp_enabled'] === false);
+
+admin_revoke_sessions($stId); // acting on one's OWN account keeps this session
+T::eq('own revoke keeps the acting session', 'ok', admin_session_status());
+$_SESSION['user_id'] = 0;      // now act as someone else revoking $stId
+admin_revoke_sessions($stId);
+$_SESSION['user_id'] = $stId;
+T::eq('revoked account is refused', 'revoked', admin_session_status());
+T::ok('revoked counts as superseded', admin_session_superseded());
+T::eq('revoke ignores non-positive ids', null, admin_revoke_sessions(0));
+
+$db->prepare('DELETE FROM users WHERE id = ?')->execute([$stId]);
+T::eq('deleted account is gone', 'gone', admin_session_status());
+T::ok('gone is not "superseded" (require_admin acts on it separately)', !admin_session_superseded());
+$_SESSION['user_id'] = 0;
+T::eq('config-fallback owner reads ok', 'ok', admin_session_status());
+$_SESSION = [];
+
+// ── Flash messages: credentials are sealed at rest ─────────────────────────
+start_secure_session();
+flash_set('plain notice', false);
+T::eq('plain flash round-trips', ['plain notice', false], flash_take());
+flash_set('Password: SeCr3t&Pass!', true, true);
+T::ok('sensitive flash never rests in plaintext', !str_contains(json_encode($_SESSION), 'SeCr3t'));
+T::eq('sealed flash round-trips', ['Password: SeCr3t&Pass!', true], flash_take());
+T::eq('flash is consumed', ['', false], flash_take());
+$_SESSION = [];
+
+T::ok('72-byte password is accepted', password_length_ok(str_repeat('a', 72)));
+T::ok('73-byte password is refused (bcrypt would truncate)', !password_length_ok(str_repeat('a', 73)));
+
 // Cleanup
 $_POST = [];
 $db->prepare('DELETE FROM users WHERE id = ?')->execute([$pendingId]);

@@ -1,6 +1,13 @@
 <?php
 declare(strict_types=1);
 
+// CLI only: this script must never be runnable over HTTP, whatever the
+// web server happens to serve.
+if (PHP_SAPI !== 'cli') {
+    http_response_code(404);
+    exit;
+}
+
 // ── AES key rotation tool ─────────────────────────────────────────────────────
 // Re-encrypts every encrypted column with a new key, verifying each row
 // decrypts cleanly with the OLD key before rewriting anything.

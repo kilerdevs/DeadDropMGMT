@@ -45,16 +45,63 @@ T::eq('zone source is pmtiles vector',
      'attribution' => '© OpenStreetMap contributors'],
     $one['sources']['zone_7']);
 $layerIds = array_column($one['layers'], 'id');
-T::eq('one zone adds the six-layer stack', 7, count($layerIds));
+T::eq('layer ids are unique', count($layerIds), count(array_unique($layerIds)));
+T::eq('style declares the vendored glyph endpoint', MAPS_GLYPHS_URL, $one['glyphs']);
+$basemapLayers = ['earth', 'landcover', 'landuse', 'water', 'roads', 'buildings', 'boundaries', 'places', 'pois'];
+$fonts = [];
+$types = [];
 foreach ($one['layers'] as $layer) {
     if ($layer['id'] === 'background') {
         continue;
     }
+    $types[$layer['type']] = true;
     T::ok("layer {$layer['id']} binds the zone source",
         ($layer['source'] ?? '') === 'zone_7');
     T::ok("layer {$layer['id']} names a real basemap layer",
-        in_array($layer['source-layer'] ?? '', ['earth', 'landuse', 'water', 'roads', 'buildings', 'boundaries'], true));
+        in_array($layer['source-layer'] ?? '', $basemapLayers, true));
+    T::ok("layer {$layer['id']} id carries the source suffix", str_ends_with($layer['id'], '_zone_7'));
+    foreach ($layer['layout']['text-font'] ?? [] as $font) {
+        $fonts[$font] = true;
+    }
 }
+T::ok('style has geometry, dots and labels', isset($types['fill'], $types['line'], $types['circle'], $types['symbol']));
+T::ok('style labels streets, places and POIs',
+    in_array('road_label_zone_7', $layerIds, true)
+    && in_array('place_city_zone_7', $layerIds, true)
+    && in_array('poi_a_label_zone_7', $layerIds, true));
+// Roads must paint over buildings, or the map turns into grey blobs.
+T::ok('buildings paint under the roads',
+    array_search('buildings_zone_7', $layerIds, true) < array_search('road_casing_zone_7', $layerIds, true));
+
+// Every font a symbol layer names must ship as glyphs, or labels vanish
+// silently (MapLibre only logs a 404 per range).
+T::ok('style names at least one font', $fonts !== []);
+foreach (array_keys($fonts) as $font) {
+    foreach (['0-255', '256-511'] as $range) {
+        T::ok("glyphs shipped for {$font} {$range}",
+            is_file(dirname(__DIR__) . "/fonts/glyphs/{$font}/{$range}.pbf"));
+    }
+}
+
+// Two zones: every zone's labels sit above every zone's geometry, so a later
+// zone's ground never covers an earlier zone's street names.
+$two = maps_style([
+    ['id' => 'zone_1', 'file' => 'zone_1.pmtiles'],
+    ['id' => 'zone_2', 'file' => 'zone_2.pmtiles'],
+]);
+$order = array_column($two['layers'], 'type', 'id');
+$ids2 = array_keys($order);
+$lastGeometry = 0;
+$firstLabel = PHP_INT_MAX;
+foreach ($ids2 as $i => $id) {
+    if ($order[$id] === 'symbol') {
+        $firstLabel = min($firstLabel, $i);
+    } elseif ($id !== 'background' && $order[$id] !== 'circle') {
+        $lastGeometry = max($lastGeometry, $i);
+    }
+}
+T::ok('all geometry precedes all labels across zones', $lastGeometry < $firstLabel);
+T::eq('two zones register two sources', ['zone_1', 'zone_2'], array_keys($two['sources']));
 
 // The style endpoint json_encodes this array — it must survive the round trip.
 $rt = json_decode(json_encode($one, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), true);
@@ -121,12 +168,41 @@ T::ok('zone listed', in_array('P2 Test Zone', $names, true));
 T::eq('queued zone not ready', [], maps_ready_zones());
 $db->prepare("UPDATE map_zones SET status = 'ready' WHERE id = ?")->execute([$zid]);
 $ready = maps_ready_zones();
-T::eq('ready zone advertised', [['id' => 'zone_' . $zid, 'file' => 'zone_' . $zid . '.pmtiles']], $ready);
+$ztok = (string)$db->query('SELECT file_token FROM map_zones WHERE id = ' . (int)$zid)->fetchColumn();
+T::ok('new zones get a 128-bit file token', preg_match('/^[0-9a-f]{32}$/', $ztok) === 1);
+T::eq('ready zone advertised under its secret name', [['id' => 'zone_' . $zid, 'file' => 'zone_' . $zid . '_' . $ztok . '.pmtiles']], $ready);
+T::ok('the guessable name is never advertised', $ready[0]['file'] !== 'zone_' . $zid . '.pmtiles');
+
+// A row from before the column (no token) gets one on first touch, and its
+// guessable legacy file is renamed with it — nothing stays reachable under
+// the old name.
+[$lid] = maps_zone_add('P7 Legacy Zone', 20.0, 52.0, 20.5, 52.5, 14, false);
+$db->prepare("UPDATE map_zones SET file_token = NULL, status = 'ready' WHERE id = ?")->execute([$lid]);
+@mkdir(maps_tiles_dir(), 0775, true);
+$legacyPath = maps_tiles_dir() . '/zone_' . (int)$lid . '.pmtiles';
+file_put_contents($legacyPath, 'LEGACY-BYTES');
+$legacyEntry = null;
+foreach (maps_ready_zones() as $e) {
+    if ($e['id'] === 'zone_' . (int)$lid) {
+        $legacyEntry = $e;
+    }
+}
+T::ok('legacy zone advertised under a tokenized name',
+    $legacyEntry !== null && preg_match('/^zone_' . (int)$lid . '_[0-9a-f]{32}\.pmtiles$/', $legacyEntry['file']) === 1);
+T::ok('legacy file no longer reachable by its old name', !is_file($legacyPath));
+T::eq('legacy bytes followed the rename', 'LEGACY-BYTES', (string)@file_get_contents(maps_tiles_dir() . '/' . ($legacyEntry['file'] ?? 'none')));
+T::ok('minted token persisted', preg_match('/^[0-9a-f]{32}$/', (string)$db->query('SELECT file_token FROM map_zones WHERE id = ' . (int)$lid)->fetchColumn()) === 1);
+T::ok('tokens differ between zones', ($legacyEntry['file'] ?? '') !== $ready[0]['file']
+    && $ztok !== (string)$db->query('SELECT file_token FROM map_zones WHERE id = ' . (int)$lid)->fetchColumn());
+T::eq('unknown zone has no token', null, maps_zone_ensure_token(2147000000));
+T::ok('unknown zone path cannot exist', !is_file(maps_zone_path(2147000000)));
+@unlink(maps_tiles_dir() . '/' . ($legacyEntry['file'] ?? 'none'));
+$db->prepare('DELETE FROM map_zones WHERE id = ?')->execute([$lid]);
 
 // ── Phase 4: covering zones for the public reveal ─────────────────────────
 // Only ready zones containing the pin reach the recipient's style.
 $coverWarsaw = maps_covering_zones(52.2297, 21.0122);
-T::eq('covering zone found', [['id' => 'zone_' . $zid, 'file' => 'zone_' . $zid . '.pmtiles']], $coverWarsaw);
+T::eq('covering zone found', [['id' => 'zone_' . $zid, 'file' => 'zone_' . $zid . '_' . $ztok . '.pmtiles']], $coverWarsaw);
 T::eq('outside point matches nothing', [], maps_covering_zones(48.85, 2.35));
 T::eq('edge point is inside', $coverWarsaw, maps_covering_zones(52.05, 20.85));
 T::eq('non-finite matches nothing', [], maps_covering_zones(NAN, 21.0));
@@ -225,7 +301,9 @@ foreach (maps_zone_list() as $z) {
 }
 T::eq('pipeline ends ready', 'ready', $final['status'] ?? null);
 T::eq('sizing recorded exact bytes', 1048576, (int)($final['bytes_expected'] ?? 0));
-T::ok('published file exists', is_file(maps_tiles_dir() . '/zone_' . $pid . '.pmtiles'));
+T::ok('published file exists under its secret name', is_file(maps_zone_path((int)$pid))
+    && preg_match('/^zone_' . (int)$pid . '_[0-9a-f]{32}\.pmtiles$/', basename(maps_zone_path((int)$pid))) === 1);
+T::ok('no file under the guessable name', !is_file(maps_tiles_dir() . '/zone_' . $pid . '.pmtiles'));
 T::eq('direct run passes no proxy env', null, $seenEnv);
 
 // Proxy path: pool proxy is exported to the CLI env, never bypassed.
@@ -256,7 +334,7 @@ T::ok('empty pool fails the job', !$fok && $ferr === 'code:proxy_empty');
 
 // Cleanup: rows, published files, scratch settings, stub runner.
 foreach ([$pid, $qid, $fid, $sid] as $cid) {
-    @unlink(maps_tiles_dir() . '/zone_' . $cid . '.pmtiles');
+    @unlink(maps_zone_path((int)$cid));
     $db->prepare('DELETE FROM map_zones WHERE id = ?')->execute([$cid]);
 }
 maps_cli_runner(null, true);

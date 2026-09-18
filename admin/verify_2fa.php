@@ -27,6 +27,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // value, or the next attempt dies with "Invalid CSRF token".
         $csrf = generate_csrf();
         $rl = rl_status('admin_2fa');
+        // Per-ACCOUNT budget next to the per-IP one: a stolen password plus
+        // rotating addresses must not buy unlimited six-digit guesses.
+        $acctKey = 'u:' . $pending_uid;
+        $acctRl = rl_status('admin_2fa_acct', $acctKey);
+        if ($acctRl['blocked']) {
+            $rl = $acctRl;
+        }
         if ($rl['blocked']) {
             $error = t('admin.verify2fa.error.rate_limited', ['min' => (int)ceil($rl['remaining'] / 60)]);
         } else {
@@ -53,6 +60,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $counter = ($user && $secret !== false) ? totp_verify_counter($secret, $code) : null;
             $claimed = $counter !== null && $user && totp_claim_counter((int)$user['id'], $counter);
             if ($user && $claimed) {
+                rl_reset('admin_2fa_acct', $acctKey); // a valid code proves the real owner is here
                 admin_finish_login((int)$user['id'], $user['role'], $user['username'], true, $user['lang'] ?? 'en');
                 header('Location: /admin/orders.php');
                 exit;
@@ -64,6 +72,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 totp_verify(DUMMY_TOTP_SECRET, $code);
             }
             $hit = rl_hit('admin_2fa');
+            rl_hit('admin_2fa_acct', null, null, $acctKey);
             if ($hit['blocked']) {
                 $error = t('admin.verify2fa.error.rate_limited', ['min' => (int)ceil($hit['remaining'] / 60)]);
             } else {

@@ -31,6 +31,16 @@ if (is_file($cacheFile) && (time() - filemtime($cacheFile)) < $cacheTtl) {
     exit;
 }
 
+// Cache misses reach OSM from THIS server's address: budget them per admin
+// so no account (a courier's included) can turn the panel into a tile
+// scraper that gets the server banned. Hits above never count.
+$budget = rl_hit('admin_tiles', 600, 60, 'u:' . current_user_id());
+if ($budget['blocked']) {
+    header('Retry-After: ' . max(1, (int)$budget['remaining']));
+    http_response_code(429);
+    exit;
+}
+
 $subdomain = ['a', 'b', 'c'][random_int(0, 2)];
 $url = "https://$subdomain.tile.openstreetmap.org/$z/$x/$y.png";
 
@@ -38,6 +48,12 @@ $data = osm_fetch($url, 1048576); // dense-vector tiles stay well under 1 MiB
 
 // Record which proxy served the request (re-opens session briefly).
 osm_last_via_flush();
+
+// The pool proxies are public strangers: only a genuine PNG is served or
+// cached, whatever else they answer with 200.
+if ($data !== false && !osm_is_png($data)) {
+    $data = false;
+}
 
 if ($data === false) {
     header('Content-Type: text/plain');

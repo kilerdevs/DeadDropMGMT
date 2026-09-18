@@ -103,6 +103,68 @@ function osm_fetch_via(string $url, ?string $proxy, int $timeout = 5, int $maxBy
     return $body;
 }
 
+// ── Tile cache upkeep ───────────────────────────────────────────────────────
+// cache/osm_tiles/<z>/<x>/<y>.png is filled by tile_proxy.php on demand. Aged
+// entries and everything beyond the byte cap are dropped (oldest first) by
+// the hourly cleanup, so the cache cannot grow without bound however many
+// distinct tiles an admin (or a runaway script) requests. Returns the number
+// of files removed; never throws.
+function osm_tile_cache_prune(?string $dir = null, int $maxBytes = 268435456, int $ttl = 604800): int {
+    $dir = $dir ?? dirname(__DIR__) . '/cache/osm_tiles';
+    if (!is_dir($dir)) {
+        return 0;
+    }
+    $removed = 0;
+    try {
+        $files = [];
+        $total = 0;
+        $it = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS),
+            RecursiveIteratorIterator::CHILD_FIRST
+        );
+        $now = time();
+        foreach ($it as $f) {
+            if ($f->isDir()) {
+                @rmdir($f->getPathname()); // only succeeds when empty
+                continue;
+            }
+            if ($f->isLink() || !$f->isFile()) {
+                @unlink($f->getPathname());
+                continue;
+            }
+            if (($now - $f->getMTime()) >= $ttl) {
+                if (@unlink($f->getPathname())) {
+                    $removed++;
+                }
+                continue;
+            }
+            $files[] = [$f->getMTime(), $f->getSize(), $f->getPathname()];
+            $total += $f->getSize();
+        }
+        if ($total > $maxBytes) {
+            usort($files, static fn(array $a, array $b): int => $a[0] <=> $b[0]);
+            foreach ($files as [, $size, $path]) {
+                if ($total <= $maxBytes) {
+                    break;
+                }
+                if (@unlink($path)) {
+                    $total -= $size;
+                    $removed++;
+                }
+            }
+        }
+    } catch (Throwable $e) {
+        log_err('Tile cache prune: ' . $e->getMessage());
+    }
+    return $removed;
+}
+
+// A real PNG starts with the fixed 8-byte signature. Anything else that came
+// back from a (possibly hostile, public) pool proxy is not a tile.
+function osm_is_png(string $data): bool {
+    return str_starts_with($data, "\x89PNG\r\n\x1a\n");
+}
+
 function osm_proxy_mark(int $id, bool $ok, ?int $latency_ms = null): void {
     try {
         get_db()->prepare(
@@ -263,7 +325,10 @@ function osm_reverse_url(float $lat, float $lng): ?string {
     if (!is_finite($lat) || !is_finite($lng) || $lat < -90.0 || $lat > 90.0 || $lng < -180.0 || $lng > 180.0) {
         return null;
     }
-    return 'https://nominatim.openstreetmap.org/reverse?lat=' . $lat . '&lon=' . $lng . '&format=json&accept-language=en';
+    // Fixed-point, never (string)$float: tiny values would print as "1.0E-5",
+    // which Nominatim rejects.
+    return 'https://nominatim.openstreetmap.org/reverse?lat=' . sprintf('%.7F', $lat)
+        . '&lon=' . sprintf('%.7F', $lng) . '&format=json&accept-language=en';
 }
 
 // Human label for a Nominatim address: "Country, State". Either half may be

@@ -1,6 +1,13 @@
 <?php
 declare(strict_types=1);
 
+// CLI only: this script must never be runnable over HTTP, whatever the
+// web server happens to serve.
+if (PHP_SAPI !== 'cli') {
+    http_response_code(404);
+    exit;
+}
+
 // ── Purge recoverable pickup-password copies ──────────────────────────────────
 // Older versions stored an AES-encrypted copy of every pickup password for
 // admin display. Pickup credentials are now hash-only: shown once at order

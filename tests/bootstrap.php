@@ -1,6 +1,13 @@
 <?php
 declare(strict_types=1);
 
+// CLI only: this script must never be runnable over HTTP, whatever the
+// web server happens to serve.
+if (PHP_SAPI !== 'cli') {
+    http_response_code(404);
+    exit;
+}
+
 // ── Test bootstrap ────────────────────────────────────────────────────────────
 // Every *Test.php requires this file first. It isolates the suite from any
 // real installation by forcing a dedicated database name, installs an error

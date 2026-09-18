@@ -3,6 +3,12 @@ declare(strict_types=1);
 require_once dirname(__DIR__) . '/config.php';
 require_once __DIR__ . '/net.php';
 require_once __DIR__ . '/settings.php';
+require_once __DIR__ . '/crypto.php';
+
+// Hard ceiling on one admin login, however active: the sliding inactivity
+// window (admin_session_hours) alone would let a stolen-but-kept-warm session
+// live forever. Re-authentication is required after this many seconds.
+const ADMIN_SESSION_ABSOLUTE_SECONDS = 43200; // 12 h
 
 // ── Session ───────────────────────────────────────────────────────────────────
 
@@ -66,18 +72,33 @@ function require_admin(): void {
         header('Location: /admin/index.php?timeout=1');
         exit;
     }
+    // Absolute lifetime: activity keeps the sliding window open, never this.
+    // Sessions that predate the field are stamped now (one grace period).
+    $born = (int)($_SESSION['login_at'] ?? 0);
+    if ($born <= 0) {
+        $_SESSION['login_at'] = time();
+    } elseif ((time() - $born) > ADMIN_SESSION_ABSOLUTE_SECONDS) {
+        admin_logout();
+        header('Location: /admin/index.php?timeout=1');
+        exit;
+    }
+
     // Sliding inactivity window: every authenticated admin request refreshes
     // the timestamp, so the timeout above measures idleness, not time since
     // login. Refreshed AFTER the check so an expired session can never be
     // revived by the very request that should kill it.
     $_SESSION['login_time'] = time();
 
-    // Single active session: a newer login elsewhere supersedes this one.
-    // The superseded browser is logged out with an explanatory flag (not a
+    // The session must still belong to a live account. A deleted user, or
+    // one whose sessions the owner revoked (password change, 2FA reset), is
+    // logged out on the very next request instead of coasting on a cookie
+    // until the timeout. A newer login elsewhere supersedes this one too:
+    // the superseded browser is logged out with an explanatory flag (not a
     // silent bounce) so the legitimate owner notices the conflict.
-    if (admin_session_superseded()) {
+    $state = admin_session_status();
+    if ($state !== 'ok') {
         admin_logout();
-        header('Location: /admin/index.php?superseded=1');
+        header('Location: /admin/index.php?' . ($state === 'superseded' ? 'superseded=1' : 'revoked=1'));
         exit;
     }
 
@@ -118,28 +139,70 @@ function courier_owns_order(int $order_id): bool {
     }
 }
 
-// True when another login has superseded this session: the session id the
-// account holder authenticated with no longer matches the id recorded at
-// the latest login. The config-fallback owner (user_id 0, no users row),
-// rows predating the column rollout (NULL), and unreadable rows (fail OPEN:
-// a transient read error must not log out every admin) never count as
-// superseded — the mismatch path still catches every real conflict.
-function admin_session_superseded(): bool {
+// Account state behind the current admin session, from ONE users read:
+//   ok         — nothing to act on (also: config-fallback owner user_id 0,
+//                rows predating the active_session_id column, and unreadable
+//                rows — fail OPEN: a transient read error must not log out
+//                every admin)
+//   gone       — the users row no longer exists (account deleted)
+//   revoked    — the owner revoked this account's sessions
+//   superseded — a newer login recorded a different session id
+// The role and 2FA flag are refreshed from the row on every request, so a
+// demotion or a 2FA reset takes effect immediately, not at the next login.
+function admin_session_status(): string {
     $uid = (int)($_SESSION['user_id'] ?? 0);
     if ($uid <= 0) {
-        return false;
+        return 'ok';
     }
     try {
-        $stmt = get_db()->prepare('SELECT active_session_id FROM users WHERE id = ? LIMIT 1');
+        $stmt = get_db()->prepare('SELECT active_session_id, role, totp_enabled FROM users WHERE id = ? LIMIT 1');
         $stmt->execute([$uid]);
-        $active = $stmt->fetchColumn();
+        $row = $stmt->fetch();
     } catch (Exception $e) {
-        return false;
+        return 'ok';
     }
+    if (!$row) {
+        return 'gone';
+    }
+    if (in_array($row['role'] ?? '', ['owner', 'courier'], true)) {
+        $_SESSION['user_role'] = $row['role'];
+    }
+    $_SESSION['totp_enabled'] = !empty($row['totp_enabled']);
+    $active = $row['active_session_id'] ?? null;
     if (!is_string($active) || $active === '') {
-        return false;
+        return 'ok';
     }
-    return !hash_equals($active, session_id());
+    if ($active === ADMIN_SESSIONS_REVOKED) {
+        return 'revoked';
+    }
+    return hash_equals($active, session_id()) ? 'ok' : 'superseded';
+}
+
+// True when another login has superseded this session: the session id the
+// account holder authenticated with no longer matches the id recorded at
+// the latest login (or the sessions were revoked). Missing accounts, the
+// config-fallback owner (user_id 0), NULL records and unreadable rows never
+// count as superseded here — require_admin() acts on 'gone' separately.
+function admin_session_superseded(): bool {
+    return in_array(admin_session_status(), ['superseded', 'revoked'], true);
+}
+
+// Ends every session of an account (password changed, 2FA reset, …): the
+// recorded active session id becomes a value no browser can hold, so the
+// next request of each session is refused. The caller's own session is kept
+// when it acts on its own account.
+const ADMIN_SESSIONS_REVOKED = 'revoked';
+
+function admin_revoke_sessions(int $user_id): void {
+    if ($user_id <= 0) {
+        return;
+    }
+    try {
+        $keep = ($user_id === current_user_id() && session_id() !== '') ? session_id() : ADMIN_SESSIONS_REVOKED;
+        get_db()->prepare('UPDATE users SET active_session_id = ? WHERE id = ?')->execute([$keep, $user_id]);
+    } catch (Exception $e) {
+        log_err('Session revoke failed: ' . $e->getMessage());
+    }
 }
 
 // ── Login / logout ────────────────────────────────────────────────────────────
@@ -157,6 +220,7 @@ function admin_finish_login(int $user_id, string $role, string $username, bool $
     $_SESSION['totp_enabled'] = $totp_enabled;
     $_SESSION['user_lang']    = $lang;
     $_SESSION['login_time']   = time();
+    $_SESSION['login_at']     = time();
     unset($_SESSION['csrf_token'], $_SESSION['pending_2fa_user_id'], $_SESSION['pending_2fa_time'],
           $_SESSION['pending_setup_user_id'], $_SESSION['pending_setup_time']);
     // Single active session: this login supersedes any other holding these
@@ -273,6 +337,40 @@ function admin_logout(): void {
     header('Clear-Site-Data: "cache", "cookies", "storage"');
 }
 
+// ── Flash messages ────────────────────────────────────────────────────────────
+// One-shot notices across a redirect. A message that carries a credential
+// (generated pickup password, enrollment secret) is sealed with the TOTP
+// subkey, so the session store never rests in plaintext with it.
+
+function flash_set(string $msg, bool $ok, bool $sensitive = false): void {
+    unset($_SESSION['flash'], $_SESSION['flash_sealed']);
+    if ($sensitive) {
+        $_SESSION['flash_sealed'] = encrypt_secret($msg);
+    } else {
+        $_SESSION['flash'] = $msg;
+    }
+    $_SESSION['flash_ok'] = $ok;
+}
+
+/** @return array{string,bool} [message, ok] — consumed */
+function flash_take(): array {
+    $msg = (string)($_SESSION['flash'] ?? '');
+    $sealed = $_SESSION['flash_sealed'] ?? null;
+    if (is_array($sealed)) {
+        $dec = decrypt_secret((string)($sealed['ciphertext'] ?? ''), (string)($sealed['iv'] ?? ''));
+        $msg = is_string($dec) ? $dec : $msg;
+    }
+    $ok = (bool)($_SESSION['flash_ok'] ?? false);
+    unset($_SESSION['flash'], $_SESSION['flash_sealed'], $_SESSION['flash_ok']);
+    return [$msg, $ok];
+}
+
+// bcrypt reads at most 72 bytes: anything longer would be silently truncated,
+// so two different long passwords could verify as one. Refuse instead.
+function password_length_ok(string $password): bool {
+    return strlen($password) <= 72;
+}
+
 // ── CSRF ──────────────────────────────────────────────────────────────────────
 
 function generate_csrf(): string {
@@ -367,7 +465,7 @@ function _security_headers_list(bool $admin, string $nonce): array {
             "worker-src 'self' blob:; " .
             "img-src 'self' data: blob:; " .
             "connect-src 'self'; " .
-            "object-src 'none'; base-uri 'self'; frame-ancestors 'none';";
+            "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none';";
         return $h;
     }
 
@@ -379,7 +477,7 @@ function _security_headers_list(bool $admin, string $nonce): array {
         "worker-src 'self' blob:; " .
         "img-src 'self'; " .
         'frame-src https://www.openstreetmap.org; ' .
-        "object-src 'none'; base-uri 'self'; frame-ancestors 'none';";
+        "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none';";
     return $h;
 }
 
@@ -416,7 +514,7 @@ function _rl_parse_window_start(string $v): int|false {
     return strtotime($v . ' UTC');
 }
 
-function rl_status(string $scope = 'public'): array {
+function rl_status(string $scope = 'public', ?string $subject = null): array {
     if (!rl_enabled()) {
         return ['blocked' => false, 'remaining' => 0, 'count' => 0];
     }
@@ -425,7 +523,7 @@ function rl_status(string $scope = 'public'): array {
     $window = rl_window_seconds();
     try {
         $stmt = get_db()->prepare('SELECT count, window_start FROM rate_limits WHERE ip_address = ? AND scope = ? LIMIT 1');
-        $stmt->execute([get_client_ip(), $scope]);
+        $stmt->execute([$subject ?? get_client_ip(), $scope]);
         $row = $stmt->fetch();
     } catch (Exception $e) {
         // Fail CLOSED: this limiter guards pickup-password guessing and admin
@@ -464,12 +562,12 @@ function rl_status(string $scope = 'public'): array {
 // increment can be lost and two simultaneous visitors can never both see
 // "one attempt left". The returned 'blocked' verdict comes from the
 // post-increment count of that single state transition.
-function rl_hit(string $scope = 'public', ?int $max_override = null, ?int $window_override = null): array {
+function rl_hit(string $scope = 'public', ?int $max_override = null, ?int $window_override = null, ?string $subject = null): array {
     if (!rl_enabled()) {
         return ['blocked' => false, 'remaining' => 0, 'count' => 0];
     }
     require_once dirname(__DIR__) . '/includes/settings.php';
-    $ip     = get_client_ip();
+    $ip     = $subject ?? get_client_ip();
     $max    = $max_override ?? rl_max();
     $window = $window_override ?? rl_window_seconds();
     $db     = get_db();
@@ -529,11 +627,36 @@ function rl_increment(string $scope = 'public'): void {
     rl_hit($scope);
 }
 
-// Reset a scope's counter for the current IP (called on a successful attempt).
-function rl_reset(string $scope = 'public'): void {
+// Budget key for a per-account limiter: rate_limits.ip_address is just the
+// counter's subject column, so an account's name (hashed to fit, and
+// case-folded like the users.username collation) can hold its own budget
+// next to the per-IP rows. Unknown usernames get budgets too — an attacker
+// cannot tell existing accounts from missing ones by when the lock bites.
+function rl_account_subject(string $prefix, string $name): string {
+    return $prefix . substr(hash('sha256', strtolower(trim($name))), 0, 30);
+}
+
+// Give back exactly ONE spent attempt (the caller decided this request was
+// not a guess). Never a reset: wiping the counter would let an attacker
+// interleave free requests between guesses and never reach the block.
+function rl_refund(string $scope = 'public', ?string $subject = null): void {
+    try {
+        get_db()->prepare(
+            'UPDATE rate_limits SET count = GREATEST(count - 1, 0) WHERE ip_address = ? AND scope = ?'
+        )->execute([$subject ?? get_client_ip(), $scope]);
+    } catch (Exception $e) {
+        // best-effort: a failed refund only costs the visitor one attempt
+    }
+}
+
+// Reset a scope's counter for the current IP (or the given subject). Only
+// for events that prove the caller holds a real secret for THIS budget's
+// target (owner bootstrap, a 2FA success for the account being guessed) —
+// never for anything an attacker can produce with a credential of their own.
+function rl_reset(string $scope = 'public', ?string $subject = null): void {
     try {
         get_db()->prepare('DELETE FROM rate_limits WHERE ip_address = ? AND scope = ?')
-            ->execute([get_client_ip(), $scope]);
+            ->execute([$subject ?? get_client_ip(), $scope]);
     } catch (Exception $e) {
         // best-effort
     }

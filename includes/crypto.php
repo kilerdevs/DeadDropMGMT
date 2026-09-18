@@ -10,7 +10,6 @@ require_once dirname(__DIR__) . '/config.php';
 //   master ─┬─ location-v1    orders.location_encrypted
 //           ├─ totp-v1        users.totp_secret_enc
 //           ├─ reveal-v1      sealed session payloads
-//           ├─ capability-v1  reveal capability MAC
 //           └─ log-hmac-v1    app.log integrity chain
 //
 // Compromise or rotation of one subsystem's key no longer couples the others.
@@ -40,15 +39,6 @@ function _derived_key(string $info): string {
 function _location_key(): string    { return _derived_key('deaddrop:location-v1'); }
 function _totp_key(): string        { return _derived_key('deaddrop:totp-v1'); }
 function _reveal_key(): string      { return _derived_key('deaddrop:reveal-v1'); }
-function _capability_key(): string  { return _derived_key('deaddrop:capability-v1'); }
-
-// Proof that THIS session completed the pickup-password check for an order.
-// The post-unlock redirect keeps only token + this MAC in the session and the
-// reveal page re-decrypts from the DB — plaintext location data never rests
-// in the session store. Derived subkey keeps it separate from the AES key.
-function reveal_capability(string $token, int $order_id): string {
-    return hash_hmac('sha256', $token . '|' . $order_id, _capability_key());
-}
 
 // ── Raw encrypt / decrypt ─────────────────────────────────────────────────────
 // AES-256-GCM only (authenticated). Storage format: ciphertext column holds

@@ -45,7 +45,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && !empty($_SESSION['reveal'])) {
             // unlock and this GET deletes the row, and the reveal must die
             // with it instead of rendering a deleted order for 180 s.
             try {
-                $chk = get_db()->prepare('SELECT 1 FROM orders WHERE order_token = ? LIMIT 1');
+                $chk = get_db()->prepare('SELECT 1 FROM orders WHERE order_token = ? AND ' . ORDER_LIVE_SQL . ' LIMIT 1');
                 $chk->execute([$dec['token']]);
                 $alive = (bool)$chk->fetchColumn();
             } catch (Exception $e) {
@@ -72,7 +72,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && $loc_data === null && !$correct_prep
     if (strlen($get_token) === 16 && ctype_alnum($get_token)) {
         try {
             $db_g  = get_db();
-            $st_g  = $db_g->prepare('SELECT id, status FROM orders WHERE order_token = ? LIMIT 1');
+            $st_g  = $db_g->prepare('SELECT id, status FROM orders WHERE order_token = ? AND ' . ORDER_LIVE_SQL . ' LIMIT 1');
             $st_g->execute([$get_token]);
             $ord_g = $st_g->fetch();
             if ($ord_g) {
@@ -121,7 +121,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } else {
             try {
                 $db   = get_db();
-                $stmt = $db->prepare('SELECT * FROM orders WHERE order_token = ? LIMIT 1');
+                $stmt = $db->prepare('SELECT * FROM orders WHERE order_token = ? AND ' . ORDER_LIVE_SQL . ' LIMIT 1');
                 $stmt->execute([$raw_token]);
                 $order = $stmt->fetch();
 
@@ -144,11 +144,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $order_status  = $order['status'];
                     $prefill_token = $raw_token;
                     $show_pw_step  = true;
-                    rl_reset('public'); // a lookup is not a guess — refund the spend
+                    // A lookup is not a guess: give back exactly the one attempt
+                    // spent on entry. Never reset the counter — that would let
+                    // a guesser interleave free lookups and never hit the limit.
+                    rl_refund('public');
                 } else {
                     if (verify_password($password, $order['pickup_password_hash'])) {
-                        bucket_clear('public');
-                        rl_reset('public');
+                        // Success refunds only its own spend. Clearing the
+                        // budget or the session bucket here would hand a
+                        // guesser holding ONE valid pickup a free reset for
+                        // every attempt against someone else's order.
+                        rl_refund('public');
                         if ($order['status'] === 'preparing') {
                             log_event('unlock_success', (int)$order['id'], $raw_token);
                             $_SESSION['reveal'] = ['type' => 'preparing', 'ts' => time()];

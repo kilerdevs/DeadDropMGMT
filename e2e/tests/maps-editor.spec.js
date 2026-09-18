@@ -4,7 +4,7 @@
 // an empty grid) and queued zones are deleted again, so no worker can do
 // real work — the kick races a delete it always loses on a fresh queue.
 const { test, expect } = require('@playwright/test');
-const { freshPage, closePage } = require('../helpers');
+const { freshPage, closePage, setZoneBbox } = require('../helpers');
 
 async function login(page) {
   await page.goto('/admin/index.php');
@@ -83,18 +83,40 @@ test('drag-draw fills the bbox inputs', async ({ browser }) => {
   }
 });
 
+test('bbox fields are not shown; Clear resets what a draw left behind', async ({ browser }) => {
+  const page = await freshPage(browser);
+  try {
+    await openEditor(page);
+    for (const id of ['#mz-min-lon', '#mz-min-lat', '#mz-max-lon', '#mz-max-lat']) {
+      await expect(page.locator(id)).toBeHidden();
+    }
+    await page.locator('#mz-draw').click();
+    const c = await mapCenter(page);
+    await page.mouse.move(c.x - 60, c.y - 40);
+    await page.mouse.down();
+    await page.mouse.move(c.x + 60, c.y + 40, { steps: 12 });
+    await page.mouse.up();
+    expect(Object.values(await readBbox(page)).every((v) => v !== '')).toBe(true);
+    await page.locator('#mz-clear').click();
+    // A stale rectangle must not stay queueable once it is gone from the map.
+    expect(Object.values(await readBbox(page)).every((v) => v === '')).toBe(true);
+    await page.locator('#mz-name').fill('E2E Cleared Zone');
+    await page.locator('#mz-add').click();
+    await expect(page.locator('#save-popup.visible.error')).toBeVisible({ timeout: 10000 });
+    expect(await page.locator('#maps-table tbody tr', { hasText: 'E2E Cleared Zone' }).count()).toBe(0);
+  } finally {
+    await closePage(page);
+  }
+});
+
 test('typed bbox redraws the draft and queueing lists the zone', async ({ browser }) => {
   const page = await freshPage(browser);
   const name = 'E2E Editor Typed';
   try {
     await openEditor(page);
     await page.locator('#mz-name').fill(name);
-    await page.locator('#mz-min-lon').fill('20.95');
-    await page.locator('#mz-min-lat').fill('52.10');
-    await page.locator('#mz-max-lon').fill('21.05');
-    await page.locator('#mz-max-lat').fill('52.20');
-    // Firing change redraws the draft rectangle.
-    await page.locator('#mz-max-lat').dispatchEvent('change');
+    // Setting the bbox and firing change redraws the draft rectangle.
+    await setZoneBbox(page, '20.95', '52.10', '21.05', '52.20');
     await expect(page.locator('#mz-map .leaflet-overlay-pane path')).not.toHaveCount(0);
     await page.locator('#mz-add').click();
     await expect(page.locator('#save-popup.visible:not(.error)')).toBeVisible({ timeout: 10000 });
@@ -113,11 +135,7 @@ test('overlapping draft shows the warning', async ({ browser }) => {
     await openEditor(page);
     // Seed an existing zone through the real queue path (tiny bbox).
     await page.locator('#mz-name').fill(name);
-    await page.locator('#mz-min-lon').fill('20.90');
-    await page.locator('#mz-min-lat').fill('52.10');
-    await page.locator('#mz-max-lon').fill('21.10');
-    await page.locator('#mz-max-lat').fill('52.30');
-    await page.locator('#mz-max-lat').dispatchEvent('change');
+    await setZoneBbox(page, '20.90', '52.10', '21.10', '52.30');
     await page.locator('#mz-add').click();
     await expect(page.locator('#maps-tbody tr', { hasText: name })).toBeVisible({ timeout: 15000 });
     // Draw a clearly overlapping draft on the canvas.

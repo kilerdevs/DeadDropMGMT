@@ -1,6 +1,13 @@
 <?php
 declare(strict_types=1);
 
+// CLI only: this script must never be runnable over HTTP, whatever the
+// web server happens to serve.
+if (PHP_SAPI !== 'cli') {
+    http_response_code(404);
+    exit;
+}
+
 // Entry-point rule (KernelTest): every tools/*.php boots through the kernel
 // and pulls no service directly. The probe shells out to the suites and
 // needs no services itself, but it honors the rule anyway — one line, and

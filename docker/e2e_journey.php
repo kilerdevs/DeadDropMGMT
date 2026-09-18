@@ -1,6 +1,13 @@
 <?php
 declare(strict_types=1);
 
+// CLI only: this script must never be runnable over HTTP, whatever the
+// web server happens to serve.
+if (PHP_SAPI !== 'cli') {
+    http_response_code(404);
+    exit;
+}
+
 // ── Full-lifecycle journey against a RUNNING stack (CI docker job) ────────────
 //   boot → schema → first-run owner creation → password setup → create order →
 //   deliver → public lookup → password unlock → receipt confirmation →

@@ -3,6 +3,8 @@ declare(strict_types=1);
 require_once dirname(__DIR__) . '/includes/kernel.php';
 
 header('Content-Type: application/json');
+header('X-Content-Type-Options: nosniff');
+header('Cache-Control: no-store');
 start_secure_session();
 require_owner();
 
@@ -63,6 +65,7 @@ switch ($action) {
             json_out(['error' => t('admin.common.invalid_request')], 422);
         }
         $kicked = maps_kick_worker();
+        audit('maps_zone_retry', null, null, "id={$id}");
         json_out(['ok' => true, 'kicked' => $kicked]);
     }
 

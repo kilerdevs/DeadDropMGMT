@@ -181,9 +181,6 @@ T::ok('sealed payload refused by location decrypt', decrypt_location($sealed['ct
 $bad = $sealed; $bad['ct'] = base64_encode(substr(base64_decode($sealed['ct']), 0, -1));
 T::ok('tampered sealed payload rejected wholesale', open_payload($bad) === false);
 
-// Reveal capability is stable per (token, id) and bound to its own subkey.
-T::eq('reveal capability deterministic', reveal_capability('TOK', 7), reveal_capability('TOK', 7));
-T::ok('reveal capability differs per order', reveal_capability('TOK', 7) !== reveal_capability('TOK', 8));
 
 // Log chain verifies across key generations: a legacy-keyed genesis entry
 // followed by a derived-key entry is a valid chain; tampering is still caught.

@@ -87,6 +87,24 @@ redistributed, which this layout preserves.
 
 ---
 
+## Noto Sans map-label glyphs (Regular, Medium, Italic)
+
+- **Path:** `fonts/glyphs/` (SDF glyph `.pbf` ranges: Latin, Latin Extended,
+  Cyrillic, general punctuation)
+- **Homepage:** https://github.com/protomaps/basemaps-assets (glyphs built
+  with https://github.com/maplibre/font-maker from Noto Sans)
+- **License:** SIL Open Font License, Version 1.1
+
+Copyright 2022 The Noto Project Authors (https://github.com/notofonts)
+
+Labels on the self-hosted map (street, place and POI names) are drawn from
+these files, served from your own domain — no glyph server is contacted. The
+complete license text ships alongside them in
+[`fonts/glyphs/OFL.txt`](fonts/glyphs/OFL.txt), keeping the font and its
+license together as the OFL requires.
+
+---
+
 ## MapLibre GL JS 5.13.0
 
 - **Path:** `maplibre/maplibre-gl.js`, `maplibre/maplibre-gl.css`

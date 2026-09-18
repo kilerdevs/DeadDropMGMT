@@ -27,6 +27,18 @@ if ($rl['blocked']) {
     _bootstrap_back(t('admin.login.error.rate_limited', ['min' => (int)ceil($rl['remaining'] / 60)]));
 }
 
+// Optional claim guard: when DDMGMT_SETUP_TOKEN is set, only someone who
+// knows it can create the first owner — a fresh instance reachable from the
+// network is otherwise claimed by whoever asks first.
+$setupToken = _secret('DDMGMT_SETUP_TOKEN', '');
+if ($setupToken !== '' && !hash_equals($setupToken, trim(post_string('setup_token')))) {
+    rl_increment('admin_login');
+    _bootstrap_back(t('admin.bootstrap.error.bad_token'));
+}
+if ($setupToken === '') {
+    log_warn('bootstrap_unguarded', ['msg' => 'Owner bootstrap without DDMGMT_SETUP_TOKEN: the first visitor claims this instance']);
+}
+
 $username   = trim(post_string('username'));
 $enrollment   = ''; // set inside the lock; keeps analysis honest about the flash below
 $new_user_id  = 0;

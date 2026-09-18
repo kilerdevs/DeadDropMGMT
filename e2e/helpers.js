@@ -18,4 +18,17 @@ function unlockForm(page) {
   return page.locator('form', { has: page.locator('input[name="order_token"]') });
 }
 
-module.exports = { freshPage, closePage, unlockForm };
+// The zone bbox inputs are hidden (the rectangle is drawn on the map). Specs
+// that need an exact rectangle set the values directly and fire change —
+// what a draw leaves behind — since Playwright cannot fill hidden inputs.
+async function setZoneBbox(page, minLon, minLat, maxLon, maxLat, { fireChange = true } = {}) {
+  await page.evaluate(([w, s, e, n, fire]) => {
+    document.getElementById('mz-min-lon').value = w;
+    document.getElementById('mz-min-lat').value = s;
+    document.getElementById('mz-max-lon').value = e;
+    document.getElementById('mz-max-lat').value = n;
+    if (fire) document.getElementById('mz-max-lat').dispatchEvent(new Event('change'));
+  }, [minLon, minLat, maxLon, maxLat, fireChange]);
+}
+
+module.exports = { freshPage, closePage, unlockForm, setZoneBbox };

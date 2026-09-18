@@ -96,6 +96,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($new_password !== '') {
             if (strlen($new_password) < 8) {
                 $error = t('admin.edit.error.pw_too_short');
+            } elseif (!password_length_ok($new_password)) {
+                $error = t('admin.common.password_too_long');
             } else {
                 $pw_hash = hash_password($new_password);
             }
@@ -158,7 +160,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $db    = get_db();
                     $files = $_FILES['photos'];
                     $count = count($files['name']);
-                    $limit = max_photos_per_order();
+                    // The cap is per ORDER, not per request: repeated edits
+                    // must not add ten more photos every time.
+                    $have = $db->prepare('SELECT COUNT(*) FROM order_photos WHERE order_id = ?');
+                    $have->execute([$id]);
+                    $limit = max(0, max_photos_per_order() - (int)$have->fetchColumn());
                     $photo_errors = [];
                     for ($i = 0; $i < $count && $i < $limit; $i++) {
                         $entry = [

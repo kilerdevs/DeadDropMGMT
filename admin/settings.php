@@ -35,13 +35,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 // ── Read flash from session (set by PRG above) ────────────────────────────────
 $success = '';
 $error   = '';
-if (isset($_SESSION['flash'])) {
-    if ($_SESSION['flash_ok'] ?? false) {
-        $success = $_SESSION['flash'];
+[$flashMsg, $flashOk] = flash_take();
+if ($flashMsg !== '') {
+    if ($flashOk) {
+        $success = $flashMsg;
     } else {
-        $error = $_SESSION['flash'];
+        $error = $flashMsg;
     }
-    unset($_SESSION['flash'], $_SESSION['flash_ok']);
 }
 
 // Load settings with labels
@@ -86,7 +86,6 @@ $groups = [
     ],
     'behavior' => [
         'allow_status_lookup'      => ['type' => 'toggle'],
-        'require_delivered_reveal' => ['type' => 'toggle'],
         'compliance_note_enabled'  => ['type' => 'toggle'],
     ],
     'analytics' => [
@@ -296,7 +295,7 @@ function s_label(array $s, string $key): string {
                     <?php if (!$map_zones): ?>
                     <div class="log-empty" id="maps-empty"><?= t('admin.maps.no_zones_yet') ?></div>
                     <?php endif; ?>
-                    <table class="proxies-table" id="maps-table" <?= $map_zones ? '' : 'hidden' ?>>
+                    <table class="proxies-table maps-table" id="maps-table" <?= $map_zones ? '' : 'hidden' ?>>
                         <thead>
                         <tr>
                             <th><?= t('admin.maps.th.zone') ?></th>
@@ -316,13 +315,13 @@ function s_label(array $s, string $key): string {
                             data-min-lat="<?= htmlspecialchars((string)$mz['min_lat'], ENT_QUOTES, 'UTF-8') ?>"
                             data-max-lon="<?= htmlspecialchars((string)$mz['max_lon'], ENT_QUOTES, 'UTF-8') ?>"
                             data-max-lat="<?= htmlspecialchars((string)$mz['max_lat'], ENT_QUOTES, 'UTF-8') ?>">
-                            <td class="px-url"><?= htmlspecialchars((string)$mz['name'], ENT_QUOTES, 'UTF-8') ?></td>
-                            <td>z<?= (int)$mz['maxzoom'] ?></td>
-                            <td class="mz-status"><?= htmlspecialchars(t('admin.maps.status.' . $mz['status']), ENT_QUOTES, 'UTF-8') ?><?php if (maps_zone_is_stale($mz)): ?> — <?= htmlspecialchars(t('admin.maps.stale_badge'), ENT_QUOTES, 'UTF-8') ?><?php endif; ?></td>
-                            <td class="mz-size"></td>
-                            <td class="mz-speed"></td>
-                            <td class="mz-eta"></td>
-                            <td><?= ((int)$mz['via_proxy'] === 1) ? t('admin.maps.via.proxy') : t('admin.maps.via.direct') ?></td>
+                            <td class="px-url" data-label="<?= htmlspecialchars(t('admin.maps.th.zone'), ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars((string)$mz['name'], ENT_QUOTES, 'UTF-8') ?></td>
+                            <td data-label="<?= htmlspecialchars(t('admin.maps.th.detail'), ENT_QUOTES, 'UTF-8') ?>">z<?= (int)$mz['maxzoom'] ?></td>
+                            <td class="mz-status" data-label="<?= htmlspecialchars(t('admin.maps.th.status'), ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars(t('admin.maps.status.' . $mz['status']), ENT_QUOTES, 'UTF-8') ?><?php if (maps_zone_is_stale($mz)): ?> — <?= htmlspecialchars(t('admin.maps.stale_badge'), ENT_QUOTES, 'UTF-8') ?><?php endif; ?></td>
+                            <td class="mz-size" data-label="<?= htmlspecialchars(t('admin.maps.th.size'), ENT_QUOTES, 'UTF-8') ?>"></td>
+                            <td class="mz-speed" data-label="<?= htmlspecialchars(t('admin.maps.th.speed'), ENT_QUOTES, 'UTF-8') ?>"></td>
+                            <td class="mz-eta" data-label="<?= htmlspecialchars(t('admin.maps.th.eta'), ENT_QUOTES, 'UTF-8') ?>"></td>
+                            <td data-label="<?= htmlspecialchars(t('admin.maps.th.via'), ENT_QUOTES, 'UTF-8') ?>"><?= ((int)$mz['via_proxy'] === 1) ? t('admin.maps.via.proxy') : t('admin.maps.via.direct') ?></td>
                             <td class="px-actions"></td>
                         </tr>
                         <?php endforeach; ?>
@@ -334,19 +333,16 @@ function s_label(array $s, string $key): string {
                         <div class="maps-add-grid">
                             <label><?= htmlspecialchars(t('admin.maps.name_label'), ENT_QUOTES, 'UTF-8') ?>
                                 <input type="text" id="mz-name" maxlength="64" autocomplete="off"></label>
-                            <label><?= htmlspecialchars(t('admin.maps.west_label'), ENT_QUOTES, 'UTF-8') ?>
-                                <input type="text" id="mz-min-lon" inputmode="decimal" autocomplete="off" placeholder="20.85"></label>
-                            <label><?= htmlspecialchars(t('admin.maps.south_label'), ENT_QUOTES, 'UTF-8') ?>
-                                <input type="text" id="mz-min-lat" inputmode="decimal" autocomplete="off" placeholder="52.05"></label>
-                            <label><?= htmlspecialchars(t('admin.maps.east_label'), ENT_QUOTES, 'UTF-8') ?>
-                                <input type="text" id="mz-max-lon" inputmode="decimal" autocomplete="off" placeholder="21.30"></label>
-                            <label><?= htmlspecialchars(t('admin.maps.north_label'), ENT_QUOTES, 'UTF-8') ?>
-                                <input type="text" id="mz-max-lat" inputmode="decimal" autocomplete="off" placeholder="52.40"></label>
                             <label><?= htmlspecialchars(t('admin.maps.maxzoom_label'), ENT_QUOTES, 'UTF-8') ?>
                                 <select id="mz-maxzoom">
                                     <option value="14"><?= t('admin.maps.z14') ?></option>
                                     <option value="15"><?= t('admin.maps.z15') ?></option>
                                 </select></label>
+                            <!-- The rectangle is drawn on the map below; these carry it to the queue button. -->
+                            <input type="hidden" id="mz-min-lon">
+                            <input type="hidden" id="mz-min-lat">
+                            <input type="hidden" id="mz-max-lon">
+                            <input type="hidden" id="mz-max-lat">
                         </div>
                         <div class="field-label" style="margin-top:12px"><?= htmlspecialchars(t('admin.maps.editor_title'), ENT_QUOTES, 'UTF-8') ?></div>
                         <div class="proxies-hint"><?= t('admin.maps.editor_hint') ?></div>
@@ -457,6 +453,7 @@ function s_label(array $s, string $key): string {
         'mz_geo_not_found'  => t('admin.maps.js.geocode_not_found'),
         'mz_geo_error'      => t('admin.maps.js.geocode_error'),
         'mz_draw'           => t('admin.maps.draw_button'),
+        'mz_draw_first'     => t('admin.maps.editor_title'),
         'mz_drawing'        => t('admin.maps.drawing_button'),
         'mz_s_queued'      => t('admin.maps.status.queued'),
         'mz_s_sizing'      => t('admin.maps.status.sizing'),
@@ -697,6 +694,12 @@ function s_label(array $s, string $key): string {
                  failed: I.mz_s_failed }[st] || st;
     }
 
+    // Row cells carry their column title (shown as a small prefix by the card
+    // layout in style.css); read from the header so the strings stay in one place.
+    var mzLabels = mzTable
+        ? Array.prototype.map.call(mzTable.querySelectorAll('thead th'), function (th) { return th.textContent; })
+        : [];
+
     function mzRender(zones, diskFree) {
         if (mzDisk) mzDisk.textContent = I.mz_disk_free.replace('{x}', mzFmtBytes(diskFree));
         if (!mzBody) return;
@@ -717,10 +720,12 @@ function s_label(array $s, string $key): string {
                 var pct = Math.floor(100 * z.bytes_done / Math.max(1, z.bytes_expected));
                 size = mzFmtBytes(z.bytes_done) + ' / ' + mzFmtBytes(z.bytes_expected) + ' (' + pct + '%)';
             } else {
-                size = z.status === 'sizing' ? I.mz_s_sizing : '—';
+                size = z.status === 'sizing' ? I.mz_s_sizing : '';
             }
-            speed = z.speed_bps !== null ? mzFmtBytes(z.speed_bps) + '/s' : '—';
-            eta = z.eta_secs !== null ? mzFmtDur(z.eta_secs) : '—';
+            // Unknown speed/ETA leave the cell empty: the card layout hides
+            // empty cells instead of printing a dash-filled column.
+            speed = z.speed_bps !== null ? mzFmtBytes(z.speed_bps) + '/s' : '';
+            eta = z.eta_secs !== null ? mzFmtDur(z.eta_secs) : '';
             var status = mzStatusLabel(z.status);
             if (z.status === 'failed' && z.error) status += ' — ' + z.error;
             if (z.stale) status += ' — ' + I.mz_stale;
@@ -736,6 +741,9 @@ function s_label(array $s, string $key): string {
                 + '<td class="mz-speed"></td><td class="mz-eta"></td>'
                 + '<td>' + (z.via_proxy ? I.mz_via_proxy : I.mz_via_direct) + '</td>'
                 + '<td class="px-actions">' + actions + '</td>';
+            mzLabels.forEach(function (label, i) {
+                if (label && tr.children[i]) tr.children[i].dataset.label = label;
+            });
             tr.children[0].textContent = z.name;
             tr.children[2].textContent = status;
             tr.children[3].textContent = size;
@@ -798,13 +806,25 @@ function s_label(array $s, string $key): string {
     if (mzAdd) {
         mzAdd.addEventListener('click', function () {
             var via = document.querySelector('input[name="mz-via"]:checked');
-            mzAdd.disabled = true;
-            mzPost('add', {
-                name: document.getElementById('mz-name').value,
+            var bbox = {
                 min_lon: document.getElementById('mz-min-lon').value,
                 min_lat: document.getElementById('mz-min-lat').value,
                 max_lon: document.getElementById('mz-max-lon').value,
                 max_lat: document.getElementById('mz-max-lat').value,
+            };
+            // The rectangle exists only once drawn on the map: nothing drawn
+            // means telling the admin to draw, not a server "must be numbers".
+            if (Object.keys(bbox).some(function (k) { return String(bbox[k]).trim() === ''; })) {
+                showPopup(I.mz_draw_first, true);
+                return;
+            }
+            mzAdd.disabled = true;
+            mzPost('add', {
+                name: document.getElementById('mz-name').value,
+                min_lon: bbox.min_lon,
+                min_lat: bbox.min_lat,
+                max_lon: bbox.max_lon,
+                max_lat: bbox.max_lat,
                 maxzoom: document.getElementById('mz-maxzoom').value,
                 via_proxy: via ? via.value : '1',
             }).then(function (res) {
@@ -822,7 +842,7 @@ function s_label(array $s, string $key): string {
     // Leaflet core has no editable rectangles, so this is hand-rolled: a
     // draft rectangle with four draggable corner handles. Dragging the body
     // moves it, corners resize against the opposite corner. Every change
-    // syncs the numeric inputs above (the queue button reads those, so the
+    // syncs the hidden bbox inputs above (the queue button reads those, so the
     // editor needs no separate submit path) and re-checks overlap against
     // the server-rendered rows (warning only — the worker happily stores
     // shared tiles twice, the admin just deserves to know).
@@ -937,6 +957,9 @@ function s_label(array $s, string $key): string {
         function mzClearDraft() {
             if (mzDraft) { mzMap.removeLayer(mzDraft); mzDraft = null; }
             mzClearHandles();
+            // The fields are invisible: a stale rectangle must never be
+            // queueable after Clear (a fresh draft re-syncs them right away).
+            Object.keys(mzFields).forEach(function (k) { mzFields[k].value = ''; });
             if (mzOverlap) mzOverlap.hidden = true;
             if (mzPlaceLabel) mzPlaceLabel.hidden = true;
         }
@@ -1037,8 +1060,8 @@ function s_label(array $s, string $key): string {
                 mzSetDraft([start, end]);
             });
         });
-        // Numeric inputs stay the source of truth for queueing — typing a
-        // valid bbox redraws the draft so both stay in sync.
+        // The hidden inputs stay the source of truth for queueing — setting a
+        // valid bbox and firing change (what the e2e specs do) redraws the draft.
         ['min_lon', 'min_lat', 'max_lon', 'max_lat'].forEach(function (k) {
             var inp = mzFields[k];
             if (!inp) return;

@@ -143,6 +143,25 @@ $csrfE2 = $csrfOf($bBad);
     ['csrf_token' => $csrfE2, 'action' => 'enable', 'code' => totp_code($enrollSecret)], $ckE);
 $enrolled = $db->query("SELECT totp_enabled FROM users WHERE username = 't_2fa_enroll'")->fetchColumn();
 T::ok('correct enable code enrolls (sealed round-trip)', (int)$enrolled === 1);
+// Per-ACCOUNT budget: rotating source addresses must not buy unlimited
+// six-digit guesses. The account's own counter is pre-filled (the IP one
+// stays clean, as if every guess came from a fresh address); even the
+// CORRECT code is then refused.
+$acctId = (int)$db->query("SELECT id FROM users WHERE username = 't_2fa_owner'")->fetchColumn();
+$db->exec("DELETE FROM rate_limits WHERE scope IN ('admin_login', 'admin_login_acct', 'admin_2fa', 'admin_2fa_acct')");
+$db->prepare("INSERT INTO rate_limits (ip_address, scope, count, window_start) VALUES (?, 'admin_2fa_acct', 10, UTC_TIMESTAMP())")
+   ->execute(['u:' . $acctId]);
+[, $bA, $ckA] = _v2('GET', "$B/admin/index.php", null, '');
+[, , $ckA] = _v2('POST', "$B/admin/login.php", ['csrf_token' => $csrfOf($bA), 'username' => 't_2fa_owner', 'password' => 'AzPass123!'], $ckA);
+[, $bA, $ckA] = _v2('GET', "$B/admin/verify_2fa.php", null, $ckA);
+[$stA, $bA2, , $locA] = _v2('POST', "$B/admin/verify_2fa.php",
+    // The NEXT step's code: still inside the accepted window, and not yet burned
+    // by the earlier login (a replayed code would be refused for another reason).
+    ['csrf_token' => $csrfOf($bA), 'code' => totp_code($secret, time() + 30)], $ckA);
+T::ok('a spent account budget refuses even the correct code', !($stA === 302 && str_contains($locA, 'orders.php')));
+T::ok('and says so', str_contains($bA2, 'class="alert"'));
+$db->exec("DELETE FROM rate_limits WHERE scope IN ('admin_login', 'admin_login_acct', 'admin_2fa', 'admin_2fa_acct')");
+
 $db->prepare("DELETE FROM users WHERE username IN ('t_2fa_owner', 't_2fa_enroll')")->execute();
 // Restore the limiter rows this suite pinned above.
 $db->prepare('UPDATE settings SET value = ? WHERE key_name = \'rate_limit_max\'')->execute([$prevMax]);

@@ -79,7 +79,7 @@ test('selfhosted reveal renders local tiles with zero external requests', async 
         external++;
         return route.abort();
       }
-      if (/^\/tiles\/zone_\d+\.pmtiles$/.test(url.pathname)) {
+      if (/^\/tiles\/zone_\d+_[0-9a-f]{32}\.pmtiles$/.test(url.pathname)) {
         ranges++;
         return fulfillRange(route);
       }

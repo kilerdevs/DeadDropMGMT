@@ -103,6 +103,16 @@ T::eq('cookies carry the SID exclusively', '1', ini_get('session.use_only_cookie
 T::eq('transparent SID off', '0', ini_get('session.use_trans_sid'));
 
 // ── Guards: conditions reachable before their exit() redirects ───────────────
+// require_admin() now insists the session belongs to a LIVE account (a
+// deleted user is refused on the next request) and takes the role from the
+// row, so the fixture users below are real rows.
+$mkUser = static function (int $id, string $role): void {
+    get_db()->prepare(
+        'INSERT INTO users (id, username, password_hash, role) VALUES (?, ?, "x", ?)
+         ON DUPLICATE KEY UPDATE role = VALUES(role), totp_enabled = 0, active_session_id = NULL'
+    )->execute([$id, "t_fc_$id", $role]);
+};
+$mkUser(999, 'owner');
 $_SESSION = [];
 start_secure_session();
 $_SESSION['user_id'] = 999;
@@ -119,6 +129,7 @@ T::ok('owner passes require_owner', true);
 // (the flag 2fa.php and exempt dispatch routes set — script basenames no
 // longer gate anything; the gated negative is exit-covered over HTTP by
 // DispatchTest's 'pending courier gated from actions').
+$mkUser(999, 'courier'); // the account row decides the role now
 $_SESSION['user_role'] = 'courier';
 $_SESSION['totp_enabled'] = false;
 $GLOBALS['DDMGMT_ROUTE_2FA_EXEMPT'] = true;
@@ -172,6 +183,7 @@ T::ok('syntax failure is not an absent table',
 // Sliding inactivity: an authenticated request refreshes the session clock.
 $_SESSION = [];
 start_secure_session();
+$mkUser(7, 'owner');
 $_SESSION['user_id'] = 7;
 $_SESSION['user_role'] = 'owner';
 $_SESSION['user_name'] = 'sliding-owner';
@@ -179,6 +191,7 @@ $_SESSION['login_time'] = time() - 100;
 require_admin();
 T::ok('require_admin refreshes login_time on activity', $_SESSION['login_time'] >= time() - 5);
 $_SESSION = [];
+get_db()->exec('DELETE FROM users WHERE id IN (999, 7)');
 
 // A non-missing-table DB error fails closed even with correct config
 // credentials: the users table is swapped for a VIEW that breaks only

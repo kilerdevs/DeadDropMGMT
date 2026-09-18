@@ -93,7 +93,7 @@ T::eq('blank parts ignored', 'Poland', osm_place_label(['country' => ' Poland ',
 // Reverse URL builder (pure half of the lookup — the fetch itself must never
 // run in unit suites).
 T::eq('valid point builds the reverse URL',
-    'https://nominatim.openstreetmap.org/reverse?lat=52.2297&lon=21.0122&format=json&accept-language=en',
+    'https://nominatim.openstreetmap.org/reverse?lat=52.2297000&lon=21.0122000&format=json&accept-language=en',
     osm_reverse_url(52.2297, 21.0122));
 T::eq('latitude out of range is null', null, osm_reverse_url(91.0, 21.0));
 T::eq('longitude out of range is null', null, osm_reverse_url(52.0, 181.0));
@@ -124,5 +124,34 @@ foreach ($prevProxies as $px) {
     $pxIns->execute([$px['url'], $px['source'], $px['last_status'], $px['latency_ms'], $px['last_checked']]);
 }
 set_setting('osm_proxy_enabled', $prevRouting);
+
+// Tiny coordinates must not turn into scientific notation in the URL.
+T::ok('tiny coordinates stay fixed-point',
+    str_contains((string)osm_reverse_url(0.00001, -0.00002), 'lat=0.0000100&lon=-0.0000200'));
+
+// Only a genuine PNG counts as a tile.
+T::ok('png signature accepted', osm_is_png("\x89PNG\r\n\x1a\n" . 'rest'));
+T::ok('html rejected as tile', !osm_is_png('<html>proxy landing page</html>'));
+T::ok('empty rejected as tile', !osm_is_png(''));
+
+// Tile cache upkeep: aged entries and everything past the byte cap go,
+// oldest first; a fresh small cache is left alone.
+$tc = sys_get_temp_dir() . '/ddmgmt_tilecache_' . getmypid();
+@mkdir("$tc/3/1", 0770, true);
+file_put_contents("$tc/3/1/old.png", str_repeat('o', 100));
+touch("$tc/3/1/old.png", time() - 20 * 86400);
+file_put_contents("$tc/3/1/a.png", str_repeat('a', 400));
+touch("$tc/3/1/a.png", time() - 300);
+file_put_contents("$tc/3/1/b.png", str_repeat('b', 400));
+touch("$tc/3/1/b.png", time() - 200);
+file_put_contents("$tc/3/1/c.png", str_repeat('c', 400));
+touch("$tc/3/1/c.png", time() - 100);
+T::eq('expired tile removed, in-cap cache untouched', 1, osm_tile_cache_prune($tc, 100000, 7 * 86400));
+T::ok('fresh tiles survive an in-cap prune', is_file("$tc/3/1/a.png") && is_file("$tc/3/1/b.png") && is_file("$tc/3/1/c.png"));
+T::eq('over-cap removes the oldest first', 1, osm_tile_cache_prune($tc, 900, 7 * 86400));
+T::ok('oldest tile went, newest stayed', !is_file("$tc/3/1/a.png") && is_file("$tc/3/1/b.png") && is_file("$tc/3/1/c.png"));
+T::eq('missing cache dir is a no-op', 0, osm_tile_cache_prune($tc . '/nope'));
+foreach (glob("$tc/3/1/*") ?: [] as $f) { @unlink($f); }
+@rmdir("$tc/3/1"); @rmdir("$tc/3"); @rmdir($tc);
 
 exit(T::done());
