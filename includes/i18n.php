@@ -28,15 +28,86 @@ function i18n_load(string $lang): array {
 }
 
 // Admin accounts carry their own language in session (set at login); public
-// visitors have no account, so they get the owner-configured site default.
+// visitors have no account, so they pick their own: an explicit ?lang=
+// choice (session, first visit) wins, then the year-long preference cookie
+// from an earlier visit, then the owner-configured site default.
+//
+// Deliberately NOT statically memoized: under long-lived SAPIs (php -S,
+// FrankenPHP, workers) statics survive across requests, so a memoized first
+// request would pin the language for every later one. get_settings() already
+// caches the settings row and i18n_load() caches dictionaries — the per-call
+// cost left is a session/cookie read plus allowlist checks.
 function current_lang(): string {
-    static $lang = null;
-    if ($lang !== null) return $lang;
-    $candidate = (session_status() === PHP_SESSION_ACTIVE && !empty($_SESSION['user_lang']))
-        ? $_SESSION['user_lang']
-        : default_lang();
-    $lang = in_array($candidate, i18n_supported_langs(), true) ? $candidate : 'en';
-    return $lang;
+    $supported = i18n_supported_langs();
+    // An admin's account language rules the ADMIN area only. On the public
+    // pages (flagged by i18n_handle_public_lang_param) the public choice wins:
+    // an admin logged in in the same browser used to be pinned to their own
+    // language there, so the public switcher did nothing at all.
+    if (empty($GLOBALS['DDMGMT_PUBLIC_PAGE']) && session_status() === PHP_SESSION_ACTIVE && !empty($_SESSION['user_lang'])) {
+        // An account preference, corrupt or not, decides for its owner: an
+        // invalid stored code collapses to English (the guaranteed-complete
+        // dictionary), never to a visitor-level fallback.
+        return in_array($_SESSION['user_lang'], $supported, true) ? $_SESSION['user_lang'] : 'en';
+    }
+    if (session_status() === PHP_SESSION_ACTIVE && !empty($_SESSION['public_lang'])
+        && in_array($_SESSION['public_lang'], $supported, true)) {
+        return $_SESSION['public_lang'];
+    }
+    $cookie = $_COOKIE[i18n_public_lang_cookie()] ?? '';
+    if (is_string($cookie) && in_array($cookie, $supported, true)) {
+        return $cookie;
+    }
+    $candidate = default_lang();
+    return in_array($candidate, $supported, true) ? $candidate : 'en';
+}
+
+// Preference-cookie name for the public language choice. A cookie (not just
+// the session) so a returning recipient keeps their language across visits.
+function i18n_public_lang_cookie(): string {
+    return 'ddmgmt_lang';
+}
+
+// Honors an explicit public language choice (?lang=) on public pages: an
+// allowlisted code is stored in the session AND in the preference cookie;
+// anything else (missing, unknown, non-string) is silently ignored — a
+// recipient following a stale or hand-typed link keeps their current
+// language instead of meeting an error page.
+//
+// A switch is a session write + Set-Cookie per request — the same price as
+// any page view, but a bot hammering ?lang= rotates sessions and cookie
+// headers for free. A dedicated IP budget (30 changes / 10 min) blunts
+// that; past it the switch is ignored and the page renders in the current
+// language — graceful, never an error page. The budget inherits rl_hit's
+// fail-closed verdict, which here only means "keep the current language",
+// so a limiter outage degrades to a static language, not a denial.
+// Requesting the already-effective language spends nothing, so bookmarked
+// ?lang= URLs and back-button revisits never burn budget.
+//
+// Call BEFORE the first t()/current_lang() on the page (the choice must be
+// visible to this same request) and AFTER start_secure_session() (it writes
+// the session and must emit Set-Cookie before any output).
+function i18n_handle_public_lang_param(): void {
+    $GLOBALS['DDMGMT_PUBLIC_PAGE'] = true; // from here on this request is a public page
+    $raw = $_GET['lang'] ?? null;
+    if (!is_string($raw) || !in_array($raw, i18n_supported_langs(), true)) {
+        return;
+    }
+    if ($raw === current_lang()) {
+        return;
+    }
+    if (rl_hit('lang_switch', 30, 600)['blocked']) {
+        return;
+    }
+    if (session_status() === PHP_SESSION_ACTIVE) {
+        $_SESSION['public_lang'] = $raw;
+    }
+    setcookie(i18n_public_lang_cookie(), $raw, [
+        'expires'  => time() + 31536000,
+        'path'     => '/',
+        'secure'   => request_is_https(),
+        'httponly' => true,
+        'samesite' => 'Lax', // Strict would drop it on arrival from a chat-app link
+    ]);
 }
 
 function t(string $key, array $params = []): string {

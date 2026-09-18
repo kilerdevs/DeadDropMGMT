@@ -31,6 +31,12 @@ $lerr  = (string)($_SESSION['login_error'] ?? '');
 if (isset($_GET['timeout'])) {
     $lerr = t('admin.login.error.session_expired');
 }
+if (isset($_GET['superseded'])) {
+    $lerr = t('admin.login.error.session_superseded');
+}
+if (isset($_GET['revoked'])) {
+    $lerr = t('admin.login.error.session_revoked');
+}
 // login_error producers are all t()-built (HTML-safe); raw echo below.
 unset($_SESSION['login_error']);
 ?>
@@ -54,6 +60,12 @@ unset($_SESSION['login_error']);
     <p class="setup-explain"><?= t('admin.bootstrap.explain') ?></p>
     <form method="POST" action="/admin/bootstrap.php" autocomplete="off">
         <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
+        <?php if (_secret('DDMGMT_SETUP_TOKEN', '') !== ''): ?>
+        <div class="form-group">
+            <label for="setup_token"><?= t('admin.bootstrap.token_label') ?></label>
+            <input type="password" id="setup_token" name="setup_token" autocomplete="off" spellcheck="false">
+        </div>
+        <?php endif; ?>
         <div class="form-group">
             <label for="username"><?= t('admin.login.username_label') ?></label>
             <input type="text" id="username" name="username"

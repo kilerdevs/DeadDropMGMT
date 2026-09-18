@@ -33,7 +33,7 @@ foreach (glob($root . '/includes/*.php') as $f) {
     }
     $services[] = strtolower(str_replace('\\', '/', (string)realpath($f)));
 }
-T::ok('service files found', count($services) === 14);
+T::ok('service files found', count($services) === 15);
 foreach ($services as $s) {
     T::ok('kernel loads ' . basename($s), isset($loaded[$s]));
 }
@@ -52,6 +52,7 @@ foreach ([
     'analytics'   => 'log_event',
     'order_state' => 'order_delete_atomic',
     'proxy'       => 'osm_proxy_pool',
+    'maps'        => 'map_provider',
     'cleanup'     => 'run_cleanup_if_due',
     'wipe'        => 'do_panic_wipe',
 ] as $service => $fn) {
@@ -80,21 +81,46 @@ foreach (glob($root . '/admin/*.php') as $f) {
     }
     $checked += _kernel_guarded($name, $src);
 }
-T::ok('admin entry pages scanned', $checked === 33);
+T::ok('admin entry pages scanned', $checked === 34);
 
 // ── Same rule for every other entry point: public pages, cron, CLI tools,
 // and the docker journey script. Deliberate exceptions (not scanned):
 // healthz.php answers liveness with zero dependencies by design,
 // config.php IS the base layer, and tests/* keep their own bootstrap.
 $others = array_merge(
-    [$root . '/index.php', $root . '/receive.php', $root . '/cron/cleanup.php'],
+    [$root . '/index.php', $root . '/receive.php', $root . '/cron/cleanup.php', $root . '/cron/maps_sync.php'],
     glob($root . '/tools/*.php') ?: [],
     [$root . '/docker/e2e_journey.php'],
 );
 foreach ($others as $f) {
     $checked += _kernel_guarded('entry ' . basename($f), (string)file_get_contents($f));
 }
-T::ok('non-admin entry points scanned', count($others) === 9);
+T::ok('non-admin entry points scanned', count($others) === 10);
+
+// ── CLI-only scripts refuse every non-CLI SAPI, and the web server config
+// keeps developer/ops material off the wire (Apache .htaccess, nginx, Caddy).
+$cliOnly = array_merge(
+    glob($root . '/tools/*.php') ?: [],
+    glob($root . '/cron/*.php') ?: [],
+    [$root . '/docker/e2e_journey.php', $root . '/e2e/seed.php'],
+    glob($root . '/tests/*.php') ? array_values(array_filter(
+        glob($root . '/tests/*.php'),
+        static fn(string $f): bool => !str_ends_with($f, 'Test.php')
+    )) : [],
+);
+foreach ($cliOnly as $f) {
+    T::ok('CLI guard in ' . basename(dirname($f)) . '/' . basename($f),
+        str_contains((string)file_get_contents($f), "PHP_SAPI !== 'cli'"));
+}
+$htaccess = (string)file_get_contents($root . '/.htaccess');
+$nginx    = (string)file_get_contents($root . '/docker/nginx.conf');
+$caddy    = (string)file_get_contents($root . '/docker/Caddyfile');
+foreach (['cron', 'tools', 'tests', 'docker', 'e2e', 'backups', 'data'] as $blocked) {
+    T::ok("Apache blocks /$blocked/", str_contains($htaccess, $blocked . '|') || str_contains($htaccess, '|' . $blocked));
+    T::ok("nginx blocks /$blocked/", (bool)preg_match('#\^/\([^)]*\b' . $blocked . '\b[^)]*\)/#', $nginx));
+    T::ok("Caddy blocks /$blocked/", str_contains($caddy, "/$blocked/*"));
+}
+T::ok('Apache blocks setup.sql and config.php.example', str_contains($htaccess, 'setup\.sql') && str_contains($htaccess, 'config\\.php\\.example'));
 
 // ── No function collisions with the service layer ───────────────────────────
 // PHP function names are case-insensitive: an entry script defining T()
@@ -125,6 +151,30 @@ foreach ($entryFiles as $f) {
             !isset($serviceFuncs[$k]));
     }
 }
+
+// ── Last-resort handler answers CLI fatals itself ─────────────────────────────
+// A subprocess that throws past every catch: log + "Fatal error" + exit 1.
+// (The probe is a file: a top-level throw in `php -r` bypasses the engine's
+// handler dispatch on some builds and would test nothing.)
+$probeFile = sys_get_temp_dir() . '/ddmgmt_kernel_probe_' . getmypid() . '.php';
+file_put_contents($probeFile,
+    '<?php require_once ' . var_export($root . '/includes/kernel.php', true)
+    . '; throw new RuntimeException(\'kernel-probe\');');
+$proc = proc_open(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($probeFile),
+    [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+if (is_resource($proc)) {
+    $kOut = stream_get_contents($pipes[1]);
+    $kErr = stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    $kCode = proc_close($proc);
+    T::ok('kernel CLI handler exits 1', $kCode === 1);
+    T::ok('kernel CLI handler stays silent on stdout', $kOut === '');
+    T::ok('kernel CLI handler is machine-readable', str_contains($kErr, 'Fatal error'));
+} else {
+    T::ok('kernel CLI handler subprocess spawns', false);
+}
+@unlink($probeFile);
 
 exit(T::done());
 

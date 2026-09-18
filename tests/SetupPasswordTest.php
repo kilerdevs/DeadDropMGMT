@@ -15,14 +15,24 @@ require_once __DIR__ . '/bootstrap.php';
 // AuthorizationHttpTest): the bootstrap requires zero users, so leftovers
 // are wiped first and the created owner removed at the end.
 
-$port = 8942;
+// Let the OS pick a free port: a fixed one collides with any stray listener
+// on a shared runner, and then the whole suite fails as "server booted".
+$port  = 8942;
+$probe = @stream_socket_server('tcp://127.0.0.1:0', $errno, $errstr);
+if ($probe !== false) {
+    $port = (int)substr((string)strrchr((string)stream_socket_get_name($probe, false), ':'), 1) ?: $port;
+    fclose($probe);
+}
 $root = dirname(__DIR__);
 $cmd  = escapeshellarg(PHP_BINARY)
       . ' -d session.save_path=' . escapeshellarg(ini_get('session.save_path'))
       . " -S 127.0.0.1:$port -t " . escapeshellarg($root);
-$null = DIRECTORY_SEPARATOR === '\\' ? 'NUL' : '/dev/null';
-$proc = proc_open($cmd, [['pipe', 'r'], ['file', $null, 'w'], ['file', $null, 'w']], $p);
-register_shutdown_function(function () use ($proc): void {
+$null   = DIRECTORY_SEPARATOR === '\\' ? 'NUL' : '/dev/null';
+// The server's own stderr ("Address already in use", a fatal in a router
+// script) is the only clue when it does not come up, so keep it.
+$errLog = tempnam(sys_get_temp_dir(), 'ddsp');
+$proc = proc_open($cmd, [['pipe', 'r'], ['file', $null, 'w'], ['file', $errLog, 'w']], $p);
+register_shutdown_function(function () use ($proc, $errLog): void {
     $st = proc_get_status($proc);
     if (!empty($st['running'])) {
         if (DIRECTORY_SEPARATOR === '\\') {
@@ -32,6 +42,7 @@ register_shutdown_function(function () use ($proc): void {
         }
     }
     proc_close($proc);
+    @unlink($errLog);
 });
 $B = "http://127.0.0.1:$port";
 
@@ -72,10 +83,13 @@ $codeOf = static function (string $b, string $csrf): string {
 };
 
 $up = false;
-for ($i = 0; $i < 50; $i++) {
+for ($i = 0; $i < 100; $i++) {
     try { [$st] = _sp('GET', "$B/healthz.php", null, ''); if ($st === 200) { $up = true; break; } }
     catch (Throwable) { }
     usleep(200000);
+}
+if (!$up) {
+    fwrite(STDERR, "built-in server on port $port did not answer; its stderr:\n" . (string)@file_get_contents($errLog) . "\n");
 }
 T::ok('server booted', $up);
 if (!$up) { exit(T::done()); }

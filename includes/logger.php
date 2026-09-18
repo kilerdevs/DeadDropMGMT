@@ -28,8 +28,32 @@ const APP_LOG_GENESIS     = '000000000000000000000000000000000000000000000000000
 // key neither helps decrypt locations nor vice versa. Legacy entries written
 // before key separation used HMAC keyed with the raw hex string; verification
 // still accepts them until the log rotates out (see verify_log_chain).
+// The master key text the chain key derives from. Test seam (see
+// maps_cli_runner): a suite installs a bogus value to exercise the "key
+// unusable" arms in-process — the constant itself cannot change — and clears
+// it again ($clear) so nothing leaks into later files.
+function _log_key_hex(?string $override = null, bool $clear = false): string {
+    static $forced = null;
+    if ($clear) {
+        $forced = null;
+    } elseif ($override !== null) {
+        $forced = $override;
+    }
+    return $forced ?? (defined('AES_KEY_HEX') ? (string)AES_KEY_HEX : '');
+}
+
+// (self-contained on purpose: config.php loads this file before crypto.php)
 function _log_key(): string {
-    return hash_hkdf('sha256', hex2bin(AES_KEY_HEX), 32, 'deaddrop:log-hmac-v1', 'deaddrop-mgmt-hkdf-salt-v1');
+    static $cache = [];
+    $hex = _log_key_hex();
+    if (!isset($cache[$hex])) {
+        $master = preg_match('/^[0-9a-fA-F]{64}$/', $hex) === 1 ? hex2bin($hex) : false;
+        if ($master === false) {
+            throw new RuntimeException('Log integrity key unavailable: AES_KEY_HEX is not a valid 64-hex-char key.');
+        }
+        $cache[$hex] = hash_hkdf('sha256', $master, 32, 'deaddrop:log-hmac-v1', 'deaddrop-mgmt-hkdf-salt-v1');
+    }
+    return $cache[$hex];
 }
 
 function _log_key_legacy(): string {
@@ -154,6 +178,19 @@ function _log_rotate_if_needed(string $path): void {
 }
 
 function app_log(string $level, string $event, array $ctx = []): bool {
+    // No usable key, no chain: refuse BEFORE touching the file (an empty
+    // app.log used to appear, and hex2bin() warnings flooded error.log on
+    // every call). Say so once per process — it is a configuration fault.
+    try {
+        _log_key();
+    } catch (Throwable $e) {
+        static $keyWarned = false;
+        if (!$keyWarned) {
+            $keyWarned = true;
+            error_log('Structured log disabled: ' . $e->getMessage());
+        }
+        return false;
+    }
     $path = APP_LOG_PATH;
     $dir  = dirname($path);
     if (!is_dir($dir)) {
@@ -236,7 +273,12 @@ function app_log(string $level, string $event, array $ctx = []): bool {
                 unset($rec[$k]);
             }
         }
-        $payload = json_encode($rec, JSON_INVALID_UTF8_SUBSTITUTE);
+        // Identical flags to the stored line AND the verifier (unescaped +
+        // substitute): hashing the default-flags encoding here while the
+        // line below is written unescaped made every non-ASCII base field
+        // (Polish msgs, names) verify as "hash mismatch" — a false tamper
+        // alarm on a perfectly honest entry.
+        $payload = json_encode($rec, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
         if ($payload === false) {
             flock($fh, LOCK_UN);
             fclose($fh);
@@ -245,7 +287,15 @@ function app_log(string $level, string $event, array $ctx = []): bool {
     }
     $rec['hash'] = hash_hmac('sha256', $payload, _log_key());
 
-    $line = json_encode($rec, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    $line = json_encode($rec, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+    if ($line === false) {
+        // Unencodable even with substitution (e.g. INF/NAN floats in ctx) —
+        // refuse loudly instead of appending a blank line the verifier
+        // would silently skip, losing the entry without a trace.
+        flock($fh, LOCK_UN);
+        fclose($fh);
+        return false;
+    }
     fwrite($fh, $line . "\n");
     fflush($fh);
     flock($fh, LOCK_UN);
@@ -282,6 +332,11 @@ function verify_log_chain(?string $path = null): array {
     $path = $path ?? APP_LOG_PATH;
     if (!is_file($path)) {
         return [true, 0, null, null];
+    }
+    try {
+        _log_key();
+    } catch (Throwable) {
+        return [false, 0, null, 'log key unavailable (AES_KEY_HEX invalid)'];
     }
     $fh = fopen($path, 'r');
     if ($fh === false) {

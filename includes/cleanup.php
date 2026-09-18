@@ -15,7 +15,31 @@ function do_cleanup(): int {
     // Truncation anchor for the audit log (best-effort, never throws):
     // covers both the real cron and the pseudo-cron path.
     log_checkpoint_write();
+    _purge_stale_records();
+    osm_tile_cache_prune();
     return cleanup_expired_orders();
+}
+
+// Retention for tables nothing else ever trims. Events for tokens that never
+// matched an order (typos, probes) have no order whose deletion would take
+// them along; the audit trail keeps a year, long enough for any review.
+const ORPHAN_EVENT_RETENTION_DAYS = 30;
+const AUDIT_RETENTION_DAYS = 365;
+
+function _purge_stale_records(): void {
+    try {
+        $db = get_db();
+        $db->prepare(
+            'DELETE e FROM order_events e
+             LEFT JOIN orders o ON o.id = e.order_id OR o.order_token = e.order_token
+             WHERE o.id IS NULL AND e.created_at < (NOW() - INTERVAL ' . ORPHAN_EVENT_RETENTION_DAYS . ' DAY)'
+        )->execute();
+        $db->prepare(
+            'DELETE FROM audit_log WHERE created_at < (NOW() - INTERVAL ' . AUDIT_RETENTION_DAYS . ' DAY)'
+        )->execute();
+    } catch (Throwable $e) {
+        log_err('Record purge failed: ' . $e->getMessage());
+    }
 }
 
 // rate_limits rows are one-per-IP×scope and only ever reset on window expiry
@@ -35,14 +59,14 @@ function _purge_stale_rate_limits(): void {
 
 // Pseudo-cron wrapper — throttled to at most once per hour, called on each page visit.
 //
-// $chance gates the DB lookup itself: on a busy site the once-per-hour check
-// still meant one extra settings read per request. Each request now rolls a
-// 1-in-100 die BEFORE touching the database; combined with the hourly
-// throttle the sweep still runs promptly (a site with any real traffic rolls
-// the die hundreds of times an hour), while a quiet site pays at most one
-// cheap read per request it already makes. Pass 1.0 to force evaluation in
-// tests. High-volume deployments should install real cron anyway —
-// cron/cleanup.php calls do_cleanup() directly and bypasses all gating.
+// $chance gates the DB lookup itself. The default is 1.0 (always evaluate):
+// the settings table is loaded once per request anyway (get_settings() reads
+// every row in one query), so checking the hourly stamp costs nothing — while
+// a 1-in-100 die made the sweep effectively daily on a quiet dead drop, i.e.
+// expired orders lingered for days. Lower it only where the stamp read is
+// measurably hot. High-volume deployments should still install real cron —
+// cron/cleanup.php calls do_cleanup() directly and bypasses all gating (the
+// Docker entrypoint runs it on a timer).
 // Pure dice roll for the pseudo-cron gate: 1.0+ always runs, 0/negative
 // never runs, anything in between runs with probability $chance. Kept pure
 // so the probability decision is unit-testable without touching the
@@ -89,7 +113,7 @@ function _run_cleanup_pass(): void {
     }
 }
 
-function run_cleanup_if_due(float $chance = 0.01): void {
+function run_cleanup_if_due(float $chance = 1.0): void {
     static $ran = false;
     if ($ran) return;
     // A lost die roll does NOT consume the one-shot: skipping the DB check

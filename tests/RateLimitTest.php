@@ -185,6 +185,35 @@ T::eq('corrupt row is not reset by the probe', 2, (int)$db->query(
     'SELECT count FROM rate_limits WHERE ip_address = ' . $db->quote($ip) . " AND scope = '$cscp'")->fetchColumn());
 $db->prepare('DELETE FROM rate_limits WHERE ip_address = ? AND scope = ?')->execute([$ip, $cscp]);
 
+// ── Refund, never reset: a free request must not wipe earned failures ───────
+$rfs = 'rl_refund_probe';
+rl_reset($rfs);
+rl_hit($rfs);
+rl_hit($rfs);
+rl_hit($rfs);
+rl_refund($rfs);
+T::eq('refund gives back exactly one attempt', 2, rl_status($rfs)['count']);
+rl_refund($rfs);
+rl_refund($rfs);
+rl_refund($rfs);
+T::eq('refund floors at zero', 0, rl_status($rfs)['count']);
+rl_reset($rfs);
+
+// ── Per-subject budgets sit next to the per-IP ones ─────────────────────────
+$subj = rl_account_subject('l:', 'Admin');
+T::eq('account subject ignores case and padding', $subj, rl_account_subject('l:', '  aDMIN '));
+T::ok('account subject differs per name', $subj !== rl_account_subject('l:', 'admin2'));
+T::ok('account subject fits the ip_address column', strlen($subj) <= 45);
+rl_reset($rfs, $subj);
+rl_hit($rfs, null, null, $subj);
+rl_hit($rfs, null, null, $subj);
+T::eq('subject budget counts by itself', 2, rl_status($rfs, $subj)['count']);
+T::eq('subject hits leave the IP budget alone', 0, rl_status($rfs)['count']);
+rl_refund($rfs, $subj);
+T::eq('subject refund works', 1, rl_status($rfs, $subj)['count']);
+rl_reset($rfs, $subj);
+T::eq('subject reset clears only that subject', 0, rl_status($rfs, $subj)['count']);
+
 // Cleanup
 $db->prepare('DELETE FROM rate_limits WHERE ip_address = ?')->execute([$ip]);
 

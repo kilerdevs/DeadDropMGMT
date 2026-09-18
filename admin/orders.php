@@ -11,7 +11,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delet
     if (verify_csrf($_POST['csrf_token'] ?? '')) {
         $del_id = (int)($_POST['id'] ?? 0);
         if ($del_id > 0 && courier_owns_order($del_id)) {
-            // Same atomic delete-under-lock core as order_close/order_remove.
+            // Same atomic delete-under-lock core as order_close.
             $res = order_delete_atomic($del_id);
             if ($res !== null) {
                 audit('order_delete', $del_id, $res['token']);
@@ -33,9 +33,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delet
     exit;
 }
 
-$flash    = $_SESSION['flash']    ?? '';
-$flash_ok = $_SESSION['flash_ok'] ?? false;
-unset($_SESSION['flash'], $_SESSION['flash_ok']);
+[$flash, $flash_ok] = flash_take();
 
 // ── Courier filter (owner only) ───────────────────────────────────────────────
 $filter_courier = is_owner() ? (int)($_GET['courier'] ?? 0) : 0;

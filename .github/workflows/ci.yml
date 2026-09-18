@@ -112,6 +112,52 @@ jobs:
       - name: Run tests
         run: php tests/run_all.php
 
+  # Timezone robustness: the rate limiter once mixed a UTC write clock with a
+  # local-time read clock, silently neutering windows east of UTC — and CI
+  # runs in UTC, so that whole class slips through untested. This job runs
+  # the full battery under Europe/Warsaw (UTC+1/+2), where the skew fails
+  # open and any regression burns the suite's own budget math. TZ is honored
+  # because the runner image leaves date.timezone unset (UTC default).
+  tests-tz:
+    runs-on: ubuntu-latest
+    name: tests (Europe/Warsaw TZ)
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      DDMGMT_DB_HOST: 127.0.0.1
+      DDMGMT_DB_PORT: '3306'
+      DDMGMT_DB_USER: root
+      DDMGMT_DB_PASS: root
+      DDMGMT_TEST_DB: deaddrops_test
+      TZ: Europe/Warsaw
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: '8.3'
+          extensions: pdo_mysql, openssl, gd, fileinfo
+
+      - name: Prepare config
+        run: cp config.php.example config.php
+
+      - name: Load schema into test database
+        run: php tests/schema_loader.php
+
+      - name: Run tests
+        run: php tests/run_all.php
+
   # Static analysis (PHPStan level 5) over the runtime code. The phar is
   # version- AND hash-pinned: a compromised release must not analyse — or
   # worse, pass — this repo's code.
@@ -439,3 +485,58 @@ jobs:
       - name: Tear down DAST stack
         if: always()
         run: docker compose down -v
+
+  # Real-browser E2E (Playwright/Chromium): the behaviours raw HTTP cannot
+  # see — no-JS form paths, inline-handler absence in a live DOM, mid-reveal
+  # UI state. Same MariaDB service as the PHP suite; the app boots via
+  # `php -S` (playwright.config.js webServer) against an isolated
+  # deaddrops_e2e database seeded by e2e/global-setup.js, so the PHP and
+  # browser harnesses never observe each other's rows.
+  e2e:
+    runs-on: ubuntu-latest
+    name: e2e (Playwright/Chromium)
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      DDMGMT_DB_HOST: 127.0.0.1
+      DDMGMT_DB_PORT: '3306'
+      DDMGMT_DB_USER: root
+      DDMGMT_DB_PASS: root
+      DDMGMT_TEST_DB: deaddrops_e2e
+      CI: 'true'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: '8.3'
+          extensions: pdo_mysql, openssl, gd, fileinfo
+
+      - name: Setup Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Prepare config
+        run: cp config.php.example config.php
+
+      - name: Install E2E dependencies
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run browser tests
+        run: npx playwright test

@@ -2,6 +2,9 @@ config.php
 logs/
 uploads/
 cache/osm_tiles/
+data/maps/
+tiles/*.pmtiles
+tiles/*.part
 fromftp/
 _obs_payload.json
 prompt.txt
@@ -9,3 +12,7 @@ prompt.txt
 
 vendor/
 coverage-html/
+
+node_modules/
+test-results/
+playwright-report/

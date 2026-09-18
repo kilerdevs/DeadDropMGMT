@@ -95,6 +95,18 @@ T::eq('re-run finds no orders', 0, $retry['orders']);
 T::eq('re-run deletes no files', 0, $retry['files']);
 T::eq('re-run has no failures', 0, $retry['files_failed']);
 
+// The admin tile cache remembers which map areas were viewed — at street
+// zoom around a drop that is the location. Panic empties it (the directory
+// itself stays for tile_proxy.php to refill).
+$tileRoot = dirname(__DIR__) . '/cache/osm_tiles';
+@mkdir("$tileRoot/19/291234", 0770, true);
+file_put_contents("$tileRoot/19/291234/171234.png", 'tile');
+$tw = do_panic_wipe();
+T::ok('tile cache files destroyed', !is_file("$tileRoot/19/291234/171234.png") && !is_dir("$tileRoot/19"));
+T::eq('tile files counted apart from photos', 1, $tw['tiles']);
+T::eq('photo count unaffected by tiles', 0, $tw['files']);
+T::ok('tile cache root kept', is_dir($tileRoot));
+
 // Partial failure must be OBSERVABLE: an undeletable file is reported, not
 // hidden behind a success message; and the retry finishes the job.
 // As root (some CI images, containers) mode bits do not apply — unlink
@@ -130,9 +142,13 @@ $render_panic = static function (int $step, string $csrf): string {
     include dirname(__DIR__) . '/admin/panic.php';
     return (string)ob_get_clean();
 };
+get_db()->prepare(
+    'INSERT INTO users (id, username, password_hash, role) VALUES (4990001, "t_panic_owner", "x", "owner")
+     ON DUPLICATE KEY UPDATE role = "owner", active_session_id = NULL'
+)->execute();
 $_SESSION = [];
 start_secure_session();
-$_SESSION['user_id'] = 1;
+$_SESSION['user_id'] = 4990001; // a live account: deleted users are refused
 $_SESSION['user_role'] = 'owner';
 $_SESSION['user_name'] = 'panic-owner';
 $_SESSION['login_time'] = time();
@@ -147,5 +163,6 @@ T::ok('valid step-1 token advances without the error',
 $_POST = [];
 $_SERVER['REQUEST_METHOD'] = 'GET';
 $_SESSION = [];
+get_db()->exec('DELETE FROM users WHERE id = 4990001');
 
 exit(T::done());

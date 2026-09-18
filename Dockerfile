@@ -25,6 +25,7 @@ RUN a2enconf zz-deaddrop
 
 COPY . /var/www/html
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY docker/php-ddmgmt.ini /usr/local/etc/php/conf.d/zz-ddmgmt-runtime.ini
 # The lifecycle journey (CI) re-runs the schema loader inside the container;
 # tests/ as a whole is dockerignored, but this one file ships deliberately.
 COPY tests/schema_loader.php /var/www/html/tests/schema_loader.php
@@ -32,8 +33,11 @@ RUN chmod +x /usr/local/bin/entrypoint.sh \
  # pristine config template outside the docroot for first-boot rendering
  && cp /var/www/html/config.php.example /usr/local/share/config.php.template \
  # writable runtime dirs; real content comes from volumes at runtime
- && mkdir -p /var/www/html/logs /var/www/html/uploads /var/www/html/cache/osm_tiles /config \
- && chown -R www-data:www-data /var/www/html/logs /var/www/html/uploads /var/www/html/cache /config
+ && mkdir -p /var/www/html/logs /var/www/html/uploads /var/www/html/cache/osm_tiles /var/www/html/data/maps /var/www/html/tiles /config \
+ && chown -R www-data:www-data /var/www/html/logs /var/www/html/uploads /var/www/html/cache /var/www/html/data /var/www/html/tiles /config \
+ # the base image leaves the docroot itself world-writable (1777): only the
+ # runtime directories above need to be writable, never the docroot root
+ && chmod 755 /var/www/html
 
 WORKDIR /var/www/html
 # Real health signal: Apache + PHP + config rendering all working — a plain

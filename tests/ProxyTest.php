@@ -81,4 +81,77 @@ T::eq('mixed pool: all three survive with positive verdicts', 3, count($kept));
 $kept = proxy_filter_anonymity($working, $cands, '203.0.113.9', []);
 T::eq('mixed pool: only rated + https survive without verdicts', 2, count($kept));
 
+// ── Reverse-geocode place labels (lat/lng hidden from owners by policy) ───
+T::eq('country + state join', 'Poland, Masovian Voivodeship',
+    osm_place_label(['country' => 'Poland', 'state' => 'Masovian Voivodeship', 'city' => 'Warsaw']));
+T::eq('country alone when no state', 'Poland', osm_place_label(['country' => 'Poland']));
+T::eq('state alone when no country', 'Mazowieckie', osm_place_label(['state' => 'Mazowieckie']));
+T::eq('nothing known is empty', '', osm_place_label(['city' => 'Nowhere']));
+T::eq('non-array is empty', '', osm_place_label(null));
+T::eq('blank parts ignored', 'Poland', osm_place_label(['country' => ' Poland ', 'state' => '  ']));
+
+// Reverse URL builder (pure half of the lookup — the fetch itself must never
+// run in unit suites).
+T::eq('valid point builds the reverse URL',
+    'https://nominatim.openstreetmap.org/reverse?lat=52.2297000&lon=21.0122000&format=json&accept-language=en',
+    osm_reverse_url(52.2297, 21.0122));
+T::eq('latitude out of range is null', null, osm_reverse_url(91.0, 21.0));
+T::eq('longitude out of range is null', null, osm_reverse_url(52.0, 181.0));
+T::eq('non-finite is null', null, osm_reverse_url(NAN, 21.0));
+T::ok('lookup rejects geography without network', osm_reverse_lookup(91.0, 21.0) === null);
+
+// Reverse answer decoding (pure — no network in any arm).
+T::eq('parse keeps the address', ['country' => 'Poland', 'state' => 'X'],
+    osm_reverse_parse('{"address":{"country":"Poland","state":"X"}}'));
+T::eq('parse without address is null', null, osm_reverse_parse('{"error":"nope"}'));
+T::eq('parse garbage is null', null, osm_reverse_parse('not json'));
+
+// Fail-closed lookup: routing enabled with an empty pool answers null
+// without touching the network (covers the fetch-failed arm). Pool and
+// setting restored below — later suites inherit sanity.
+$db = get_db();
+$prevProxies = $db->query('SELECT url, source, last_status, latency_ms, last_checked FROM osm_proxies')->fetchAll();
+$prevRouting = get_setting('osm_proxy_enabled', '0');
+set_setting('osm_proxy_enabled', '1');
+$db->prepare('DELETE FROM osm_proxies')->execute();
+T::ok('lookup fails closed on empty pool', osm_reverse_lookup(52.2297, 21.0122) === null);
+$db->prepare('DELETE FROM osm_proxies')->execute();
+$pxIns = $db->prepare(
+    'INSERT INTO osm_proxies (url, source, last_status, latency_ms, last_checked)
+     VALUES (?, ?, ?, ?, ?)'
+);
+foreach ($prevProxies as $px) {
+    $pxIns->execute([$px['url'], $px['source'], $px['last_status'], $px['latency_ms'], $px['last_checked']]);
+}
+set_setting('osm_proxy_enabled', $prevRouting);
+
+// Tiny coordinates must not turn into scientific notation in the URL.
+T::ok('tiny coordinates stay fixed-point',
+    str_contains((string)osm_reverse_url(0.00001, -0.00002), 'lat=0.0000100&lon=-0.0000200'));
+
+// Only a genuine PNG counts as a tile.
+T::ok('png signature accepted', osm_is_png("\x89PNG\r\n\x1a\n" . 'rest'));
+T::ok('html rejected as tile', !osm_is_png('<html>proxy landing page</html>'));
+T::ok('empty rejected as tile', !osm_is_png(''));
+
+// Tile cache upkeep: aged entries and everything past the byte cap go,
+// oldest first; a fresh small cache is left alone.
+$tc = sys_get_temp_dir() . '/ddmgmt_tilecache_' . getmypid();
+@mkdir("$tc/3/1", 0770, true);
+file_put_contents("$tc/3/1/old.png", str_repeat('o', 100));
+touch("$tc/3/1/old.png", time() - 20 * 86400);
+file_put_contents("$tc/3/1/a.png", str_repeat('a', 400));
+touch("$tc/3/1/a.png", time() - 300);
+file_put_contents("$tc/3/1/b.png", str_repeat('b', 400));
+touch("$tc/3/1/b.png", time() - 200);
+file_put_contents("$tc/3/1/c.png", str_repeat('c', 400));
+touch("$tc/3/1/c.png", time() - 100);
+T::eq('expired tile removed, in-cap cache untouched', 1, osm_tile_cache_prune($tc, 100000, 7 * 86400));
+T::ok('fresh tiles survive an in-cap prune', is_file("$tc/3/1/a.png") && is_file("$tc/3/1/b.png") && is_file("$tc/3/1/c.png"));
+T::eq('over-cap removes the oldest first', 1, osm_tile_cache_prune($tc, 900, 7 * 86400));
+T::ok('oldest tile went, newest stayed', !is_file("$tc/3/1/a.png") && is_file("$tc/3/1/b.png") && is_file("$tc/3/1/c.png"));
+T::eq('missing cache dir is a no-op', 0, osm_tile_cache_prune($tc . '/nope'));
+foreach (glob("$tc/3/1/*") ?: [] as $f) { @unlink($f); }
+@rmdir("$tc/3/1"); @rmdir("$tc/3"); @rmdir($tc);
+
 exit(T::done());

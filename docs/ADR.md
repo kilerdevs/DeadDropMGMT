@@ -1,17 +1,43 @@
 # Architecture Decision Records
 
+[![ADRs](https://img.shields.io/badge/ADRs-18-blue?style=flat)](#index)
+
 The threat model documents *what* protects what. These records capture *why*
 each security-relevant choice was made the way it was — including the
 alternatives that were rejected and the price we knowingly pay.
 
 Format: lightweight ADR (Context / Decision / Consequences). Superseded
-records stay here, marked as such.
+records stay here, marked as such. A new decision with trade-offs gets the next
+number and a row in the index.
+
+## Index
+
+| # | Decision | Status |
+|---|---|---|
+| 001 | Zero-dependency PHP application | Accepted |
+| 002 | AES-256-GCM instead of CBC or XChaCha20-Poly1305 | Accepted |
+| 003 | Legacy CBC rows: migrate, then refuse | Accepted |
+| 004 | bcrypt with cost 12 | Accepted |
+| 005 | TOTP defaults: SHA-1 / 6 digits / 30 s | Accepted |
+| 006 | Dual rate-limit budgets: IP + session cookie | Accepted |
+| 007 | Tamper-evident log: HMAC-chained JSONL | Accepted |
+| 008 | PRG pattern for the location reveal | Accepted |
+| 009 | All third-party map traffic proxied server-side | Accepted |
+| 010 | MariaDB-flavoured idempotent setup.sql | Superseded |
+| 011 | Hand-rolled test harness instead of PHPUnit | Accepted |
+| 012 | Three interchangeable container stacks | Accepted |
+| 013 | Enrollment secrets for passwordless accounts | Accepted |
+| 014 | Pickup passwords: ≥64-bit, hash-only, shown once | Accepted |
+| 015 | Panic wipe destroys everything, evidence included | Accepted |
+| 016 | HKDF key separation: the master key never encrypts directly | Accepted |
+| 017 | Self-hosted maps as an opt-in provider | Accepted |
+| 018 | Single-use CSRF tokens with a live-token endpoint | Accepted |
 
 ---
 
 ## ADR-001 · Zero-dependency PHP application
 
-**Context.** The app handles contraband-adjacent logistics for a tiny user
+**Context.** The app handles sensitive drop locations for a small user
 base; supply-chain surface must be near zero, hosting must work on cheap
 shared PHP hosting.
 
@@ -161,32 +187,6 @@ copy). The capability is additionally short-lived (180 s from unlock,
 sealed blob, so a tampered payload is rejected wholesale — never partially
 used. Decryption runs a second time per reveal (negligible cost).
 
-## ADR-013 · Enrollment secrets for passwordless accounts
-
-**Context.** Passwordless account creation originally made *the username*
-the claim credential: whoever knew an unclaimed courier's username could
-complete setup first. For admin/courier accounts that was the largest
-product-security blemish in the design.
-
-**Decision.** Creating an account without a password issues a single-use,
-24-hour enrollment secret (256-bit random, stored SHA-256-hashed, shown to
-the owner exactly once). The login form swaps the password field for an
-enrollment-code field for unclaimed usernames; `admin_login()` requires a
-valid, unexpired secret before arming the set-password step; claiming burns
-the secret. Owner bootstrap follows the same rule — its secret doubles as a
-recovery code shown once on the setup screen.
-
-**Alternatives rejected:** preset passwords (owner knows every credential —
-the original problem); magic links over email (no e-mail infrastructure in
-scope, and it would leak claim capability to a mail provider).
-
-**Consequences.** Username knowledge alone is worthless without the secret
-(+). The secret transits through the owner's hands exactly once and is
-never again present in the system un-hashed (+). Lost secrets require the
-owner to reset the password directly (− accepted, existing flow covers it).
-Accounts created passwordless before this change cannot be claimed until
-the owner resets them (− documented).
-
 ## ADR-009 · All third-party map traffic proxied server-side
 
 **Context.** Owner/courier IPs must not leak to OpenStreetMap; public CSP is
@@ -200,7 +200,8 @@ OSM), disclosed openly.
 **Consequences.** No admin IP ever reaches OSM (+). Proxy pool dead = map
 features stop, never silent direct fallback (+). Recipient IP still leaks to
 OSM on delivered-order views — stated plainly in the README rather than
-pretended away (− documented).
+pretended away (− documented). The opt-in self-hosted provider
+(ADR-017) removes even that.
 
 ## ADR-010 · MariaDB-flavoured idempotent setup.sql — SUPERSEDED
 
@@ -247,6 +248,32 @@ every `.htaccess` protection.
 CI smoke-tests each stack end-to-end (+). Three compose files to keep in
 sync (−), mitigated by the shared FPM image doing all app-level work.
 
+## ADR-013 · Enrollment secrets for passwordless accounts
+
+**Context.** Passwordless account creation originally made *the username*
+the claim credential: whoever knew an unclaimed courier's username could
+complete setup first. For admin/courier accounts that was the largest
+product-security blemish in the design.
+
+**Decision.** Creating an account without a password issues a single-use,
+24-hour enrollment secret (256-bit random, stored SHA-256-hashed, shown to
+the owner exactly once). The login form swaps the password field for an
+enrollment-code field for unclaimed usernames; `admin_login()` requires a
+valid, unexpired secret before arming the set-password step; claiming burns
+the secret. Owner bootstrap follows the same rule — its secret doubles as a
+recovery code shown once on the setup screen.
+
+**Alternatives rejected:** preset passwords (owner knows every credential —
+the original problem); magic links over email (no e-mail infrastructure in
+scope, and it would leak claim capability to a mail provider).
+
+**Consequences.** Username knowledge alone is worthless without the secret
+(+). The secret transits through the owner's hands exactly once and is
+never again present in the system un-hashed (+). Lost secrets require the
+owner to reset the password directly (− accepted, existing flow covers it).
+Accounts created passwordless before this change cannot be claimed until
+the owner resets them (− documented).
+
 ## ADR-014 · Pickup passwords: ≥64-bit, hash-only, shown once
 
 **Context.** Generated pickup passphrases carried ~40 bits of entropy —
@@ -290,3 +317,73 @@ incident response — accepted consciously). A failed run can never look
 successful (+). Concurrent cleanup/receive/reveal cannot corrupt the wipe
 (row locks, idempotent sweeps) (+).
 
+## ADR-016 · HKDF key separation: the master key never encrypts directly
+
+**Context.** One 256-bit key protected locations, TOTP secrets, sealed session
+payloads and the log-integrity chain alike. A weakness or leak in any one use
+(or a rotation aimed at one subsystem) coupled all the others.
+
+**Decision.** `AES_KEY_HEX` is a *master* key. Each purpose derives its own
+32-byte subkey with HKDF-SHA256, a fixed public salt (RFC 5869 — all secret
+material flows from the master alone) and a purpose-bound info string:
+`deaddrop:location-v1`, `deaddrop:totp-v1`, `deaddrop:reveal-v1`,
+`deaddrop:log-hmac-v1`. Rows encrypted under the raw master key are refused at
+runtime; `tools/separate_keys.php` migrates them (dry-run first), and
+`tools/rotate_aes_key.php` re-encrypts under the *new* master's subkeys.
+
+**Consequences.** A leaked log-chain key no longer helps decrypt locations, nor
+the other way round (+). One master secret to back up and rotate (+). Upgrading
+without running the migration leaves old orders and TOTP secrets unreadable —
+loudly, not silently (−, documented). Log entries written before the change are
+still accepted by the verifier through a raw-key fallback until the log rotates
+out; after a key *rotation* old entries no longer verify (see ADR-007).
+
+## ADR-017 · Self-hosted maps as an opt-in provider
+
+**Context.** ADR-009 keeps admin traffic away from OpenStreetMap, but the public
+reveal still embeds an OSM iframe, so the *recipient's* IP reaches a third
+party. Operators with a zero-third-party requirement had no answer.
+
+**Decision.** An opt-in `map_provider` setting. The self-hosted path renders
+same-origin PMTiles zone files with a vendored MapLibre client; the pages make
+no request to OSM, a font host or a CDN. Zones are admin-drawn rectangles cut
+from the daily Protomaps planet build by a pinned `pmtiles` CLI — only the
+zone's bytes cross the wire. Design points:
+
+- *Files are capabilities.* Zone files are named `zone_<id>_<128-bit token>.pmtiles`;
+  the name is the access control, guessable legacy names are denied, and the
+  public reveal only ever learns the names of zones that cover the delivered pin.
+- *No downloads on page visits.* Extracts cannot resume, so a killed request
+  would waste the transfer: a CLI-only worker does the work; page visits only
+  fail jobs whose worker died.
+- *Supply chain.* The CLI runs as the web user, so its archive and binary are
+  verified against built-in SHA-256 pins before first execution; trust-on-first-use
+  applies only to overrides and other architectures.
+- *Consent per download.* Anonymous proxy pool (fail-closed, possibly slow) or
+  direct (fast, reveals the server IP to the tile host); a disk-headroom check
+  refuses zones that do not fit.
+
+**Consequences.** Map views can have zero third-party contact (+). Costs disk
+and an operational worker (−). Zone files live in the container layer, not a
+volume, so a rebuild removes them and zones must be re-added (− documented in
+the README). A zone URL is a bearer capability — anyone holding it can fetch that
+zone (− accepted: it is only disclosed alongside a delivered order in its area).
+
+## ADR-018 · Single-use CSRF tokens with a live-token endpoint
+
+**Context.** A token that never changes can be replayed if it leaks (XSS,
+proxy logs). Rotating it on every verified request closes that, but page-rendered
+tokens then go stale after *any* verified AJAX call — a language switch or
+logout made the next form fail with "Invalid CSRF".
+
+**Decision.** Keep rotation on every successful verification. Fetch-based
+endpoints return the next token in their JSON (`csrf`). Admin pages get a
+read-only `GET /admin/csrf_token.php` that returns the session's *live* token
+without rotating it (same-origin requests only, checked through
+`Sec-Fetch-Site`; not CSRF-protected because it changes nothing), and a global
+submit hook in `admin.js` that fetches it just before any admin POST form is sent.
+
+**Consequences.** Replay protection stays intact and stale-token errors from
+long-lived pages are gone (+). One tiny extra GET per admin form submit (−).
+Public unlock forms remain plain single-use tokens; reloading the form is the
+recovery there (documented in TROUBLESHOOTING).

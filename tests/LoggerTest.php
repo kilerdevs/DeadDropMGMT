@@ -173,6 +173,14 @@ T::eq('three live appends form a verifiable chain',
 T::ok('app_log survives non-UTF8 context',
       app_log('info', 'logger_test_binary', ['junk' => "\xB1\x31", 'msg' => 'binary ctx']) === true);
 
+// Non-ASCII base fields must VERIFY after the substitution fallback: the
+// hash used to be computed over default-flags encoding while the stored
+// line was unescaped, so a Polish msg false-alarmed as "hash mismatch".
+T::ok('app_log survives non-UTF8 context with non-ASCII msg',
+      app_log('info', 'logger_test_binary_pl', ['junk' => "\xB1\x31", 'msg' => 'Zażółć gęślą jaźń']) === true);
+T::eq('fallback entry with non-ASCII msg verifies clean',
+      [true, 5, null, null], verify_log_chain($live));
+
 // Garbage at the tail is TOLERATED: the writer anchors on the last parseable
 // entry, so one broken line must not orphan the rest of the log
 $live = APP_LOG_PATH;
@@ -395,6 +403,27 @@ with_table_hidden_lg('order_events', function (): void {
 });
 T::ok('failed event leaves no phantom row',
       $db->query("SELECT 1 FROM order_events WHERE event_type = 't_event_fail'")->fetch() === false);
+
+// ── Unusable AES key, in-process arms (the child probe below proves the
+// no-warnings / untouched-file side effects across a real process boundary) ─
+_log_key_hex('not-a-real-key');
+T::throws('log key refuses a malformed master key', static fn() => _log_key(), RuntimeException::class);
+T::ok('app_log refuses without a usable key', app_log('info', 'no_key', ['msg' => 'x']) === false);
+T::ok('app_log keeps refusing (warn-once path)', app_log('info', 'no_key_again') === false);
+$dummyLog = sys_get_temp_dir() . '/ddmgmt_nokey_' . getmypid() . '.log';
+file_put_contents($dummyLog, "{}\n");
+T::eq('verify names the missing key', [false, 0, null, 'log key unavailable (AES_KEY_HEX invalid)'], verify_log_chain($dummyLog));
+@unlink($dummyLog);
+_log_key_hex(null, true);
+T::ok('a valid key works again once the override is cleared', strlen(_log_key()) === 32);
+
+// ── Unusable AES key: the structured log refuses quietly and says why ───────
+// (`docker exec` shells and cron never inherited the key: app_log() used to
+// create an empty app.log and spray hex2bin() warnings into error.log.)
+$child = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(__DIR__ . '/_log_badkey.php') . ' 2>&1';
+$out = (string)shell_exec('DDMGMT_AES_KEY_HEX=not-a-real-key ' . $child);
+T::eq('bad key: no write, log untouched, verify names the cause',
+    '0|untouched|log key unavailable (AES_KEY_HEX invalid)', trim($out));
 
 exit(T::done());
 

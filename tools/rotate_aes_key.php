@@ -1,6 +1,13 @@
 <?php
 declare(strict_types=1);
 
+// CLI only: this script must never be runnable over HTTP, whatever the
+// web server happens to serve.
+if (PHP_SAPI !== 'cli') {
+    http_response_code(404);
+    exit;
+}
+
 // ── AES key rotation tool ─────────────────────────────────────────────────────
 // Re-encrypts every encrypted column with a new key, verifying each row
 // decrypts cleanly with the OLD key before rewriting anything.
@@ -140,7 +147,8 @@ printf("\nDone: $total row(s) re-encrypted under the NEW master's purpose subkey
 echo <<<EOT
   1. switch DDMGMT_AES_KEY_HEX to the NEW key everywhere and restart the app
   2. destroy every copy of the OLD key
-  (the log-integrity chain verifies entries from both the old and new
-   key generations, so app.log history stays verifiable)
+  (the log chain is HMAC-keyed with the master key: entries written under
+   the OLD key will not verify under the new one, so verify the chain and
+   archive logs/app.log BEFORE switching if you need that history proven)
 
 EOT;

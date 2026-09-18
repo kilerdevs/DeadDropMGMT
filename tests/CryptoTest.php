@@ -181,9 +181,18 @@ T::ok('sealed payload refused by location decrypt', decrypt_location($sealed['ct
 $bad = $sealed; $bad['ct'] = base64_encode(substr(base64_decode($sealed['ct']), 0, -1));
 T::ok('tampered sealed payload rejected wholesale', open_payload($bad) === false);
 
-// Reveal capability is stable per (token, id) and bound to its own subkey.
-T::eq('reveal capability deterministic', reveal_capability('TOK', 7), reveal_capability('TOK', 7));
-T::ok('reveal capability differs per order', reveal_capability('TOK', 7) !== reveal_capability('TOK', 8));
+// The key check the logger and CLI tools rely on, and the config's fallback
+// that lets processes without the entrypoint's environment find the key.
+T::ok('the test key is a valid master key', aes_key_valid());
+T::ok('problem text points at the environment', str_contains(aes_key_problem(), 'DDMGMT_AES_KEY_HEX'));
+$kf = sys_get_temp_dir() . '/ddmgmt_keyfile_' . getmypid();
+file_put_contents($kf, str_repeat('ab', 32) . "\n");
+T::eq('key file is read and trimmed', str_repeat('ab', 32), _key_from_file($kf));
+file_put_contents($kf, 'short');
+T::eq('malformed key file is ignored', '', _key_from_file($kf));
+T::eq('missing key file is ignored', '', _key_from_file($kf . '.nope'));
+@unlink($kf);
+
 
 // Log chain verifies across key generations: a legacy-keyed genesis entry
 // followed by a derived-key entry is a valid chain; tampering is still caught.

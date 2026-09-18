@@ -4,9 +4,8 @@ require_once __DIR__ . '/bootstrap.php';
 require_once dirname(__DIR__) . '/includes/i18n.php';
 
 // ── i18n engine: dictionaries, fallbacks, escaping at substitution, plurals ──
-// This suite must stay the FIRST in-process caller of current_lang() (the
-// result is statically cached per process); suites are run alphabetically
-// and nothing before I18nTest translates in-process.
+// current_lang() is deliberately unmemoized (long-lived SAPIs would pin the
+// first request's language), so cases below may switch languages freely.
 
 T::eq('eight supported languages', 8, count(i18n_supported_langs()));
 T::ok('language names complete', count(i18n_lang_names()) === count(i18n_supported_langs()));
@@ -18,7 +17,6 @@ T::eq('dictionary load is cached', $en, i18n_load('en'));
 T::eq('unknown language falls back to empty dict', [], i18n_load('xx'));
 
 // current_lang: unsupported session value collapses to English.
-// (Static cache: this first call fixes the language for this process.)
 $_SESSION = [];
 start_secure_session();
 $_SESSION['user_lang'] = 'klingon';
@@ -63,5 +61,35 @@ T::ok('tn param injection is escaped',
 // a future caller passing request data fails closed, not LFI.
 T::eq('unlisted language loads nothing', [], i18n_load('../config'));
 T::eq('empty language loads nothing', [], i18n_load(''));
+
+// Dictionary parity: a key missing from a language silently renders English,
+// and a key left behind after a removal is dead weight. pl/ru/uk pluralise
+// with .few/.many instead of .other (see plural_category()), so those replace
+// the English .other of a .one/.other pair.
+foreach (i18n_supported_langs() as $lang) {
+    if ($lang === 'en') {
+        continue;
+    }
+    $dict = i18n_load($lang);
+    $slavic = in_array($lang, ['pl', 'ru', 'uk'], true);
+    $missing = [];
+    foreach (array_keys($en) as $key) {
+        if (isset($dict[$key])) {
+            continue;
+        }
+        $base = substr($key, 0, -6);
+        if ($slavic && str_ends_with($key, '.other') && isset($en[$base . '.one'])
+            && isset($dict[$base . '.few'], $dict[$base . '.many'])) {
+            continue;
+        }
+        $missing[] = $key;
+    }
+    $stale = array_values(array_filter(
+        array_diff(array_keys($dict), array_keys($en)),
+        static fn (string $key): bool => !($slavic && preg_match('/\.(few|many)$/', $key) === 1),
+    ));
+    T::eq("{$lang} has every en key", [], $missing);
+    T::eq("{$lang} has no keys absent from en", [], $stale);
+}
 
 exit(T::done());

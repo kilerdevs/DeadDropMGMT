@@ -150,6 +150,27 @@ T::ok('rate_limits table survived purge probe',
     $db->query("SHOW TABLES LIKE 'rate_limits'")->fetch() !== false);
 $db->prepare("DELETE FROM rate_limits WHERE scope = 'purge_test'")->execute();
 
+// ── Record retention: nothing else ever trims these tables ─────────────────
+$db->prepare("DELETE FROM orders WHERE order_token = 'clstokenRETAIN01'")->execute();
+$db->prepare("INSERT INTO orders (order_token, pickup_password_hash, location_encrypted, location_iv) VALUES ('clstokenRETAIN01', 'x', 'x', 'x')")->execute();
+$liveId = (int)$db->lastInsertId();
+$db->exec("DELETE FROM order_events WHERE event_type = 'ret_probe'");
+$evIns = $db->prepare('INSERT INTO order_events (order_id, order_token, event_type, ip_address, created_at) VALUES (?, ?, "ret_probe", "203.0.113.9", NOW() - INTERVAL ? DAY)');
+$evIns->execute([null, 'UNKNOWNTOKEN0001', 90]);      // orphan, old  → purged
+$evIns->execute([null, 'UNKNOWNTOKEN0002', 2]);       // orphan, fresh → kept
+$evIns->execute([$liveId, 'clstokenRETAIN01', 90]);   // belongs to a live order → kept
+$db->exec("DELETE FROM audit_log WHERE action = 'ret_probe'");
+$auIns = $db->prepare('INSERT INTO audit_log (username, action, ip_address, created_at) VALUES ("t", "ret_probe", "203.0.113.9", NOW() - INTERVAL ? DAY)');
+$auIns->execute([AUDIT_RETENTION_DAYS + 5]);
+$auIns->execute([10]);
+_purge_stale_records();
+T::eq('old orphan events purged', 0, (int)$db->query("SELECT COUNT(*) FROM order_events WHERE order_token = 'UNKNOWNTOKEN0001'")->fetchColumn());
+T::eq('fresh orphan events kept', 1, (int)$db->query("SELECT COUNT(*) FROM order_events WHERE order_token = 'UNKNOWNTOKEN0002'")->fetchColumn());
+T::eq("live order's events kept whatever their age", 1, (int)$db->query("SELECT COUNT(*) FROM order_events WHERE order_token = 'clstokenRETAIN01'")->fetchColumn());
+T::eq('audit rows past retention purged, recent kept', 1, (int)$db->query("SELECT COUNT(*) FROM audit_log WHERE action = 'ret_probe'")->fetchColumn());
+$db->exec("DELETE FROM order_events WHERE event_type = 'ret_probe'");
+$db->exec("DELETE FROM audit_log WHERE action = 'ret_probe'");
+
 // Cleanup
 $db->prepare('DELETE FROM orders WHERE order_token LIKE "clstoken%"')->execute();
 

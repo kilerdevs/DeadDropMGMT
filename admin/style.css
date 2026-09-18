@@ -487,6 +487,7 @@ tbody td:last-child { padding-right: 0; }
 .td-muted { color: var(--text-muted); }
 .ua-cell    { max-width: 280px; overflow: hidden; text-overflow: ellipsis; font-size: 11px; }
 .extend-row { display: flex; gap: 10px; flex-wrap: wrap; }
+.extend-form { display: inline; margin: 0; }
 
 .form-deliver          { margin-bottom: 28px; }
 .btn-deliver           { border-color: #fff; color: #fff; }
@@ -1528,6 +1529,159 @@ h1 {
     height:     380px;
     border:     1px solid var(--border);
     background: var(--surface);
+    position:   relative;
+}
+
+/* Self-hosted path with zero downloaded zones: the map chrome renders over
+   the shared background while the overlay points at Settings → Maps. */
+.map-empty-overlay {
+    position:         absolute;
+    inset:            auto 12px 12px 12px;
+    padding:          10px 14px;
+    background:       rgba(17, 20, 24, 0.88);
+    border:           1px solid var(--border);
+    color:            var(--text-muted);
+    font-family:      'IBM Plex Mono', monospace;
+    font-size:        11px;
+    letter-spacing:   0.06em;
+    pointer-events:   none;
+}
+
+/* Settings → Maps: zones list. Eight columns cannot fit the 600px settings
+   panel in every language (long headers such as SZCZEGÓŁOWOŚĆ alone overflow
+   it), so each zone is a two-line card instead of a table row: name and
+   actions on the first line, the facts (each prefixed with its column title
+   from data-label) wrapping freely below. The header row stays for screen
+   readers but is visually hidden. */
+.maps-table thead {
+    position: absolute;
+    width:    1px;
+    height:   1px;
+    overflow: hidden;
+    clip:     rect(0 0 0 0);
+}
+.maps-table,
+.maps-table tbody { display: block; }
+.maps-table tr {
+    display:     flex;
+    flex-wrap:   wrap;
+    align-items: center;
+    gap:         4px 16px;
+    padding:     12px 0;
+    border-bottom: 1px solid var(--border);
+}
+.maps-table td {
+    display:   block;
+    order:     3;
+    padding:   0;
+    border:    0;
+    min-width: 0;
+    font-size: 11px;
+    overflow-wrap: anywhere;
+}
+.maps-table td:empty { display: none; }
+.maps-table td[data-label]::before {
+    content:        attr(data-label) ' ';
+    font-family:    'IBM Plex Mono', monospace;
+    font-size:      9px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color:          var(--text-muted);
+}
+/* Line one: zone name (grows) + actions; the ::after item is a full-width
+   break that pushes every fact onto the next line. */
+.maps-table td:first-child {
+    order:       1;
+    flex:        1 1 0;
+    font-size:   13px;
+    color:       var(--text);
+}
+.maps-table td:first-child::before { content: none; }
+.maps-table .px-actions {
+    order:       1;
+    flex:        0 0 auto;
+    white-space: nowrap;
+}
+.maps-table tr::after {
+    content:    '';
+    order:      2;
+    flex-basis: 100%;
+    height:     0;
+}
+
+/* Settings → Maps: zones table + add form */
+.maps-disk {
+    font-family:    'IBM Plex Mono', monospace;
+    font-size:      11px;
+    color:          var(--text-muted);
+    letter-spacing: 0.06em;
+    margin:         8px 0 12px;
+}
+
+.maps-add-grid {
+    display:               grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap:                   10px;
+    margin-bottom:         12px;
+}
+
+.maps-add-grid label {
+    display:        flex;
+    flex-direction: column;
+    gap:            4px;
+    font-size:      11px;
+}
+
+.maps-route {
+    border:         1px solid var(--border);
+    padding:        10px 14px;
+    margin:         0 0 12px;
+    display:        flex;
+    flex-direction: column;
+    gap:            8px;
+    font-size:      12px;
+}
+
+.maps-route legend {
+    padding: 0 6px;
+    color:   var(--text-muted);
+}
+
+.maps-route label {
+    display:     flex;
+    gap:         8px;
+    align-items: baseline;
+}
+
+.maps-editor-map {
+    height:        320px;
+    border:        1px solid var(--border);
+    border-radius: 4px;
+    margin:        8px 0 4px;
+    background:    #0d1117;
+}
+
+.maps-search-row {
+    display:   flex;
+    gap:       8px;
+    flex-wrap: wrap;
+    align-items: center;
+    margin:    8px 0 4px;
+}
+
+.maps-search-row input[type="text"] {
+    flex:      1 1 180px;
+    min-width: 140px;
+}
+
+.maps-overlap {
+    font-size: 12px;
+    color:     #e0a100;
+    margin:    4px 0 8px;
+}
+
+.action-btn--active {
+    outline: 2px solid var(--accent, #1a73e8);
 }
 
 .map-coords {

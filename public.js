@@ -1,6 +1,27 @@
 (function () {
     'use strict';
 
+    // ── Public language auto-apply ──────────────────────────────────────────
+    // The switcher form submits (same GET the <noscript> Apply button would
+    // send) 500 ms after the last change, so select-wiggling collapses into
+    // one request. addEventListener in this first-party file is CSP-clean:
+    // the public profile is script-src 'self' + nonce, which never
+    // authorizes inline on* attributes — an onchange= here would be dead.
+    var langSel = document.querySelector('form.lang-switch select[name="lang"]');
+    if (langSel && langSel.form) {
+        var langTimer = null;
+        langSel.addEventListener('change', function () {
+            if (langTimer) { clearTimeout(langTimer); }
+            langTimer = setTimeout(function () {
+                if (typeof langSel.form.requestSubmit === 'function') {
+                    langSel.form.requestSubmit();
+                } else {
+                    langSel.form.submit();
+                }
+            }, 500);
+        });
+    }
+
     // ── Order expiry countdown ────────────────────────────────────────────────
     var el = document.getElementById('expiry-countdown');
     if (el) {

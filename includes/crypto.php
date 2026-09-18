@@ -10,7 +10,6 @@ require_once dirname(__DIR__) . '/config.php';
 //   master ─┬─ location-v1    orders.location_encrypted
 //           ├─ totp-v1        users.totp_secret_enc
 //           ├─ reveal-v1      sealed session payloads
-//           ├─ capability-v1  reveal capability MAC
 //           └─ log-hmac-v1    app.log integrity chain
 //
 // Compromise or rotation of one subsystem's key no longer couples the others.
@@ -18,6 +17,22 @@ require_once dirname(__DIR__) . '/config.php';
 // master key alone.
 
 const HKDF_SALT = 'deaddrop-mgmt-hkdf-salt-v1';
+
+// True when AES_KEY_HEX is a usable 64-hex-char master key. The placeholder in
+// config.php.example, an empty string or a truncated value all answer false —
+// callers (logger, CLI tools) can then say so instead of tripping over
+// hex2bin() warnings or a TypeError on `false`.
+function aes_key_valid(): bool {
+    return defined('AES_KEY_HEX') && preg_match('/^[0-9a-fA-F]{64}$/', (string)AES_KEY_HEX) === 1;
+}
+
+// Operator-facing explanation for a missing/invalid key, with the fix that
+// applies to the usual cause (a process that never saw the key).
+function aes_key_problem(): string {
+    return 'AES_KEY_HEX is not a valid 64-hex-char key. Set DDMGMT_AES_KEY_HEX in the environment '
+        . '(a `docker exec` shell does not inherit it from the container entrypoint; on Docker installs '
+        . 'the key is also read from /config/aes_key_hex when the variable is absent).';
+}
 
 function _master_key(): string {
     $key = hex2bin(AES_KEY_HEX);
@@ -40,15 +55,6 @@ function _derived_key(string $info): string {
 function _location_key(): string    { return _derived_key('deaddrop:location-v1'); }
 function _totp_key(): string        { return _derived_key('deaddrop:totp-v1'); }
 function _reveal_key(): string      { return _derived_key('deaddrop:reveal-v1'); }
-function _capability_key(): string  { return _derived_key('deaddrop:capability-v1'); }
-
-// Proof that THIS session completed the pickup-password check for an order.
-// The post-unlock redirect keeps only token + this MAC in the session and the
-// reveal page re-decrypts from the DB — plaintext location data never rests
-// in the session store. Derived subkey keeps it separate from the AES key.
-function reveal_capability(string $token, int $order_id): string {
-    return hash_hmac('sha256', $token . '|' . $order_id, _capability_key());
-}
 
 // ── Raw encrypt / decrypt ─────────────────────────────────────────────────────
 // AES-256-GCM only (authenticated). Storage format: ciphertext column holds
@@ -332,7 +338,9 @@ function save_uploaded_photo(array $file_entry, int $order_id, int $max_bytes = 
     $finfo = new finfo(FILEINFO_MIME_TYPE);
     $out_mime = $finfo->file($dest);
     if ($out_mime === false || !isset($allowed_mime[$out_mime])) {
-        @unlink($dest);
+        if (!@unlink($dest)) {
+            log_err('Upload rejected but artifact survived: ' . $dest);
+        }
         return false;
     }
     // If GD rendered into a different format than sniffed on input, rename
@@ -340,7 +348,9 @@ function save_uploaded_photo(array $file_entry, int $order_id, int $max_bytes = 
     if ($out_mime !== $mime) {
         $renamed = $dir . bin2hex(random_bytes(14)) . '.' . $allowed_mime[$out_mime];
         if (!@rename($dest, $renamed)) {
-            @unlink($dest);
+            if (!@unlink($dest)) {
+                log_err('Upload rename failed and artifact survived: ' . $dest);
+            }
             return false;
         }
         $dest = $renamed;

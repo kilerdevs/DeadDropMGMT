@@ -44,11 +44,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // at the top: an error re-render below must embed the fresh value,
         // or the next submit dies with "Invalid CSRF token".
         $csrf = generate_csrf();
-        $pw1 = (string)($_POST['password']  ?? '');
-        $pw2 = (string)($_POST['password2'] ?? '');
+        $pw1 = post_string('password');
+        $pw2 = post_string('password2');
 
         if (strlen($pw1) < 8) {
             $error = t('admin.setup.error.min8');
+        } elseif (!password_length_ok($pw1)) {
+            $error = t('admin.common.password_too_long');
         } elseif ($pw1 !== $pw2) {
             $error = t('admin.setup.error.mismatch');
         } else {

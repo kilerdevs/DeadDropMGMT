@@ -1,0 +1,321 @@
+<?php
+declare(strict_types=1);
+require_once __DIR__ . '/bootstrap.php';
+
+// ── Public language choice: ?lang= → session → year-cookie → default ───────
+// In-process precedence and handler rules, then end-to-end over a live PHP
+// built-in server (session persistence, cookie persistence, unknown ignored).
+
+// ── In-process: handler ────────────────────────────────────────────────────
+start_secure_session();
+
+$_GET['lang'] = 'de';
+$_SESSION = [];
+i18n_handle_public_lang_param();
+T::eq('handler stores allowlisted code in session', 'de', $_SESSION['public_lang'] ?? null);
+
+$_GET['lang'] = 'xx';
+unset($_SESSION['public_lang']);
+i18n_handle_public_lang_param();
+T::ok('handler ignores unknown code', !isset($_SESSION['public_lang']));
+
+unset($_GET['lang']);
+i18n_handle_public_lang_param();
+T::ok('handler ignores missing param', !isset($_SESSION['public_lang']));
+
+$_GET['lang'] = ['de'];
+i18n_handle_public_lang_param();
+T::ok('handler ignores non-string param', !isset($_SESSION['public_lang']));
+unset($_GET['lang']);
+
+// ── In-process: precedence ─────────────────────────────────────────────────
+$_SESSION = [];
+$_COOKIE = [];
+$orig_default = get_setting('default_lang', 'en');
+
+$_SESSION['user_lang'] = 'pl';
+$_SESSION['public_lang'] = 'de';
+$_COOKIE[i18n_public_lang_cookie()] = 'fr';
+set_setting('default_lang', 'es');
+// The handler above flagged this request as a public page; precedence for the
+// ADMIN area is checked on a request that is not.
+T::ok('the handler flags the request as a public page', !empty($GLOBALS['DDMGMT_PUBLIC_PAGE']));
+T::eq('on a public page the public choice beats the account language', 'de', current_lang());
+unset($GLOBALS['DDMGMT_PUBLIC_PAGE']);
+T::eq('account preference beats everything (admin area)', 'pl', current_lang());
+
+unset($_SESSION['user_lang']);
+T::eq('public session beats cookie and default', 'de', current_lang());
+
+unset($_SESSION['public_lang']);
+T::eq('cookie beats site default', 'fr', current_lang());
+
+unset($_COOKIE[i18n_public_lang_cookie()]);
+T::eq('site default used when nothing chosen', 'es', current_lang());
+
+set_setting('default_lang', 'xx');
+T::eq('garbage site default collapses to en', 'en', current_lang());
+set_setting('default_lang', $orig_default);
+
+// t() renders in the chosen language.
+$_SESSION = ['public_lang' => 'de'];
+$_COOKIE = [];
+T::eq('page strings render in chosen language',
+    i18n_load('de')['public.index.title'], t('public.index.title'));
+$_SESSION = [];
+
+// ── HTTP: persistence across requests and visits ───────────────────────────
+$port = 8300 + (int)(getmypid() % 400);
+$root = dirname(__DIR__);
+$null = DIRECTORY_SEPARATOR === '\\' ? 'NUL' : '/dev/null';
+$cmd  = escapeshellarg(PHP_BINARY)
+    . ' -d session.save_path=' . escapeshellarg(ini_get('session.save_path'))
+    . " -S 127.0.0.1:$port -t " . escapeshellarg($root);
+$proc = proc_open($cmd, [['pipe', 'r'], ['file', $null, 'w'], ['file', $null, 'w']], $pipes);
+if (!is_resource($proc)) {
+    fwrite(STDERR, "cannot spawn built-in server\n");
+    exit(1);
+}
+register_shutdown_function(static function () use ($proc): void {
+    $st = proc_get_status($proc);
+    if (!empty($st['running'])) {
+        if (DIRECTORY_SEPARATOR === '\\') {
+            exec('taskkill /F /T /PID ' . (int)$st['pid'] . ' >NUL 2>&1');
+        } else {
+            proc_terminate($proc);
+        }
+    }
+    proc_close($proc);
+});
+
+$up = false;
+for ($i = 0; $i < 30; $i++) {
+    try { [$st] = _pl_get("http://127.0.0.1:$port/"); }
+    catch (Throwable) { $st = 0; usleep(200000); continue; }
+    if ($st === 200) { $up = true; break; }
+    usleep(200000);
+}
+T::ok('built-in server booted', $up);
+if (!$up) { exit(T::done()); }
+
+$base = "http://127.0.0.1:$port";
+$deTitle = i18n_load('de')['public.index.title'];
+
+// Explicit choice renders immediately and plants the preference cookie.
+[$st, $body, $jar, $headers] = _pl_get("$base/?lang=de");
+T::eq('lang choice answers 200', 200, $st);
+T::ok('choice renders in German',
+    str_contains($body, '<html lang="de">') && str_contains($body, $deTitle));
+$setCookies = array_values(array_filter(
+    $headers, static fn (string $h): bool => stripos($h, 'Set-Cookie:') === 0));
+$hasPref = false;
+$prefHttpOnly = false;
+$prefLax = false;
+foreach ($setCookies as $h) {
+    if (str_contains($h, i18n_public_lang_cookie() . '=de')) {
+        $hasPref = true;
+        $prefHttpOnly = stripos($h, 'httponly') !== false;
+        $prefLax = stripos($h, 'samesite=lax') !== false;
+    }
+}
+T::ok('preference cookie planted', $hasPref);
+T::ok('preference cookie httponly', $prefHttpOnly);
+T::ok('preference cookie samesite=lax', $prefLax);
+
+// Same visitor, no param: the session choice persists.
+[, $body2] = _pl_get("$base/", $jar);
+T::ok('session keeps the choice', str_contains((string)$body2, '<html lang="de">'));
+
+// New visitor presenting only the cookie: still German.
+[, $body3] = _pl_get("$base/", i18n_public_lang_cookie() . '=de');
+T::ok('cookie keeps the choice across sessions', str_contains((string)$body3, '<html lang="de">'));
+
+// Unknown code: ignored, site default renders.
+$def = default_lang();
+[, $body4] = _pl_get("$base/?lang=xx");
+T::ok('unknown code falls back to site default',
+    str_contains((string)$body4, '<html lang="' . $def . '">')
+    && !str_contains((string)$body4, '<html lang="de">'));
+
+// Switcher control is on the page with every supported language.
+[, $body5] = _pl_get($base);
+T::ok('switcher select present', str_contains((string)$body5, 'name="lang"'));
+$allOptions = true;
+foreach (i18n_supported_langs() as $code) {
+    if (!str_contains((string)$body5, 'value="' . $code . '"')) { $allOptions = false; break; }
+}
+T::ok('switcher offers all supported languages', $allOptions);
+T::ok('switcher labels every language natively',
+    str_contains((string)$body5, i18n_lang_names()['de']));
+
+// CSP class guard: the public profile is script-src 'self' + nonce, which
+// never authorizes inline on* handlers — a browser silently drops them, and
+// raw-HTTP tests cannot see that. So the rendered page must not contain any.
+T::ok('no inline event handlers (CSP would kill them)',
+    preg_match('/\son[a-z]+\s*=/i', (string)$body5) !== 1);
+
+// A ?token= arrival keeps its token through the language form.
+[, $body6] = _pl_get("$base/?token=DeliveredToken01XY&lang=en");
+T::ok('token survives language switch', str_contains((string)$body6, 'name="token"'));
+
+// ── Last-resort boundary: an escaped Throwable renders localized ────────────
+// A dedicated docroot (temp dir, never the repo) serves a one-line router
+// that boots the kernel and throws — the response must be the localized
+// 500 page, not the webserver's blank crash.
+$webDir = ini_get('session.save_path') . '/pl_boundary_docroot';
+@mkdir($webDir, 0700, true);
+$router = $webDir . '/index.php';
+file_put_contents($router, '<?php declare(strict_types=1); require '
+    . var_export(str_replace('\\', '/', $root) . '/includes/kernel.php', true)
+    . '; throw new RuntimeException("boundary-probe");');
+$port2 = 8360 + (int)(getmypid() % 400);
+$cmd2  = escapeshellarg(PHP_BINARY) . " -S 127.0.0.1:$port2 -t " . escapeshellarg($webDir);
+$proc2 = proc_open($cmd2, [['pipe', 'r'], ['file', $null, 'w'], ['file', $null, 'w']], $pipes2);
+if (is_resource($proc2)) {
+    $up2 = false;
+    for ($i = 0; $i < 30; $i++) {
+        try { [$st2] = _pl_get("http://127.0.0.1:$port2/"); }
+        catch (Throwable) { $st2 = 0; usleep(200000); continue; }
+        if ($st2 === 500) { $up2 = true; break; }
+        usleep(200000);
+    }
+    T::ok('boundary answers 500', $up2 && $st2 === 500);
+    [, $bodyB] = _pl_get("http://127.0.0.1:$port2/");
+    T::ok('boundary renders the localized error page',
+        str_contains((string)$bodyB, 'class="alert"')
+        && !str_contains((string)$bodyB, 'boundary-probe'));
+    $stB = proc_get_status($proc2);
+    if (!empty($stB['running'])) {
+        if (DIRECTORY_SEPARATOR === '\\') {
+            exec('taskkill /F /T /PID ' . (int)$stB['pid'] . ' >NUL 2>&1');
+        } else {
+            proc_terminate($proc2);
+        }
+    }
+    proc_close($proc2);
+} else {
+    T::ok('boundary probe server booted', false);
+}
+@unlink($router);
+@rmdir($webDir);
+
+// ── Language-switch budget: 30 changes / 10 min per IP ───────────────────
+// Hammering ?lang= rotates sessions and cookie headers for free, so the
+// handler spends from a dedicated scope and ignores past-budget switches
+// (page renders in the current language — never an error). Runs LAST: the
+// budget is per-IP and the HTTP section above spends from the same scope,
+// so reset first for determinism and clean up after for the next suite.
+$keepGet = $_GET;
+$keepSession = $_SESSION;
+$dbPl = get_db();
+$dbPl->exec("DELETE FROM rate_limits WHERE scope = 'lang_switch'");
+$_SESSION = [];
+$codes = ['de', 'fr'];
+for ($i = 0; $i < 30; $i++) {
+    $_GET['lang'] = $codes[$i % 2];
+    i18n_handle_public_lang_param();
+}
+T::eq('30th switch still applies', 'fr', $_SESSION['public_lang'] ?? null);
+$_GET['lang'] = 'de';
+i18n_handle_public_lang_param();
+T::eq('31st switch ignored, current language kept', 'fr', $_SESSION['public_lang'] ?? null);
+$spent = (int)$dbPl->query("SELECT count FROM rate_limits WHERE scope = 'lang_switch' LIMIT 1")->fetchColumn();
+$_GET['lang'] = 'fr';
+i18n_handle_public_lang_param();
+T::eq('same-language request spends nothing and stays',
+    [$spent, 'fr'],
+    [(int)$dbPl->query("SELECT count FROM rate_limits WHERE scope = 'lang_switch' LIMIT 1")->fetchColumn(),
+     $_SESSION['public_lang'] ?? null]);
+$dbPl->exec("DELETE FROM rate_limits WHERE scope = 'lang_switch'");
+$_GET = $keepGet;
+$_SESSION = $keepSession;
+
+// ── A logged-in admin browsing the public page ─────────────────────────────
+// The account language rules the admin area only: the public switcher (and the
+// public choice) must win on the public pages, or it does nothing for anyone
+// who has an admin session in the same browser.
+$dbA = get_db();
+$dbA->exec("DELETE FROM users WHERE username = 't_pl_admin'");
+$dbA->prepare("INSERT INTO users (username, password_hash, role, lang) VALUES ('t_pl_admin', ?, 'owner', 'pl')")
+    ->execute([password_hash('AzPass123!', PASSWORD_BCRYPT)]);
+$dbA->exec("DELETE FROM rate_limits WHERE scope LIKE 'admin_login%' OR scope = 'lang_switch'");
+[, $bLogin, $jarA] = _pl_get("$base/admin/index.php");
+preg_match('/name="csrf_token"\s*value="([0-9a-f]{64})"/', $bLogin, $mA);
+[$stLogin,,$jarA] = _pl_post("$base/admin/login.php", ['csrf_token' => $mA[1] ?? '', 'username' => 't_pl_admin', 'password' => 'AzPass123!'], $jarA);
+T::eq('admin login for the language probe', 302, $stLogin);
+[, $adm1, $jarA] = _pl_get("$base/admin/orders.php", $jarA);
+T::ok('admin area speaks the account language', str_contains($adm1, '<html lang="pl"'));
+[, $pub1, $jarA] = _pl_get("$base/?lang=de", $jarA);
+T::ok('public switcher works for a logged-in admin', str_contains($pub1, '<html lang="de"'));
+[, $pub2, $jarA] = _pl_get("$base/", $jarA);
+T::ok('the public choice sticks on the next public page', str_contains($pub2, '<html lang="de"'));
+[, $adm2] = _pl_get("$base/admin/orders.php", $jarA);
+T::ok('...and the admin area still follows the account language', str_contains($adm2, '<html lang="pl"'));
+$dbA->exec("DELETE FROM users WHERE username = 't_pl_admin'");
+$dbA->exec("DELETE FROM rate_limits WHERE scope LIKE 'admin_login%' OR scope = 'lang_switch'");
+
+exit(T::done());
+
+// ── tiny HTTP helpers (multi-cookie jar, no redirects followed) ─────────────
+
+function _pl_get(string $url, string $jar = ''): array {
+    return _pl_req($url, $jar);
+}
+
+function _pl_post(string $url, array $fields, string $jar = ''): array {
+    $opts = ['http' => [
+        'method' => 'POST', 'ignore_errors' => true, 'follow_location' => 0, 'timeout' => 15,
+        'header' => "Content-Type: application/x-www-form-urlencoded\r\n" . ($jar !== '' ? "Cookie: $jar\r\n" : ''),
+        'content' => http_build_query($fields),
+    ]];
+    $body = @file_get_contents($url, false, stream_context_create($opts));
+    $status = 0;
+    $headers = function_exists('http_get_last_response_headers')
+        ? (http_get_last_response_headers() ?? [])
+        : ($http_response_header ?? []);
+    foreach ($headers as $h) {
+        if (preg_match('#^HTTP/\S+\s+(\d{3})#', $h, $m)) { $status = (int)$m[1]; }
+    }
+    return [$status, $body === false ? '' : $body, _pl_jar_merge($jar, $headers), $headers];
+}
+
+function _pl_req(string $url, string $jar): array {
+    $opts = [
+        'http' => [
+            'method'          => 'GET',
+            'ignore_errors'   => true,
+            'follow_location' => 0,
+            'timeout'         => 15,
+            'header'          => $jar !== '' ? "Cookie: $jar\r\n" : '',
+        ],
+        'ssl' => ['verify_peer' => false],
+    ];
+    $body = @file_get_contents($url, false, stream_context_create($opts));
+    $status = 0;
+    $headers = function_exists('http_get_last_response_headers')
+        ? (http_get_last_response_headers() ?? [])
+        : ($http_response_header ?? []);
+    foreach ($headers as $h) {
+        if (preg_match('#^HTTP/\S+\s+(\d{3})#', $h, $m)) { $status = (int)$m[1]; }
+    }
+    return [$status, $body === false ? '' : $body, _pl_jar_merge($jar, $headers), $headers];
+}
+
+function _pl_jar_merge(string $jar, array $headers): string {
+    $pairs = [];
+    foreach (explode('; ', $jar) as $p) {
+        if (!str_contains($p, '=')) { continue; }
+        [$k, $v] = explode('=', $p, 2);
+        $pairs[trim($k)] = trim($v);
+    }
+    foreach ($headers as $h) {
+        if (stripos($h, 'Set-Cookie:') !== 0) { continue; }
+        $pair = trim(explode(';', trim(substr($h, 11)))[0]);
+        if (!str_contains($pair, '=')) { continue; }
+        [$k, $v] = explode('=', $pair, 2);
+        $pairs[trim($k)] = trim($v);
+    }
+    $out = [];
+    foreach ($pairs as $k => $v) { $out[] = "$k=$v"; }
+    return implode('; ', $out);
+}

@@ -6,7 +6,14 @@
 :80 {
 	root * /var/www/html
 
-	@blocked path /includes/* /logs/* /cron/* /tools/* /cache/* /config.php /.htaccess /.ht*
+	# Map zone files are served by secret names only (zone_<id>_<token>.pmtiles);
+	# guessable legacy names and partial downloads never are.
+	@zonelegacy path_regexp ^/tiles/zone_[0-9]+\.(pmtiles|part)$
+	respond @zonelegacy 403
+	@zonepart path_regexp ^/tiles/.*\.part$
+	respond @zonepart 403
+
+	@blocked path /includes/* /logs/* /cron/* /tools/* /cache/* /data/* /docker/* /e2e/* /tests/* /backups/* /config.php /config.php.example /setup.sql /composer.* /package*.json /playwright.config.js /phpstan.neon /auto-update.* /Dockerfile* /docker-compose* /.htaccess /.ht*
 	respond @blocked 403
 
 	# Uploaded images must never reach PHP-FPM, whatever their name is.
@@ -19,7 +26,7 @@
 	header @uploads Cache-Control "private, no-store"
 
 	request_body {
-		max_size 32MB
+		max_size 64MB
 	}
 
 	php_fastcgi fpm:9000 {

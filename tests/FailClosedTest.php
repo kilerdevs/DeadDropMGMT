@@ -41,6 +41,9 @@ foreach (['public' => $pub_list, 'admin' => $adm_list] as $prof => $list) {
     T::ok("$prof CSP carries the request nonce", str_contains($csp, "'nonce-testnonce'"));
     T::ok("$prof CSP keeps frame-ancestors none", str_contains($csp, "frame-ancestors 'none'"));
     T::ok("$prof CSP keeps object-src none", str_contains($csp, "object-src 'none'"));
+    // MapLibre renders in WebGL workers built from Blob URLs — without this
+    // the self-hosted map path is a black rectangle under an airtight CSP.
+    T::ok("$prof CSP allows maplibre blob workers", str_contains($csp, "worker-src 'self' blob:"));
 }
 T::ok('public CSP keeps OSM frame-src',
     str_contains(implode("\n", $pub_list), 'frame-src https://www.openstreetmap.org'));
@@ -100,6 +103,16 @@ T::eq('cookies carry the SID exclusively', '1', ini_get('session.use_only_cookie
 T::eq('transparent SID off', '0', ini_get('session.use_trans_sid'));
 
 // ── Guards: conditions reachable before their exit() redirects ───────────────
+// require_admin() now insists the session belongs to a LIVE account (a
+// deleted user is refused on the next request) and takes the role from the
+// row, so the fixture users below are real rows.
+$mkUser = static function (int $id, string $role): void {
+    get_db()->prepare(
+        'INSERT INTO users (id, username, password_hash, role) VALUES (?, ?, "x", ?)
+         ON DUPLICATE KEY UPDATE role = VALUES(role), totp_enabled = 0, active_session_id = NULL'
+    )->execute([$id, "t_fc_$id", $role]);
+};
+$mkUser(999, 'owner');
 $_SESSION = [];
 start_secure_session();
 $_SESSION['user_id'] = 999;
@@ -116,6 +129,7 @@ T::ok('owner passes require_owner', true);
 // (the flag 2fa.php and exempt dispatch routes set — script basenames no
 // longer gate anything; the gated negative is exit-covered over HTTP by
 // DispatchTest's 'pending courier gated from actions').
+$mkUser(999, 'courier'); // the account row decides the role now
 $_SESSION['user_role'] = 'courier';
 $_SESSION['totp_enabled'] = false;
 $GLOBALS['DDMGMT_ROUTE_2FA_EXEMPT'] = true;
@@ -169,6 +183,7 @@ T::ok('syntax failure is not an absent table',
 // Sliding inactivity: an authenticated request refreshes the session clock.
 $_SESSION = [];
 start_secure_session();
+$mkUser(7, 'owner');
 $_SESSION['user_id'] = 7;
 $_SESSION['user_role'] = 'owner';
 $_SESSION['user_name'] = 'sliding-owner';
@@ -176,6 +191,7 @@ $_SESSION['login_time'] = time() - 100;
 require_admin();
 T::ok('require_admin refreshes login_time on activity', $_SESSION['login_time'] >= time() - 5);
 $_SESSION = [];
+get_db()->exec('DELETE FROM users WHERE id IN (999, 7)');
 
 // A non-missing-table DB error fails closed even with correct config
 // credentials: the users table is swapped for a VIEW that breaks only
@@ -412,5 +428,27 @@ $refused = 'mysql:host=127.0.0.1;port=1;dbname=deaddrops_test;charset=utf8mb4';
 T::throws('unreachable database throws PDOException',
           fn() => db_connect($refused, 'root', '', db_options('', '', '', true)),
           PDOException::class);
+
+// Array-shaped request input fails into defaults, never TypeError — and the
+// coverage floor counts these arms while HTTP suites run where pcov cannot
+// see, so both bag readers and both CSRF guards are pinned here in-process.
+$keepPost = $_POST;
+$keepGet = $_GET;
+$_POST = ['arr' => ['x'], 's' => ' v '];
+$_GET = ['arr' => ['x'], 's' => ' w '];
+T::eq('post_string answers default for arrays', '', post_string('arr'));
+T::eq('post_string answers explicit default for arrays', 'dflt', post_string('arr', 'dflt'));
+T::eq('post_string passes strings through', ' v ', post_string('s', 'd'));
+T::eq('post_string defaults missing keys', '', post_string('missing'));
+T::eq('post_string defaults missing keys explicitly', 'd', post_string('missing', 'd'));
+T::eq('get_string answers default for arrays', '', get_string('arr'));
+T::eq('get_string answers explicit default for arrays', 'dflt', get_string('arr', 'dflt'));
+T::eq('get_string passes strings through', ' w ', get_string('s', 'd'));
+T::eq('get_string defaults missing keys', '', get_string('missing'));
+T::eq('get_string defaults missing keys explicitly', 'd', get_string('missing', 'd'));
+T::eq('array csrf token fails closed', false, verify_csrf(['x']));
+T::eq('array readonly csrf token fails closed', false, verify_csrf_readonly(['x']));
+$_POST = $keepPost;
+$_GET = $keepGet;
 
 exit(T::done());

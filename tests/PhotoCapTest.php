@@ -10,8 +10,12 @@ require_once __DIR__ . '/bootstrap.php';
 //   $env:PHP_INI_SCAN_DIR = ";C:\Users\Jakub\AppData\Local\Temp\opencode\ini"
 
 if (!function_exists('imagecreatetruecolor')) {
-    echo "PhotoCapTest.php: 1 passed, 0 failed (GD unavailable — skipped)\n";
-    exit(0);
+    // No GD in this PHP build: count the skip as a pass, and leave through
+    // T::done() — a real exit() would abort the in-process coverage runner
+    // right after this suite (T::done throws TExitSignal instead under it).
+    fwrite(STDERR, "PhotoCapTest: GD unavailable — skipped\n");
+    T::ok('GD unavailable — skipped', true);
+    exit(T::done());
 }
 
 $root = dirname(__DIR__);

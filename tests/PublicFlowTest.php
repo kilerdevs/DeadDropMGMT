@@ -309,33 +309,62 @@ T::ok('fresh session same IP is not blocked by another bucket',
     str_contains($body, 'status-badge') && !str_contains($body, 'cooldown-heading'));
 
 // 12. receive.php burns budget on the confirmation probe too — a blocked
-// visitor cannot even enumerate step 1. Needs a real unlocked session first:
-// only the reveal page issues the CSRF token receive.php accepts.
+// visitor cannot even enumerate step 1. Every spend needs a freshly
+// harvested token: single-use rotation retires each one on use.
 set_setting('rate_limit_max', '3');
 $db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
 $cookie = '';
 [$stU, , $cookie] = $pf_unlock($tokD2, $pass, $cookie);
-[, $body, $cookie] = _pf_get("http://127.0.0.1:$port/", $cookie);
-preg_match('/name="csrf_token"\s*value="([0-9a-f]{64})"/', $body, $mR);
-$rcsrf = $mR[1] ?? '';
 T::eq('unlock for confirmation flow redirects (test setup)', 302, $stU);
-T::ok('reveal page offers confirmation form (test setup)', $rcsrf !== '');
-
+$harvest = static function () use ($port, &$cookie): string {
+    [, $g, $cookie] = _pf_get("http://127.0.0.1:$port/", $cookie);
+    preg_match('/name="csrf_token"\s*value="([0-9a-f]{64})"/', (string)$g, $m);
+    return $m[1] ?? '';
+};
 for ($i = 0; $i < 3; $i++) {
+    $tok = $harvest();
+    T::ok("confirmation token harvestable [$i]", $tok !== '');
     [, , $cookie] = _pf_post(
         "http://127.0.0.1:$port/receive.php",
-        ['csrf_token' => $rcsrf, 'order_token' => $tokD2, 'step' => '1'],
+        ['csrf_token' => $tok, 'order_token' => $tokD2, 'step' => '1'],
         $cookie
     );
 }
 [, $body] = _pf_post(
     "http://127.0.0.1:$port/receive.php",
-    ['csrf_token' => $rcsrf, 'order_token' => $tokD2, 'step' => '2'],
+    ['csrf_token' => $harvest(), 'order_token' => $tokD2, 'step' => '2'],
     $cookie
 );
 T::ok('blocked budget refuses even the destructive confirmation', str_contains($body, 'class="alert"'));
 T::ok('order survives blocked deletion attempt',
     (bool)$db->query("SELECT 1 FROM orders WHERE order_token = '$tokD2'")->fetch());
+
+// 12b. Forged (tokenless) receive POSTs spend NOTHING: even a full budget
+// worth of forgeries must leave the victim's limiter untouched, and a
+// legitimate confirmation afterwards must still go through.
+$db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
+$cookieF = '';
+for ($i = 0; $i < 5; $i++) {
+    [$stF, , $cookieF] = _pf_post(
+        "http://127.0.0.1:$port/receive.php",
+        ['order_token' => $tokD2, 'step' => '1'],
+        $cookieF
+    );
+    T::eq("forged receive POST redirected [$i]", 302, $stF);
+}
+T::eq('forgeries created no limiter row',
+    0, (int)$db->query("SELECT COUNT(*) FROM rate_limits WHERE scope = 'public'")->fetchColumn());
+[$stL, , $cookieF] = $pf_unlock($tokD2, $pass, $cookieF);
+T::eq('unlock still works after forgery flood', 302, $stL);
+[, $gL, $cookieF] = _pf_get("http://127.0.0.1:$port/", $cookieF);
+preg_match('/name="csrf_token"\s*value="([0-9a-f]{64})"/', (string)$gL, $mL);
+[$stC, $bodyC] = _pf_post(
+    "http://127.0.0.1:$port/receive.php",
+    ['csrf_token' => $mL[1] ?? '', 'order_token' => $tokD2, 'step' => '1'],
+    $cookieF
+);
+T::eq('legitimate confirmation proceeds after forgery flood', 200, $stC);
+T::ok('confirmation page renders after forgery flood', str_contains($bodyC, 'name="step" value="2"'));
 
 // Reveal dies with the row: unlock, then an owner panic deletes the order
 // before the consuming GET — the sealed blob alone must reveal nothing.
@@ -347,6 +376,57 @@ $db->prepare('DELETE FROM orders WHERE order_token = ?')->execute([$tokD2]);
 [, $bodyR] = _pf_get("http://127.0.0.1:$port/", $cookieR);
 T::ok('deleted order reveals nothing after unlock',
     !str_contains($bodyR, 'reveal-value') && !str_contains($bodyR, 'PUBLICFLOWTEST skrzynka'));
+
+// 10. Expiry is exact: an order past its lifetime is gone for recipients even
+// though the periodic sweep has not deleted the row yet.
+$tokX = 'PFTOKENEXPIRED01';
+$db->prepare('DELETE FROM orders WHERE order_token = ?')->execute([$tokX]);
+$db->prepare(
+    'INSERT INTO orders (order_token, pickup_password_hash, location_encrypted, location_iv, status, delivered_at, expires_at, notes)
+     VALUES (?, ?, ?, ?, "delivered", NOW() - INTERVAL 30 HOUR, NOW() - INTERVAL 1 HOUR, "")'
+)->execute([$tokX, $hash, $enc['ciphertext'], $enc['iv']]);
+set_setting('rate_limit_max', '50');
+$db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
+$ckX = '';
+[$stX, $bX, $ckX] = $pf_unlock($tokX, $pass, $ckX);
+T::ok('expired order refuses the correct password', $stX !== 302 && str_contains($bX, 'class="alert"'));
+[, $bX] = $pf_unlock($tokX, '', $ckX);
+T::ok('expired order shows no status card', !str_contains($bX, 'status-badge'));
+[, $bX] = _pf_get("http://127.0.0.1:$port/?token=$tokX");
+T::ok('expired order token link prefills nothing', !str_contains($bX, 'status-badge') && preg_match('/id="order_token"[^>]*value="' . $tokX . '"/s', $bX) !== 1);
+T::ok('the row itself is still there (sweep has not run)',
+    (bool)$db->query("SELECT 1 FROM orders WHERE order_token = '$tokX'")->fetch());
+$db->prepare('DELETE FROM orders WHERE order_token = ?')->execute([$tokX]);
+
+// 11. Free requests cannot launder guesses: with a budget of 3, wrong
+// passwords interleaved with token-only lookups AND with successful unlocks
+// of another (the attacker's own) order must still exhaust the IP budget.
+// Every guess uses a fresh session, so only the per-IP counter can be what
+// blocks. Dedicated orders: the shared ones above were consumed by earlier
+// steps, which would turn "successful unlock" into a mere unknown token.
+$tokG1 = 'PFTOKENGUESS0001'; // the victim's order
+$tokG2 = 'PFTOKENGUESS0002'; // the attacker's own, legitimately unlockable
+foreach ([$tokG1, $tokG2] as $tg) {
+    $db->prepare('DELETE FROM orders WHERE order_token = ?')->execute([$tg]);
+    $ins->execute([$tg, $hash, $enc['ciphertext'], $enc['iv'], 'delivered', date('Y-m-d H:i:s'), '']);
+}
+set_setting('rate_limit_max', '3');
+$db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
+$ckLook = '';
+for ($i = 0; $i < 3; $i++) {
+    $ckG = '';
+    $pf_unlock($tokG1, 'wrong-guess-' . $i, $ckG);
+    $pf_unlock($tokG1, '', $ckLook);          // status lookup between guesses
+    if ($i < 2) { // (a third one would rightly meet the exhausted budget)
+        $ckOk = '';
+        [$stOwn] = $pf_unlock($tokG2, $pass, $ckOk); // the attacker's own valid unlock
+        T::eq("attacker's own unlock really succeeds [$i]", 302, $stOwn);
+    }
+}
+$ckFinal = '';
+[, $bFinal] = $pf_unlock($tokG1, 'wrong-guess-final', $ckFinal);
+T::ok('interleaved lookups and unlocks did not reset the budget', str_contains($bFinal, 'cooldown-heading'));
+$db->prepare('DELETE FROM orders WHERE order_token IN (?, ?)')->execute([$tokG1, $tokG2]);
 
 // Cleanup
 $db->prepare('DELETE FROM orders WHERE order_token IN (?, ?, ?, ?, ?)')->execute([$tokD, $tokD2, $tokD3, $tokD4, $tokP]);

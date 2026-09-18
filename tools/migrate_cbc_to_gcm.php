@@ -1,6 +1,13 @@
 <?php
 declare(strict_types=1);
 
+// CLI only: this script must never be runnable over HTTP, whatever the
+// web server happens to serve.
+if (PHP_SAPI !== 'cli') {
+    http_response_code(404);
+    exit;
+}
+
 // ── Legacy CBC → AES-256-GCM migration ────────────────────────────────────────
 // Runtime code no longer decrypts AES-256-CBC rows (unauthenticated
 // encryption is never accepted). Run this BEFORE deploying a version without
@@ -45,11 +52,11 @@ function gcm_encrypt_with(string $key, string $plaintext, ?string $info = null):
     return ['ciphertext' => base64_encode($ct . $tag), 'iv' => bin2hex($nonce)];
 }
 
-$key = hex2bin(AES_KEY_HEX);
-if (strlen($key) !== 32) {
-    fwrite(STDERR, "AES_KEY_HEX must be 32 bytes (64 hex chars)\n");
+if (!aes_key_valid()) {
+    fwrite(STDERR, aes_key_problem() . "\n");
     exit(1);
 }
+$key = (string)hex2bin(AES_KEY_HEX);
 
 $db      = get_db();
 $db->beginTransaction();

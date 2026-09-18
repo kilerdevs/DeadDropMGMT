@@ -1,0 +1,42 @@
+name: Documentation issue
+description: Something in the docs is wrong, missing, unclear or out of date
+title: "[Docs]: "
+labels: ["documentation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Documentation claims in this project are meant to match the code. If they don't, that is a bug worth reporting.
+
+  - type: input
+    id: location
+    attributes:
+      label: Where is it?
+      description: File and section, or a link.
+      placeholder: README.md → Setup → "2. config.php and the AES-256 key"
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is wrong or missing?
+      description: If a statement contradicts the code or the behavior you see, say what you observed.
+    validations:
+      required: true
+
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested fix
+      description: Optional — proposed wording or the correct behavior.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Before submitting
+      options:
+        - label: I checked the latest version of the file.
+          required: true

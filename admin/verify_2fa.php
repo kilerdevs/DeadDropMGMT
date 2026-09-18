@@ -27,6 +27,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // value, or the next attempt dies with "Invalid CSRF token".
         $csrf = generate_csrf();
         $rl = rl_status('admin_2fa');
+        // Per-ACCOUNT budget next to the per-IP one: a stolen password plus
+        // rotating addresses must not buy unlimited six-digit guesses.
+        $acctKey = 'u:' . $pending_uid;
+        $acctRl = rl_status('admin_2fa_acct', $acctKey);
+        if ($acctRl['blocked']) {
+            $rl = $acctRl;
+        }
         if ($rl['blocked']) {
             $error = t('admin.verify2fa.error.rate_limited', ['min' => (int)ceil($rl['remaining'] / 60)]);
         } else {
@@ -45,8 +52,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ? decrypt_secret($user['totp_secret_enc'], $user['totp_secret_iv'])
                 : false;
 
-            $code = trim($_POST['code'] ?? '');
-            if ($user && $secret !== false && totp_verify($secret, $code)) {
+            $code = trim(post_string('code'));
+            // Replay resistance: a code is good for its FIRST presentation
+            // only. A replayed-but-valid code takes the exact same path as
+            // a wrong one below (same message, same limiter spend) — success
+            // vs replay must not be distinguishable.
+            $counter = ($user && $secret !== false) ? totp_verify_counter($secret, $code) : null;
+            $claimed = $counter !== null && $user && totp_claim_counter((int)$user['id'], $counter);
+            if ($user && $claimed) {
+                rl_reset('admin_2fa_acct', $acctKey); // a valid code proves the real owner is here
                 admin_finish_login((int)$user['id'], $user['role'], $user['username'], true, $user['lang'] ?? 'en');
                 header('Location: /admin/orders.php');
                 exit;
@@ -58,9 +72,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 totp_verify(DUMMY_TOTP_SECRET, $code);
             }
             $hit = rl_hit('admin_2fa');
-            $error = $hit['blocked']
-                ? t('admin.verify2fa.error.rate_limited', ['min' => (int)ceil($hit['remaining'] / 60)])
-                : t('admin.verify2fa.error.invalid_code');
+            rl_hit('admin_2fa_acct', null, null, $acctKey);
+            if ($hit['blocked']) {
+                $error = t('admin.verify2fa.error.rate_limited', ['min' => (int)ceil($hit['remaining'] / 60)]);
+            } else {
+                // Guessing visibility mirrors the password step: the audit
+                // row carries the targeted account, never the tried code.
+                audit('2fa_failed', $pending_uid, null, (string)($user['username'] ?? 'unknown'));
+                $error = t('admin.verify2fa.error.invalid_code');
+            }
         }
     }
 }

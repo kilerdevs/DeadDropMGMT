@@ -4,7 +4,11 @@ require_once __DIR__ . '/includes/kernel.php';
 
 $csp_nonce = set_security_headers(false);
 start_secure_session();
+// A recipient's explicit ?lang= choice must land before the first t() on
+// this page so the same request already renders in the new language.
+i18n_handle_public_lang_param();
 run_cleanup_if_due();
+maps_steward_if_due(); // stalled zone downloads only — never downloads here
 
 $allow_status_lookup = get_setting('allow_status_lookup', '1') === '1';
 
@@ -41,7 +45,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && !empty($_SESSION['reveal'])) {
             // unlock and this GET deletes the row, and the reveal must die
             // with it instead of rendering a deleted order for 180 s.
             try {
-                $chk = get_db()->prepare('SELECT 1 FROM orders WHERE order_token = ? LIMIT 1');
+                $chk = get_db()->prepare('SELECT 1 FROM orders WHERE order_token = ? AND ' . ORDER_LIVE_SQL . ' LIMIT 1');
                 $chk->execute([$dec['token']]);
                 $alive = (bool)$chk->fetchColumn();
             } catch (Exception $e) {
@@ -64,11 +68,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && !empty($_SESSION['reveal'])) {
 
 // ── GET ?token= pre-fill: auto-show password step ─────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'GET' && $loc_data === null && !$correct_preparing) {
-    $get_token = trim($_GET['token'] ?? '');
+    $get_token = trim(get_string('token'));
     if (strlen($get_token) === 16 && ctype_alnum($get_token)) {
         try {
             $db_g  = get_db();
-            $st_g  = $db_g->prepare('SELECT id, status FROM orders WHERE order_token = ? LIMIT 1');
+            $st_g  = $db_g->prepare('SELECT id, status FROM orders WHERE order_token = ? AND ' . ORDER_LIVE_SQL . ' LIMIT 1');
             $st_g->execute([$get_token]);
             $ord_g = $st_g->fetch();
             if ($ord_g) {
@@ -109,15 +113,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $blocked       = true;
         $cooldown_secs = max($hit['remaining'], bucket_remaining('public'));
     } else {
-        $raw_token = trim($_POST['order_token'] ?? '');
-        $password  = (string)($_POST['pickup_password'] ?? '');
+        $raw_token = trim(post_string('order_token'));
+        $password  = post_string('pickup_password');
 
         if (strlen($raw_token) !== 16 || !ctype_alnum($raw_token)) {
             $error = t('public.index.error.not_found');
         } else {
             try {
                 $db   = get_db();
-                $stmt = $db->prepare('SELECT * FROM orders WHERE order_token = ? LIMIT 1');
+                $stmt = $db->prepare('SELECT * FROM orders WHERE order_token = ? AND ' . ORDER_LIVE_SQL . ' LIMIT 1');
                 $stmt->execute([$raw_token]);
                 $order = $stmt->fetch();
 
@@ -140,11 +144,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $order_status  = $order['status'];
                     $prefill_token = $raw_token;
                     $show_pw_step  = true;
-                    rl_reset('public'); // a lookup is not a guess — refund the spend
+                    // A lookup is not a guess: give back exactly the one attempt
+                    // spent on entry. Never reset the counter — that would let
+                    // a guesser interleave free lookups and never hit the limit.
+                    rl_refund('public');
                 } else {
                     if (verify_password($password, $order['pickup_password_hash'])) {
-                        bucket_clear('public');
-                        rl_reset('public');
+                        // Success refunds only its own spend. Clearing the
+                        // budget or the session bucket here would hand a
+                        // guesser holding ONE valid pickup a free reset for
+                        // every attempt against someone else's order.
+                        rl_refund('public');
                         if ($order['status'] === 'preparing') {
                             log_event('unlock_success', (int)$order['id'], $raw_token);
                             $_SESSION['reveal'] = ['type' => 'preparing', 'ts' => time()];
@@ -233,6 +243,25 @@ if ($loc_data && is_numeric($loc_data['lat']) && is_numeric($loc_data['lng'])) {
     $apple_link = sprintf('https://maps.apple.com/?ll=%.7f,%.7f&q=%s&t=m', $lat, $lng, rawurlencode(t('public.index.reveal.location')));
 }
 $csrf_public = generate_csrf();
+
+// Self-hosted reveal: provider selfhosted plus at least one ready zone
+// covering the pin renders the vendored MapLibre stack (style inlined into
+// data-style — no new endpoint; the browser Range-fetches only the covering
+// zone files, same-origin). Anything else keeps the OSM embed below.
+$reveal_style = '';
+$reveal_lat = '';
+$reveal_lng = '';
+if ($map_src !== '' && isset($lat, $lng) && map_provider() === MAP_PROVIDER_SELFHOSTED) {
+    $covering = maps_covering_zones($lat, $lng);
+    if ($covering !== []) {
+        $reveal_style = (string)json_encode(
+            maps_style($covering),
+            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+        );
+        $reveal_lat = sprintf('%.7f', $lat);
+        $reveal_lng = sprintf('%.7f', $lng);
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="<?= htmlspecialchars(current_lang(), ENT_QUOTES, 'UTF-8') ?>">
@@ -242,6 +271,9 @@ $csrf_public = generate_csrf();
 <meta name="darkreader-lock">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title><?= t('public.index.title') ?></title><link rel="stylesheet" href="/style.css">
+<?php if ($reveal_style !== ''): ?>
+<link rel="stylesheet" href="/maplibre/maplibre-gl.css">
+<?php endif; ?>
 <?php if ($blocked && $cooldown_secs <= 60): ?>
 <meta http-equiv="refresh" content="<?= $cooldown_secs + 2 ?>">
 <?php endif; ?>
@@ -304,11 +336,21 @@ $csrf_public = generate_csrf();
             <?php if ($map_src !== ''): ?>
             <div class="reveal-section">
                 <div class="reveal-key"><?= t('public.index.reveal.map') ?></div>
+                <?php if ($reveal_style !== ''): ?>
+                <!-- Self-hosted reveal: zero third-party contact (vendored
+                     MapLibre + same-origin PMTiles zones). OSM embed stays
+                     the fallback when no ready zone covers the pin. -->
+                <div class="reveal-map" id="reveal-map"
+                     data-lat="<?= htmlspecialchars($reveal_lat, ENT_QUOTES, 'UTF-8') ?>"
+                     data-lng="<?= htmlspecialchars($reveal_lng, ENT_QUOTES, 'UTF-8') ?>"
+                     data-style="<?= htmlspecialchars($reveal_style, ENT_QUOTES, 'UTF-8') ?>"></div>
+                <?php else: ?>
                 <iframe class="map-frame"
                         src="<?= htmlspecialchars($map_src, ENT_QUOTES, 'UTF-8') ?>"
                         loading="lazy"
                         title="<?= htmlspecialchars(t('public.index.map_title'), ENT_QUOTES, 'UTF-8') ?>"
                         sandbox="allow-scripts allow-same-origin"></iframe>
+                <?php endif; ?>
                 <div class="map-actions">
                     <a class="map-link"
                        href="<?= htmlspecialchars($gm_link, ENT_QUOTES, 'UTF-8') ?>"
@@ -431,6 +473,32 @@ $csrf_public = generate_csrf();
         <span class="trust-text"><?= t('public.trust.no_tracking') ?></span>
     </div>
     <?php if (compliance_note_enabled()): ?><div class="compliance-note"><?= t('common.compliance_note') ?></div><?php endif; ?>
+    <?php if ($loc_data === null && !$correct_preparing): ?>
+    <!-- No inline event handlers anywhere on this page: the public CSP is
+         script-src 'self' + nonce, which never authorizes on* attributes —
+         an onchange here would be dead in every modern browser. With
+         JavaScript, public.js auto-applies 500 ms after the last change and
+         the <noscript> Apply button never renders; without it the button is
+         the only path, so it stays. Hidden while a reveal (or preparing
+         card) is on screen: that state is single-use session data a fresh
+         GET would consume and destroy, and the pickup password cannot be
+         carried through a language switch — so changing language mid-reveal
+         is refused instead of silently discarding the reveal. -->
+    <form class="lang-switch" method="GET" action="">
+        <?php if ($prefill_token !== '' || (isset($_GET['token']) && is_string($_GET['token']))): ?>
+        <input type="hidden" name="token"
+               value="<?= htmlspecialchars($prefill_token !== '' ? $prefill_token : (string)$_GET['token'], ENT_QUOTES, 'UTF-8') ?>">
+        <?php endif; ?>
+        <label for="lang"><?= t('public.lang.label') ?></label>
+        <select id="lang" name="lang" autocomplete="off">
+            <?php foreach (i18n_lang_names() as $code => $name): ?>
+            <option value="<?= htmlspecialchars($code, ENT_QUOTES, 'UTF-8') ?>"
+                <?= $code === current_lang() ? 'selected' : '' ?>><?= htmlspecialchars($name, ENT_QUOTES, 'UTF-8') ?></option>
+            <?php endforeach; ?>
+        </select>
+        <noscript><button type="submit" class="btn btn-lang"><?= t('public.lang.apply') ?></button></noscript>
+    </form>
+    <?php endif; ?>
 </main>
 <?php if ($order_expires_ts > 0 || !empty($photos)): ?>
 <script nonce="<?= htmlspecialchars($csp_nonce, ENT_QUOTES, 'UTF-8') ?>">
@@ -441,7 +509,15 @@ window.I18N = <?= json_encode([
     'gallery_next'  => t('public.gallery.next'),
 ]) ?>;
 </script>
+<?php endif; ?>
+<!-- Always loaded: the language auto-apply listener lives here (CSP-clean —
+     an inline onchange would be dead under script-src 'self' + nonce), and
+     every other block in the file no-ops when its element is absent. -->
 <script src="/public.js"></script>
+<?php if ($reveal_style !== ''): ?>
+<script src="/maplibre/maplibre-gl.js"></script>
+<script src="/maplibre/pmtiles.js"></script>
+<script src="/reveal-map.js"></script>
 <?php endif; ?>
 <?php if (!empty($photos)): ?>
 <script src="/gallery.js"></script>

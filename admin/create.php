@@ -42,6 +42,11 @@ if ($password === '') {
     $_SESSION['flash_ok'] = false;
     header('Location: /admin/new_order.php#new-order');
     exit;
+} elseif (!password_length_ok($password)) {
+    $_SESSION['flash']    = t('admin.common.password_too_long');
+    $_SESSION['flash_ok'] = false;
+    header('Location: /admin/new_order.php#new-order');
+    exit;
 }
 
 // Validate coordinates
@@ -131,8 +136,8 @@ try {
     if (!empty($photo_errors)) {
         $msg .= ' | ' . t('admin.new_order.flash.upload_errors', ['files' => implode(', ', $photo_errors)]);
     }
-    $_SESSION['flash']    = $msg;
-    $_SESSION['flash_ok'] = true;
+    // A generated pickup password rides in this message: seal it at rest.
+    flash_set($msg, true, $generated_password);
 } catch (Exception $e) {
     log_err('Create order error: ' . $e->getMessage());
     $_SESSION['flash']    = t('admin.new_order.flash.create_failed');

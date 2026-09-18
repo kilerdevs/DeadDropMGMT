@@ -3,6 +3,8 @@ declare(strict_types=1);
 require_once dirname(__DIR__) . '/includes/kernel.php';
 
 header('Content-Type: application/json');
+header('X-Content-Type-Options: nosniff');
+header('Cache-Control: no-store');
 start_secure_session();
 require_owner();
 
@@ -61,6 +63,10 @@ switch ($action) {
     case 'discover': {
         // Probing dozens of public proxies takes a while; lift the usual cap.
         @set_time_limit(180);
+        // Probing takes minutes: release the session lock first, or every
+        // other request of this owner (and the poll) queues behind it.
+        // json_out() re-opens the session for the fresh CSRF token.
+        session_write_close();
         try {
             $found = proxy_discover();
             $db = get_db();

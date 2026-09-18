@@ -64,6 +64,28 @@ function totp_code(string $secret_b32, ?int $timestamp = null, int $period = 30,
     return str_pad((string)($part % (10 ** $digits)), $digits, '0', STR_PAD_LEFT);
 }
 
+// Same acceptance window as totp_verify(), but answers WHICH step matched
+// (null when none): the login flow burns each counter at most once, so a
+// code is good for its first presentation only — never for a replay inside
+// the ±1-step window.
+function totp_verify_counter(string $secret_b32, string $code, int $window = 1, int $period = 30): ?int {
+    $code = trim($code);
+    if (!ctype_digit($code)) return null;
+    if ($window < 0 || $window > 5 || $period <= 0) return null;
+    $now = time();
+    for ($i = -$window; $i <= $window; $i++) {
+        try {
+            $expected = totp_code($secret_b32, $now + $i * $period, $period);
+        } catch (InvalidArgumentException $e) {
+            return null;
+        }
+        if (hash_equals($expected, $code)) {
+            return intdiv($now + $i * $period, $period);
+        }
+    }
+    return null;
+}
+
 // Accepts the current step and one step either side to tolerate clock drift.
 // Weak secrets and absurd windows reject as false (never as an exception or
 // a hang): a huge $window would otherwise burn millions of HMACs per call.

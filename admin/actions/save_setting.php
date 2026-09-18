@@ -14,7 +14,7 @@ $value = $_POST['value'] ?? '';
 
 $numeric  = ['order_ttl_hours','rate_limit_max','rate_limit_window_min','admin_session_hours','max_photo_mb'];
 $floats   = ['admin_session_hours','max_photo_mb']; // stored as float strings
-$booleans = ['allow_status_lookup','require_delivered_reveal','analytics_enabled','show_error_log','rate_limit_enabled','compliance_note_enabled','osm_proxy_enabled'];
+$booleans = ['allow_status_lookup','analytics_enabled','show_error_log','rate_limit_enabled','compliance_note_enabled','osm_proxy_enabled'];
 $limits   = [
     'order_ttl_hours'       => [12,  72],
     'rate_limit_max'        => [3,   10],
@@ -22,7 +22,7 @@ $limits   = [
     'admin_session_hours'   => [0.5,  5],
     'max_photo_mb'          => [0.1,  5],
 ];
-$allowed  = array_merge(['site_name','extend_hours_options','default_lang'], $numeric, $booleans);
+$allowed  = array_merge(['site_name','extend_hours_options','default_lang','map_provider'], $numeric, $booleans);
 
 if (!in_array($key, $allowed, true)) {
     json_out(['error' => 'Invalid key'], 400);
@@ -54,9 +54,14 @@ if (in_array($key, $booleans, true)) {
         $value = 'MGT'; // fall back to default when cleared
     }
 } else {
-    // Every other allowed key was handled above, so $key is 'default_lang'
-    // here — validate the language and keep the raw (select-provided) value.
-    if (!in_array($value, i18n_supported_langs(), true)) {
+    // Enum selects: default_lang validates against the language list,
+    // map_provider against the provider allowlist. Anything else here is
+    // a programming error (every allowed key must be handled above).
+    if ($key === 'map_provider') {
+        if ($value !== MAP_PROVIDER_OSM && $value !== MAP_PROVIDER_SELFHOSTED) {
+            json_out(['error' => 'Invalid map provider'], 422);
+        }
+    } elseif (!in_array($value, i18n_supported_langs(), true)) {
         json_out(['error' => 'Invalid language'], 422);
     }
 }

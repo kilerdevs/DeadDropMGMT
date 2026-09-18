@@ -1,0 +1,3 @@
+# Tool binaries and partial downloads for self-hosted map zones.
+# Never web-served (Apache): the worker manages this directory.
+Require all denied

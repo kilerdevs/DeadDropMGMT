@@ -131,6 +131,20 @@ $login = static function (string $user, string $pass) use ($B, $csrfOf): array {
 [$ck, $needs2fa] = $login('t_ah_courier_a', 'AzPass123!');
 T::ok('courier A logged in (gated to 2FA enrollment)', $needs2fa);
 
+// ── Failed logins are audited (brute-force visibility) ──────────────────────
+// The audit row carries the attempted username (never the password) plus the
+// client IP audit() always records; the limiter caps attempts per IP, so
+// this cannot be turned into log spam.
+$db->exec("DELETE FROM audit_log WHERE action = 'login_failed'");
+[, $bL, $ckL] = _az('GET', "$B/admin/index.php", null, '');
+[$stL] = _az('POST', "$B/admin/login.php",
+    ['csrf_token' => $csrfOf($bL), 'username' => 't_ah_owner', 'password' => 'WrongPass1!'], $ckL);
+T::eq('wrong password bounces to login', 302, $stL);
+$aud = $db->query("SELECT detail, ip_address FROM audit_log WHERE action = 'login_failed' ORDER BY id DESC LIMIT 1")->fetch();
+T::eq('failed login audited with attempted username', 't_ah_owner', $aud['detail'] ?? null);
+T::ok('failed login carries the client IP', ($aud['ip_address'] ?? '') !== '');
+$db->exec("DELETE FROM audit_log WHERE action = 'login_failed'");
+
 // 2FA is mandatory for couriers: every admin page bounces to the enrollment
 // form until TOTP is enabled. Enroll through the real UI flow: pull the
 // pending secret off the page, compute the current code, confirm.
@@ -162,7 +176,6 @@ foreach ([
     'delete.php'         => ['id' => $orderB, 'confirm' => '1'],
     'mark_delivered.php' => ['id' => $orderB],
     'order_close.php'    => ['id' => $orderB],
-    'order_remove.php'   => ['id' => $orderB],
     'extend.php'         => ['id' => $orderB, 'hours' => '48', 'ref' => 'orders'],
 ] as $ep => $fields) {
     _az('POST', "$B/admin/$ep", ['csrf_token' => $csrf] + $fields, $ck);
@@ -218,6 +231,114 @@ $ocsrf = $csrfOf($b);
 T::ok('owner logged in', $ocsrf !== '');
 _az('POST', "$B/admin/delete.php", ['csrf_token' => $ocsrf, 'id' => $orderB, 'confirm' => '1'], $ock);
 T::ok('owner deletes foreign order (positive control)', !$orderBExists());
+
+// ── Stale keystroke poll across login must not clobber the auth cookie ─────
+// The login form polls check_setup.php per keystroke, so a poll is routinely
+// in flight across login's session_regenerate_id(true): it lands with a dead
+// session id, and a cookie-emitting start would mint an empty session whose
+// Set-Cookie overwrites the brand-new auth cookie (instant post-login
+// logout). Replay it deterministically: log in, then present the PRE-login
+// cookie to the poll endpoint.
+[, $bS, $ckS] = _az('GET', "$B/admin/index.php", null, '');
+[$stS,, $ckS2] = _az('POST', "$B/admin/login.php",
+    ['csrf_token' => $csrfOf($bS), 'username' => 't_ah_owner', 'password' => 'AzPass123!'], $ckS);
+T::eq('re-login for stale-poll probe', 302, $stS);
+[, , $ckAfter] = _az('GET', "$B/admin/check_setup.php?username=t_ah_owner", null, $ckS);
+T::eq('stale poll sends no Set-Cookie', $ckS, $ckAfter);
+[$stO, $bO] = _az('GET', "$B/admin/orders.php", null, $ckS2);
+T::ok('auth cookie survives the stale poll',
+    $stO === 200 && str_contains($bO, '/admin/logout.php'));
+
+// (The owner session below is the one the stale-poll probe logged in: any
+// later login supersedes an older cookie — single active session.)
+// ── Live CSRF token: stale page tokens must not break language/logout ───────
+// verify_csrf() rotates the session token on every success, so the copy
+// rendered into a page is stale once ANY request from it was verified (an
+// autosave, a status poll). The sidebar language switch and every POST form
+// take the live token from /admin/csrf_token.php instead.
+[, $bTok] = _az('GET', "$B/admin/settings.php", null, $ckS2);
+preg_match('/var rendered = "([0-9a-f]{64})"/', $bTok, $mTok);
+$renderedTok = $mTok[1] ?? '';
+T::ok('sidebar renders a language token', $renderedTok !== '');
+[$stPoll, $bPoll] = _az('POST', "$B/admin/maps_action.php", ['csrf_token' => $renderedTok, 'action' => 'status'], $ckS2);
+T::ok('an in-page poll verifies (and thereby rotates) the token', $stPoll === 200 && str_contains($bPoll, '"ok":true'));
+[$stStale] = _az('POST', "$B/admin/set_lang.php", ['csrf_token' => $renderedTok, 'lang' => 'en'], $ckS2);
+T::eq('the rendered token is now stale (the bug being fixed)', 403, $stStale);
+[$stLive, $bLive] = _az('GET', "$B/admin/csrf_token.php", null, $ckS2);
+$liveTok = (string)(json_decode($bLive, true)['csrf'] ?? '');
+T::ok('token endpoint answers the live token', $stLive === 200 && preg_match('/^[0-9a-f]{64}$/', $liveTok) === 1);
+[, $bLive2] = _az('GET', "$B/admin/csrf_token.php", null, $ckS2);
+T::eq('asking does not rotate it', $liveTok, (string)(json_decode($bLive2, true)['csrf'] ?? ''));
+[$stFresh, $bFresh] = _az('POST', "$B/admin/set_lang.php", ['csrf_token' => $liveTok, 'lang' => 'en'], $ckS2);
+T::ok('language switch works with the live token', $stFresh === 200 && str_contains($bFresh, '"ok":true'));
+[$stAnon,,, $locAnon] = _az('GET', "$B/admin/csrf_token.php", null, '');
+T::ok('the token endpoint is not public', $stAnon === 302 && str_contains($locAnon, 'index.php'));
+[$stPost] = _az('POST', "$B/admin/csrf_token.php", [], $ckS2);
+T::eq('the token endpoint is GET-only', 405, $stPost);
+$xs = stream_context_create(['http' => ['method' => 'GET', 'ignore_errors' => true, 'header' => "Cookie: $ckS2\r\nSec-Fetch-Site: cross-site\r\n"]]);
+$bXs = (string)@file_get_contents("$B/admin/csrf_token.php", false, $xs);
+T::ok('a cross-site request gets no token', !str_contains($bXs, '"csrf":"') || str_contains($bXs, 'Forbidden'));
+T::ok('admin.js refreshes the token before any POST form', str_contains((string)file_get_contents(dirname(__DIR__) . '/admin/admin.js'), 'csrf_token.php'));
+
+// ── CLI-only scripts are inert over HTTP ─────────────────────────────────────
+// Maintenance tools, the container journey, browser-test seeds and test
+// harness files carry no auth of their own; one that a web server ever
+// executes must answer 404 without doing anything. (php -S ignores
+// .htaccess, so this proves the scripts' own SAPI guard.)
+foreach ([
+    'tools/purge_pickup_password_recovery.php', 'tools/separate_keys.php', 'tools/migrate_cbc_to_gcm.php',
+    'tools/rotate_aes_key.php', 'tools/mutation_probe.php', 'docker/e2e_journey.php', 'e2e/seed.php',
+    'cron/cleanup.php', 'cron/maps_sync.php', 'tests/schema_loader.php', 'tests/bootstrap.php', 'tests/run_all.php',
+] as $cliOnly) {
+    [$stCli, $bCli] = _az('GET', "$B/$cliOnly", null, '');
+    T::ok("$cliOnly is inert over HTTP", $stCli === 404 && trim($bCli) === '');
+}
+
+// ── Sessions belong to live accounts ─────────────────────────────────────────
+// A deleted account, or one whose sessions the owner revoked, is refused on
+// its very next request — not when the cookie finally times out.
+$mkOwner = static function (string $u) use ($db, $hash): int {
+    $db->prepare('DELETE FROM users WHERE username = ?')->execute([$u]);
+    $db->prepare("INSERT INTO users (username, password_hash, role) VALUES (?, ?, 'owner')")->execute([$u, $hash]);
+    return (int)$db->lastInsertId();
+};
+$tmpA = $mkOwner('t_ah_temp_a');
+$ckA  = $login('t_ah_temp_a', 'AzPass123!')[0];
+[$stOk] = _az('GET', "$B/admin/orders.php", null, $ckA);
+T::eq('live account session works', 200, $stOk);
+$db->prepare('DELETE FROM users WHERE id = ?')->execute([$tmpA]);
+[$stGone,,, $locGone] = _az('GET', "$B/admin/orders.php", null, $ckA);
+T::ok('deleted account is refused on the next request', $stGone === 302 && str_contains($locGone, 'revoked=1'));
+
+$tmpB = $mkOwner('t_ah_temp_b');
+$ckB  = $login('t_ah_temp_b', 'AzPass123!')[0];
+$db->prepare('UPDATE users SET active_session_id = ? WHERE id = ?')->execute(['revoked', $tmpB]);
+[$stRev,,, $locRev] = _az('GET', "$B/admin/orders.php", null, $ckB);
+T::ok('revoked sessions are refused on the next request', $stRev === 302 && str_contains($locRev, 'revoked=1'));
+$db->prepare('DELETE FROM users WHERE id = ?')->execute([$tmpB]);
+
+// ── A valid login of one's own must not launder guesses at someone else ─────
+// Budget 3, an attacker alternating wrong guesses at the owner with genuine
+// logins of a courier account they hold: successes used to reset the shared
+// per-IP counter, so the guesses were never throttled.
+$prevMax = get_setting('rate_limit_max', '10');
+set_setting('rate_limit_max', '3');
+$db->exec("DELETE FROM rate_limits WHERE scope LIKE 'admin_login%'");
+$attempt = static function (string $user, string $pass) use ($B, $csrfOf): array {
+    [, $b, $ck] = _az('GET', "$B/admin/index.php", null, '');
+    [$st, , $ck, $loc] = _az('POST', "$B/admin/login.php",
+        ['csrf_token' => $csrfOf($b), 'username' => $user, 'password' => $pass], $ck);
+    return [$st, $loc, $ck];
+};
+for ($i = 0; $i < 3; $i++) {
+    $attempt('t_ah_owner', 'wrong-guess-' . $i);
+    $attempt('t_ah_courier_a', 'AzPass123!'); // the attacker's own valid credentials
+}
+[, $locFinal, $ckFinal] = $attempt('t_ah_owner', 'AzPass123!');
+[$stAfter] = _az('GET', "$B/admin/orders.php", null, $ckFinal);
+T::ok('interleaved valid logins did not reset the guess budget', $stAfter === 302);
+set_setting('rate_limit_max', $prevMax);
+$db->exec("DELETE FROM rate_limits WHERE scope LIKE 'admin_login%'");
 
 // ── Cleanup ──────────────────────────────────────────────────────────────────
 $db->prepare("DELETE FROM orders WHERE order_token LIKE 'ahtoken%'")->execute();

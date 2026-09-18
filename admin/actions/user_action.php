@@ -13,8 +13,8 @@ $action = $_POST['action'] ?? '';
 
 // ── Create courier ────────────────────────────────────────────────────────────
 if ($action === 'create_courier') {
-    $username = trim($_POST['username'] ?? '');
-    $password = (string)($_POST['password'] ?? '');
+    $username = trim(post_string('username'));
+    $password = post_string('password');
 
     if ($username === '' || strlen($username) < 3 || strlen($username) > 64) {
         $_SESSION['flash']    = t('admin.users.flash.username_length');
@@ -36,6 +36,12 @@ if ($action === 'create_courier') {
         header('Location: /admin/users.php');
         exit;
     }
+    if (!password_length_ok($password)) {
+        $_SESSION['flash']    = t('admin.common.password_too_long');
+        $_SESSION['flash_ok'] = false;
+        header('Location: /admin/users.php');
+        exit;
+    }
 
     try {
         if ($password === '') {
@@ -48,9 +54,9 @@ if ($action === 'create_courier') {
                  VALUES (?, "", "courier", ?, NOW() + INTERVAL 24 HOUR)'
             )->execute([$username, enrollment_secret_hash($secret)]);
             audit('courier_create', null, null, $username . ' (enrollment issued)');
-            $_SESSION['flash']    = t('admin.users.flash.courier_created_secret',
-                ['username' => $username, 'secret' => $secret]);
-            $_SESSION['flash_ok'] = true;
+            // Carries the one-time enrollment secret: sealed at rest.
+            flash_set(t('admin.users.flash.courier_created_secret',
+                ['username' => $username, 'secret' => $secret]), true, true);
         } else {
             get_db()->prepare(
                 'INSERT INTO users (username, password_hash, role) VALUES (?, ?, "courier")'
@@ -123,6 +129,12 @@ if ($action === 'change_password') {
         header('Location: /admin/users.php');
         exit;
     }
+    if (!password_length_ok($password)) {
+        $_SESSION['flash']    = t('admin.common.password_too_long');
+        $_SESSION['flash_ok'] = false;
+        header('Location: /admin/users.php');
+        exit;
+    }
 
     try {
         $db   = get_db();
@@ -139,6 +151,9 @@ if ($action === 'change_password') {
             header('Location: /admin/users.php');
             exit;
         }
+        // The old password may be in someone else's hands: every session of
+        // this account ends (the caller's own is kept when it is their row).
+        admin_revoke_sessions($uid);
         audit('password_change', null, null, "user_id={$uid}");
         $_SESSION['flash']    = t('admin.users.flash.password_changed');
         $_SESSION['flash_ok'] = true;
@@ -171,6 +186,7 @@ if ($action === 'reset_2fa') {
             header('Location: /admin/users.php');
             exit;
         }
+        admin_revoke_sessions($uid);
         audit('2fa_reset', null, null, "user_id={$uid}");
         $_SESSION['flash']    = t('admin.users.flash.twofa_reset');
         $_SESSION['flash_ok'] = true;

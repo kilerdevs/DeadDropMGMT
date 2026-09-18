@@ -15,6 +15,13 @@ require_once dirname(__DIR__) . '/includes/db.php';
 // the database is authoritative, and an orphaned file is merely cosmetic —
 // never an order that vanished while its row survived.
 
+// An order whose lifetime has run out is gone as far as recipients are
+// concerned, whether or not the cleanup sweep has physically deleted the row
+// yet (the sweep is periodic — this predicate makes expiry exact). Preparing
+// orders carry no expiry and stay live. Public lookups, unlocks and receipt
+// confirmation all filter through it.
+const ORDER_LIVE_SQL = '(expires_at IS NULL OR expires_at > NOW())';
+
 // preparing → delivered. Returns false if the order was already delivered,
 // deleted, or never existed — replaying is safe. TTL is clamped to 1–720 h
 // like the admin UI: an unbounded value overflows DATE_ADD and fails.

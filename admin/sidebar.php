@@ -63,10 +63,16 @@ window.I18N = <?= json_encode([
 ]) ?>;
 document.getElementById('sidebar-lang-select').addEventListener('change', function () {
     var sel = this;
-    var fd = new FormData();
-    fd.append('csrf_token', <?= json_encode($_lang_csrf) ?>);
-    fd.append('lang', sel.value);
-    fetch('/admin/set_lang.php', { method: 'POST', body: fd })
+    var rendered = <?= json_encode($_lang_csrf) ?>;
+    // The token rendered into this page is stale as soon as any other request
+    // from it (an autosave, a poll) has been verified — take the live one.
+    var live = window.ddmgmtFreshCsrf ? window.ddmgmtFreshCsrf().catch(function () { return rendered; }) : Promise.resolve(rendered);
+    live.then(function (tok) {
+        var fd = new FormData();
+        fd.append('csrf_token', tok);
+        fd.append('lang', sel.value);
+        return fetch('/admin/set_lang.php', { method: 'POST', body: fd });
+    })
         .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
         .then(function (res) {
             if (res.ok && res.j.ok) {

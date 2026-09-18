@@ -1,6 +1,13 @@
 <?php
 declare(strict_types=1);
 
+// CLI only: this script must never be runnable over HTTP, whatever the
+// web server happens to serve.
+if (PHP_SAPI !== 'cli') {
+    http_response_code(404);
+    exit;
+}
+
 // Child probe for StateRaceTest: performs ONE state transition named on the
 // command line and reports the outcome as JSON. Fresh process = fresh
 // everything, like an independent concurrent request.

@@ -1,6 +1,13 @@
 <?php
 declare(strict_types=1);
 
+// CLI only: this script must never be runnable over HTTP, whatever the
+// web server happens to serve.
+if (PHP_SAPI !== 'cli') {
+    http_response_code(404);
+    exit;
+}
+
 // Runs every *Test.php in its own PHP process (isolation for statics,
 // sessions and settings caches), aggregates exit codes, exits non-zero
 // if any file failed. CI entry point:  php tests/run_all.php

@@ -1,0 +1,12 @@
+{
+  "name": "deaddropmgmt-e2e",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Real-browser E2E for DeadDropMGMT (behaviours raw HTTP cannot see: no-JS paths, DOM handlers, mid-reveal UI state).",
+  "scripts": {
+    "e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0"
+  }
+}

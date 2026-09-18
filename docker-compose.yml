@@ -39,7 +39,10 @@ services:
       DDMGMT_DB_PASS: ${DB_PASS:-deaddrop-db}
       # Leave unset to have a key generated on first boot and persisted on the
       # config volume — but then back that volume up like you'd back config.php!
-      # DDMGMT_AES_KEY_HEX: ...
+      DDMGMT_AES_KEY_HEX: ${DDMGMT_AES_KEY_HEX:-}
+      # Optional: require this token to create the first owner (recommended
+      # before a fresh instance is reachable from a network).
+      DDMGMT_SETUP_TOKEN: ${DDMGMT_SETUP_TOKEN:-}
     volumes:
       - app-uploads:/var/www/html/uploads
       - app-logs:/var/www/html/logs

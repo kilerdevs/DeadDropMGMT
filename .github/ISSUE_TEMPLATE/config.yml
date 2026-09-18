@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/kilerdevs/DeadDropMGMT/security/advisories/new
+    about: Private reporting only. Please do not open a public issue for security problems.
+  - name: Troubleshooting guide
+    url: https://github.com/kilerdevs/DeadDropMGMT/blob/HEAD/docs/TROUBLESHOOTING.md
+    about: Symptom, cause and fix for the most common setup and runtime problems.
+  - name: Code of Conduct concern
+    url: https://github.com/kilerdevs/DeadDropMGMT/security/advisories/new
+    about: Report conduct issues privately (start the title with "Conduct report").

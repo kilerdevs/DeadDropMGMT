@@ -1,6 +1,13 @@
 <?php
 declare(strict_types=1);
 
+// CLI only: this script must never be runnable over HTTP, whatever the
+// web server happens to serve.
+if (PHP_SAPI !== 'cli') {
+    http_response_code(404);
+    exit;
+}
+
 // ── One-time migration: raw master key → HKDF purpose subkeys (ADR-016) ───────
 // Older versions encrypted location data and TOTP secrets directly with the
 // master key. The runtime now refuses raw-master rows and expects rows keyed
@@ -20,11 +27,11 @@ $dry     = isset($options['dry-run']);
 
 require_once dirname(__DIR__) . '/includes/kernel.php';
 
-$master = hex2bin(AES_KEY_HEX);
-if (strlen($master) !== 32) {
-    fwrite(STDERR, "AES_KEY_HEX must be 32 bytes (64 hex chars)\n");
+if (!aes_key_valid()) {
+    fwrite(STDERR, aes_key_problem() . "\n");
     exit(1);
 }
+$master = (string)hex2bin(AES_KEY_HEX);
 
 // Legacy decryption: GCM keyed with the RAW master — exists only here,
 // unreachable from any HTTP path (same policy as legacy CBC).
