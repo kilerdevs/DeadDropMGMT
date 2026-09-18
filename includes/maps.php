@@ -55,6 +55,34 @@ function maps_ready_zones(): array {
     return $out;
 }
 
+// Ready zones whose bbox contains the point (inclusive edges), same shape
+// as maps_ready_zones(). The public reveal style is built from this list
+// only: zones elsewhere stay undisclosed to the recipient, and a point
+// outside every zone falls back to the OSM embed instead of rendering an
+// empty canvas. Non-finite coordinates match nothing (fail-closed).
+/** @return array<int,array{id:string,file:string}> */
+function maps_covering_zones(float $lat, float $lng): array {
+    if (!is_finite($lat) || !is_finite($lng)) {
+        return [];
+    }
+    try {
+        $st = get_db()->prepare(
+            "SELECT id FROM map_zones WHERE status = 'ready'
+             AND min_lon <= ? AND min_lat <= ? AND max_lon >= ? AND max_lat >= ?
+             ORDER BY id ASC"
+        );
+        $st->execute([$lng, $lat, $lng, $lat]);
+        $rows = $st->fetchAll();
+    } catch (Throwable) {
+        return []; // table missing (setup.sql not re-run) — no zones, no crash
+    }
+    $out = [];
+    foreach ($rows as $r) {
+        $out[] = ['id' => 'zone_' . (int)$r['id'], 'file' => 'zone_' . (int)$r['id'] . '.pmtiles'];
+    }
+    return $out;
+}
+
 // Build a MapLibre v8 style array for the given zones. One vector source per
 // zone file; the dark layer stack is emitted per source (later zones paint
 // over earlier ones where they overlap — the zone list warns about that).

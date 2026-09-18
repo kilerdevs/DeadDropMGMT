@@ -25,11 +25,21 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   directly on an OSM canvas in Settings → Maps (same-origin tiles via
   tile_proxy.php, zero third-party contact) — drag to draw, drag the body
   to move, corners to resize, Clear to drop; every change syncs the
-  numeric bbox inputs that the queue button reads. Overlapping drafts
-  warn with the shared-tiles percentage (warning only), existing zones
-  render in red, and a place search pans through the proxied Nominatim
-  path. Pinned by a `maps-editor` Playwright spec (tile traffic aborted,
-  queued zones deleted again).
+   numeric bbox inputs that the queue button reads. Overlapping drafts
+   warn with the shared-tiles percentage (warning only), existing zones
+   render in red, and a place search pans through the proxied Nominatim
+   path. Pinned by a `maps-editor` Playwright spec (tile traffic aborted,
+   queued zones deleted again).
+- Self-hosted maps, Phase 4 (public reveal): with the self-hosted provider,
+  a delivered order whose pin sits inside a ready zone renders the vendored
+  MapLibre stack on the public reveal page (`reveal-map.js`, style inlined
+  server-side — no new endpoint) instead of the OSM iframe, so the
+  recipient's browser makes zero third-party requests. Only the covering
+  zones' files are fetched (non-covering zones stay undisclosed); a pin
+  outside every zone, or provider `osm`, keeps the OSM embed as the
+  fallback. Pinned by `MapsTest` covering-zone arms plus a `maps-reveal`
+  Playwright spec (rendered canvas + aborted-everything-else proof, and the
+  osm-fallback path).
 - Single active session per account: a login elsewhere supersedes the old
   one (`users.active_session_id`, set at every full login). The superseded
   browser is logged out to the login page with an explanatory notice

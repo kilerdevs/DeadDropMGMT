@@ -128,13 +128,23 @@ test('selfhosted provider renders the fixture map with zero external requests', 
   }
 });
 
-test('empty zones render the map chrome with a no-zones overlay', async ({ browser }) => {
+test('empty style renders the map chrome with a no-zones overlay', async ({ browser }) => {
   const page = await freshPage(browser);
   try {
+    // The seeded 'E2E Reveal Zone' ready row means the real style.php is
+    // never empty in the e2e database — stub the empty style to pin the
+    // client's no-zones path instead (the style builder's empty shape is
+    // owned by MapsTest's 'empty style' arms).
+    await page.e2eContext.route('**/tiles/style.php', (route) => route.fulfill({
+      json: {
+        version: 8,
+        sources: {},
+        layers: [{ id: 'background', type: 'background', paint: { 'background-color': '#111418' } }],
+      },
+    }));
     await login(page);
     await setProvider(page, 'selfhosted');
 
-    // Real /tiles/style.php: no zones in the e2e database, so no sources.
     await page.goto('/admin/new_order.php');
     await expect(page.locator('#map-picker canvas')).toBeVisible({ timeout: 20000 });
     await expect(page.locator('.map-empty-overlay')).toBeVisible();

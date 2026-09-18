@@ -43,8 +43,9 @@ test('non-numeric bbox is rejected with an error popup', async ({ browser }) => 
     const popup = page.locator('#save-popup.visible.error');
     await expect(popup).toBeVisible({ timeout: 10000 });
     expect(await popup.textContent()).toMatch(/numbers/i);
-    // Nothing queued: the table stays hidden behind the empty state.
-    await expect(page.locator('#maps-empty')).toBeVisible();
+    // Nothing queued: no row for the rejected zone appears (the seeded
+    // 'E2E Reveal Zone' ready row from seed.php may legitimately be there).
+    expect(await page.locator('#maps-table tbody tr', { hasText: 'E2E Bad Zone' }).count()).toBe(0);
   } finally {
     await closePage(page);
   }

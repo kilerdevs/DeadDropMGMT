@@ -237,6 +237,25 @@ if ($loc_data && is_numeric($loc_data['lat']) && is_numeric($loc_data['lng'])) {
     $apple_link = sprintf('https://maps.apple.com/?ll=%.7f,%.7f&q=%s&t=m', $lat, $lng, rawurlencode(t('public.index.reveal.location')));
 }
 $csrf_public = generate_csrf();
+
+// Self-hosted reveal: provider selfhosted plus at least one ready zone
+// covering the pin renders the vendored MapLibre stack (style inlined into
+// data-style — no new endpoint; the browser Range-fetches only the covering
+// zone files, same-origin). Anything else keeps the OSM embed below.
+$reveal_style = '';
+$reveal_lat = '';
+$reveal_lng = '';
+if ($map_src !== '' && isset($lat, $lng) && map_provider() === MAP_PROVIDER_SELFHOSTED) {
+    $covering = maps_covering_zones($lat, $lng);
+    if ($covering !== []) {
+        $reveal_style = (string)json_encode(
+            maps_style($covering),
+            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+        );
+        $reveal_lat = sprintf('%.7f', $lat);
+        $reveal_lng = sprintf('%.7f', $lng);
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="<?= htmlspecialchars(current_lang(), ENT_QUOTES, 'UTF-8') ?>">
@@ -246,6 +265,9 @@ $csrf_public = generate_csrf();
 <meta name="darkreader-lock">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title><?= t('public.index.title') ?></title><link rel="stylesheet" href="/style.css">
+<?php if ($reveal_style !== ''): ?>
+<link rel="stylesheet" href="/maplibre/maplibre-gl.css">
+<?php endif; ?>
 <?php if ($blocked && $cooldown_secs <= 60): ?>
 <meta http-equiv="refresh" content="<?= $cooldown_secs + 2 ?>">
 <?php endif; ?>
@@ -308,11 +330,21 @@ $csrf_public = generate_csrf();
             <?php if ($map_src !== ''): ?>
             <div class="reveal-section">
                 <div class="reveal-key"><?= t('public.index.reveal.map') ?></div>
+                <?php if ($reveal_style !== ''): ?>
+                <!-- Self-hosted reveal: zero third-party contact (vendored
+                     MapLibre + same-origin PMTiles zones). OSM embed stays
+                     the fallback when no ready zone covers the pin. -->
+                <div class="reveal-map" id="reveal-map"
+                     data-lat="<?= htmlspecialchars($reveal_lat, ENT_QUOTES, 'UTF-8') ?>"
+                     data-lng="<?= htmlspecialchars($reveal_lng, ENT_QUOTES, 'UTF-8') ?>"
+                     data-style="<?= htmlspecialchars($reveal_style, ENT_QUOTES, 'UTF-8') ?>"></div>
+                <?php else: ?>
                 <iframe class="map-frame"
                         src="<?= htmlspecialchars($map_src, ENT_QUOTES, 'UTF-8') ?>"
                         loading="lazy"
                         title="<?= htmlspecialchars(t('public.index.map_title'), ENT_QUOTES, 'UTF-8') ?>"
                         sandbox="allow-scripts allow-same-origin"></iframe>
+                <?php endif; ?>
                 <div class="map-actions">
                     <a class="map-link"
                        href="<?= htmlspecialchars($gm_link, ENT_QUOTES, 'UTF-8') ?>"
@@ -476,6 +508,11 @@ window.I18N = <?= json_encode([
      an inline onchange would be dead under script-src 'self' + nonce), and
      every other block in the file no-ops when its element is absent. -->
 <script src="/public.js"></script>
+<?php if ($reveal_style !== ''): ?>
+<script src="/maplibre/maplibre-gl.js"></script>
+<script src="/maplibre/pmtiles.js"></script>
+<script src="/reveal-map.js"></script>
+<?php endif; ?>
 <?php if (!empty($photos)): ?>
 <script src="/gallery.js"></script>
 <?php endif; ?>

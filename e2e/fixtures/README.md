@@ -1,7 +1,9 @@
 # e2e map fixture
 
 `micro.pmtiles` is a tiny Protomaps-basemap extract used by the self-hosted
-map e2e spec (`e2e/tests/maps-selfhosted.spec.js`). It is served by the test
+map e2e specs (`e2e/tests/maps-selfhosted.spec.js` for the admin picker,
+`e2e/tests/maps-reveal.spec.js` for the public reveal via the seeded
+'E2E Reveal Zone' row in `e2e/seed.php`). It is served by the test
 web server as a same-origin static file — no test ever touches the network
 for tiles.
 

@@ -44,4 +44,24 @@ $ins->execute(['E2EFLOWDELIVER02', $pw, $enc['ciphertext'], $enc['iv'], 'deliver
 $ins->execute(['E2EFLOWPREP00001', $pw, $enc['ciphertext'], $enc['iv'], 'preparing', null, '']);
 $ins->execute(['E2EADMDELIV00001', $pw, $enc['ciphertext'], $enc['iv'], 'delivered', date('Y-m-d H:i:s'), '']);
 
+// Self-hosted reveal fixture (Phase 4): a ready zone covering the seeded
+// Warsaw point (52.2297, 21.0122), backed by the committed micro.pmtiles
+// build (bbox 20.95,52.20 → 21.10,52.28 per e2e/fixtures/README.md). The id
+// varies per run, so stale zone files are swept before the fixture is
+// copied under its fresh name. maps-zones.spec.js accounts for this row —
+// it asserts the bad zone was NOT queued, not an empty table.
+$db->prepare("DELETE FROM map_zones WHERE name = 'E2E Reveal Zone'")->execute();
+$db->prepare(
+    "INSERT INTO map_zones (name, min_lon, min_lat, max_lon, max_lat, maxzoom, status)
+     VALUES ('E2E Reveal Zone', 20.95, 52.20, 21.10, 52.28, 14, 'ready')"
+)->execute();
+$revealZoneId = (int)$db->lastInsertId();
+foreach (glob(__DIR__ . '/../tiles/zone_*.pmtiles') ?: [] as $staleZone) {
+    @unlink($staleZone);
+}
+copy(
+    __DIR__ . '/fixtures/micro.pmtiles',
+    __DIR__ . '/../tiles/zone_' . $revealZoneId . '.pmtiles'
+);
+
 echo "E2E fixtures seeded\n";

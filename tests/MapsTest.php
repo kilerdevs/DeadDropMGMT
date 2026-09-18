@@ -122,6 +122,18 @@ T::eq('queued zone not ready', [], maps_ready_zones());
 $db->prepare("UPDATE map_zones SET status = 'ready' WHERE id = ?")->execute([$zid]);
 $ready = maps_ready_zones();
 T::eq('ready zone advertised', [['id' => 'zone_' . $zid, 'file' => 'zone_' . $zid . '.pmtiles']], $ready);
+
+// ── Phase 4: covering zones for the public reveal ─────────────────────────
+// Only ready zones containing the pin reach the recipient's style.
+$coverWarsaw = maps_covering_zones(52.2297, 21.0122);
+T::eq('covering zone found', [['id' => 'zone_' . $zid, 'file' => 'zone_' . $zid . '.pmtiles']], $coverWarsaw);
+T::eq('outside point matches nothing', [], maps_covering_zones(48.85, 2.35));
+T::eq('edge point is inside', $coverWarsaw, maps_covering_zones(52.05, 20.85));
+T::eq('non-finite matches nothing', [], maps_covering_zones(NAN, 21.0));
+T::eq('covering style carries only that source', ['zone_' . $zid], array_keys(maps_style($coverWarsaw)['sources']));
+[$covQ] = maps_zone_add('P4 Cover Queued', 20.0, 52.0, 22.0, 54.0, 14, false);
+T::eq('queued zone never covers', $coverWarsaw, maps_covering_zones(52.2297, 21.0122));
+$db->prepare('DELETE FROM map_zones WHERE id = ?')->execute([$covQ]);
 $styled = maps_style($ready);
 T::ok('style carries the zone source', isset($styled['sources']['zone_' . $zid]));
 T::ok('zone delete removes the row', maps_zone_delete((int)$zid));

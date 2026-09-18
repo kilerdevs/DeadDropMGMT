@@ -410,6 +410,16 @@ input::placeholder { color: var(--text-muted); font-size: 13px; }
     margin-bottom: 10px;
 }
 
+/* Self-hosted reveal map: the MapLibre canvas needs an explicit height or
+ * the container collapses to zero (same 280px as the OSM iframe it swaps). */
+.reveal-map {
+    width:         100%;
+    height:        280px;
+    border:        1px solid var(--border);
+    display:       block;
+    margin-bottom: 10px;
+}
+
 .map-actions {
     display: flex;
     gap:     12px;
@@ -548,6 +558,7 @@ input::placeholder { color: var(--text-muted); font-size: 13px; }
 
     /* Map */
     .map-frame   { height: 220px; }
+    .reveal-map  { height: 220px; }
     .map-actions { flex-direction: column; gap: 8px; }
     .map-link    { display: inline-block; }
 
