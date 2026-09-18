@@ -202,6 +202,21 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   failed its check and all zone downloads died as `code:version_mismatch`.
   The probe now runs `pmtiles version` (whose `pmtiles 1.31.2, commit …`
   line still contains the pinned version); the test doubles mirror it.
+- Admin language switch alerted "CSRF" (and logout silently did nothing) after
+  any other request from the same page — an autosave, the zones poll, an AJAX
+  save. `verify_csrf()` rotates the session token on every success, so the
+  copy rendered into the sidebar (and into every form) went stale. New
+  `GET /admin/csrf_token.php` (admin-only, GET-only, refuses cross-site
+  fetches, no CORS, never rotates) returns the live token; the language switch
+  and a global submit hook in `admin.js` take it right before any POST form
+  goes out (a cancelled confirm still cancels; `formaction` submitters are
+  preserved via `requestSubmit`). Settings' "Clear log" / "Clear analytics"
+  forms had the same flaw. Pinned by a stale-token scenario in
+  `AuthorizationHttpTest` (fails without the endpoint) and a Playwright spec.
+- Coverage gate: the logger's new key-guard arms dipped `logger.php` under its
+  92 % floor; the master-key text now flows through a test seam
+  (`_log_key_hex()`), so `LoggerTest` covers the unusable-key paths in-process
+  (the child-process probe stays for the no-warnings / untouched-file proof).
 - Settings → Diagnostics: **Verify integrity** answered "Chain intact — 0
   entries verified" while the page listed 40 lines, because the check covers
   the structured (hash-chained) log, which was empty, not the PHP error log

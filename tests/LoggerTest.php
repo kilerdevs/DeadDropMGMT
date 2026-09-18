@@ -404,6 +404,19 @@ with_table_hidden_lg('order_events', function (): void {
 T::ok('failed event leaves no phantom row',
       $db->query("SELECT 1 FROM order_events WHERE event_type = 't_event_fail'")->fetch() === false);
 
+// ── Unusable AES key, in-process arms (the child probe below proves the
+// no-warnings / untouched-file side effects across a real process boundary) ─
+_log_key_hex('not-a-real-key');
+T::throws('log key refuses a malformed master key', static fn() => _log_key(), RuntimeException::class);
+T::ok('app_log refuses without a usable key', app_log('info', 'no_key', ['msg' => 'x']) === false);
+T::ok('app_log keeps refusing (warn-once path)', app_log('info', 'no_key_again') === false);
+$dummyLog = sys_get_temp_dir() . '/ddmgmt_nokey_' . getmypid() . '.log';
+file_put_contents($dummyLog, "{}\n");
+T::eq('verify names the missing key', [false, 0, null, 'log key unavailable (AES_KEY_HEX invalid)'], verify_log_chain($dummyLog));
+@unlink($dummyLog);
+_log_key_hex(null, true);
+T::ok('a valid key works again once the override is cleared', strlen(_log_key()) === 32);
+
 // ── Unusable AES key: the structured log refuses quietly and says why ───────
 // (`docker exec` shells and cron never inherited the key: app_log() used to
 // create an empty app.log and spray hex2bin() warnings into error.log.)

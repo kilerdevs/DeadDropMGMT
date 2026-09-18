@@ -37,6 +37,38 @@
         }
     });
 
+    // ── Live CSRF token for every POST form ───────────────────────────────────
+    // The server rotates the session token each time a request verifies it, so
+    // the copy rendered into a form goes stale whenever anything else on the
+    // page (an autosave, a poll) ran first — the next submit would then die
+    // with "invalid CSRF" (or, for logout, silently do nothing). Ask the server
+    // for the live token right before the form goes out. Registered after the
+    // confirm handler above: a cancelled confirm has already prevented default.
+    function freshCsrf() {
+        return fetch('/admin/csrf_token.php', { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+            .then(function (r) { return r.ok ? r.json() : Promise.reject(new Error('token')); })
+            .then(function (j) { return j && j.csrf ? j.csrf : Promise.reject(new Error('token')); });
+    }
+    window.ddmgmtFreshCsrf = freshCsrf;
+    document.addEventListener('submit', function (e) {
+        var form = e.target;
+        if (e.defaultPrevented || !form || form.dataset.csrfFresh === '1') return;
+        if (String(form.method).toLowerCase() !== 'post') return;
+        var input = form.querySelector('input[name="csrf_token"]');
+        if (!input) return;
+        e.preventDefault();
+        var submitter = e.submitter || null;
+        freshCsrf().then(function (t) { input.value = t; }, function () { /* keep the rendered one */ })
+            .then(function () {
+                form.dataset.csrfFresh = '1';
+                try {
+                    if (form.requestSubmit) { form.requestSubmit(submitter); } else { form.submit(); }
+                } finally {
+                    delete form.dataset.csrfFresh;
+                }
+            });
+    });
+
     // ── Copy order info to clipboard ──────────────────────────────────────────
     document.querySelectorAll('[data-copy]').forEach(function (btn) {
         btn.addEventListener('click', function () {

@@ -249,6 +249,37 @@ T::eq('stale poll sends no Set-Cookie', $ckS, $ckAfter);
 T::ok('auth cookie survives the stale poll',
     $stO === 200 && str_contains($bO, '/admin/logout.php'));
 
+// (The owner session below is the one the stale-poll probe logged in: any
+// later login supersedes an older cookie — single active session.)
+// ── Live CSRF token: stale page tokens must not break language/logout ───────
+// verify_csrf() rotates the session token on every success, so the copy
+// rendered into a page is stale once ANY request from it was verified (an
+// autosave, a status poll). The sidebar language switch and every POST form
+// take the live token from /admin/csrf_token.php instead.
+[, $bTok] = _az('GET', "$B/admin/settings.php", null, $ckS2);
+preg_match('/var rendered = "([0-9a-f]{64})"/', $bTok, $mTok);
+$renderedTok = $mTok[1] ?? '';
+T::ok('sidebar renders a language token', $renderedTok !== '');
+[$stPoll, $bPoll] = _az('POST', "$B/admin/maps_action.php", ['csrf_token' => $renderedTok, 'action' => 'status'], $ckS2);
+T::ok('an in-page poll verifies (and thereby rotates) the token', $stPoll === 200 && str_contains($bPoll, '"ok":true'));
+[$stStale] = _az('POST', "$B/admin/set_lang.php", ['csrf_token' => $renderedTok, 'lang' => 'en'], $ckS2);
+T::eq('the rendered token is now stale (the bug being fixed)', 403, $stStale);
+[$stLive, $bLive] = _az('GET', "$B/admin/csrf_token.php", null, $ckS2);
+$liveTok = (string)(json_decode($bLive, true)['csrf'] ?? '');
+T::ok('token endpoint answers the live token', $stLive === 200 && preg_match('/^[0-9a-f]{64}$/', $liveTok) === 1);
+[, $bLive2] = _az('GET', "$B/admin/csrf_token.php", null, $ckS2);
+T::eq('asking does not rotate it', $liveTok, (string)(json_decode($bLive2, true)['csrf'] ?? ''));
+[$stFresh, $bFresh] = _az('POST', "$B/admin/set_lang.php", ['csrf_token' => $liveTok, 'lang' => 'en'], $ckS2);
+T::ok('language switch works with the live token', $stFresh === 200 && str_contains($bFresh, '"ok":true'));
+[$stAnon,,, $locAnon] = _az('GET', "$B/admin/csrf_token.php", null, '');
+T::ok('the token endpoint is not public', $stAnon === 302 && str_contains($locAnon, 'index.php'));
+[$stPost] = _az('POST', "$B/admin/csrf_token.php", [], $ckS2);
+T::eq('the token endpoint is GET-only', 405, $stPost);
+$xs = stream_context_create(['http' => ['method' => 'GET', 'ignore_errors' => true, 'header' => "Cookie: $ckS2\r\nSec-Fetch-Site: cross-site\r\n"]]);
+$bXs = (string)@file_get_contents("$B/admin/csrf_token.php", false, $xs);
+T::ok('a cross-site request gets no token', !str_contains($bXs, '"csrf":"') || str_contains($bXs, 'Forbidden'));
+T::ok('admin.js refreshes the token before any POST form', str_contains((string)file_get_contents(dirname(__DIR__) . '/admin/admin.js'), 'csrf_token.php'));
+
 // ── CLI-only scripts are inert over HTTP ─────────────────────────────────────
 // Maintenance tools, the container journey, browser-test seeds and test
 // harness files carry no auth of their own; one that a web server ever

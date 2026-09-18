@@ -24,6 +24,7 @@ declare(strict_types=1);
 //   owns_order ['source' => [where, key], 'deny' => spec] — enforced only for
 //              a positive id; non-positive ids fall through to the handler's
 //              own validation, which answers with the legacy redirect
+//   (csrf_token: read-only, needs no token of its own — it IS the token source)
 //   2fa_exempt feeds require_admin(): couriers pending TOTP enrollment may
 //              still reach the route (logout, self-service set_lang)
 
@@ -79,6 +80,17 @@ return [
         '2fa_exempt' => true,
         'method' => 'POST', 'method_fail' => ['json' => [405, ['error' => 'Method not allowed']]],
         'csrf' => true, 'csrf_fail' => ['json' => [403, ['error' => 'CSRF']]],
+    ],
+    // The current session token, for same-origin scripts. verify_csrf() rotates
+    // the token on every success, so a page's server-rendered copy goes stale
+    // as soon as ANY request from that page (an autosave, a status poll) has
+    // been verified — a language switch or a logout after that would fail with
+    // a bogus "CSRF". Forms and fetch callers ask for the live one instead.
+    // Same-origin by construction: no CORS headers, SameSite=Strict cookie.
+    'csrf_token' => [
+        'handler' => 'csrf_token', 'auth' => 'admin', 'headers' => 'json',
+        '2fa_exempt' => true,
+        'method' => 'GET', 'method_fail' => ['json' => [405, ['error' => 'Method not allowed']]],
     ],
     'logout' => [
         'handler' => 'logout', 'auth' => null, 'headers' => false,

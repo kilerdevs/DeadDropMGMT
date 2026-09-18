@@ -28,18 +28,32 @@ const APP_LOG_GENESIS     = '000000000000000000000000000000000000000000000000000
 // key neither helps decrypt locations nor vice versa. Legacy entries written
 // before key separation used HMAC keyed with the raw hex string; verification
 // still accepts them until the log rotates out (see verify_log_chain).
+// The master key text the chain key derives from. Test seam (see
+// maps_cli_runner): a suite installs a bogus value to exercise the "key
+// unusable" arms in-process — the constant itself cannot change — and clears
+// it again ($clear) so nothing leaks into later files.
+function _log_key_hex(?string $override = null, bool $clear = false): string {
+    static $forced = null;
+    if ($clear) {
+        $forced = null;
+    } elseif ($override !== null) {
+        $forced = $override;
+    }
+    return $forced ?? (defined('AES_KEY_HEX') ? (string)AES_KEY_HEX : '');
+}
+
+// (self-contained on purpose: config.php loads this file before crypto.php)
 function _log_key(): string {
-    static $key = null;
-    if ($key === null) {
-        // (self-contained on purpose: config.php loads this file before crypto.php)
-        $hex = defined('AES_KEY_HEX') ? (string)AES_KEY_HEX : '';
+    static $cache = [];
+    $hex = _log_key_hex();
+    if (!isset($cache[$hex])) {
         $master = preg_match('/^[0-9a-fA-F]{64}$/', $hex) === 1 ? hex2bin($hex) : false;
         if ($master === false) {
             throw new RuntimeException('Log integrity key unavailable: AES_KEY_HEX is not a valid 64-hex-char key.');
         }
-        $key = hash_hkdf('sha256', $master, 32, 'deaddrop:log-hmac-v1', 'deaddrop-mgmt-hkdf-salt-v1');
+        $cache[$hex] = hash_hkdf('sha256', $master, 32, 'deaddrop:log-hmac-v1', 'deaddrop-mgmt-hkdf-salt-v1');
     }
-    return $key;
+    return $cache[$hex];
 }
 
 function _log_key_legacy(): string {

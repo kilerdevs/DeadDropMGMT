@@ -54,3 +54,50 @@ test('login, edit order, CSP-proof extend form, logout', async ({ browser }) => 
     await closePage(page);
   }
 });
+
+// The server rotates the session CSRF token every time a request verifies it,
+// so the copy rendered into a page goes stale as soon as anything else on that
+// page (an autosave, the zones poll) has run. The sidebar language switch used
+// to alert "CSRF" and logout silently did nothing after that; both now take the
+// live token from /admin/csrf_token.php.
+test('language switch and logout survive a stale page token', async ({ browser }) => {
+  const page = await freshPage(browser);
+  try {
+    let dialogs = 0;
+    page.on('dialog', async (d) => {
+      dialogs++;
+      await d.dismiss();
+    });
+    await login(page, 'e2e_owner', 'E2eOwnerPass1!');
+    await expect(page).toHaveURL(/admin\/orders\.php/);
+    await page.goto('/admin/settings.php');
+
+    // Burn the token this page was rendered with: one verified request from the page.
+    const burn = () => page.evaluate(async () => {
+      const fd = new FormData();
+      fd.append('csrf_token', document.querySelector('meta[name="csrf-token"]').content);
+      fd.append('action', 'status');
+      const r = await fetch('/admin/maps_action.php', { method: 'POST', body: fd });
+      return r.ok;
+    });
+    expect(await burn()).toBe(true);
+
+    await page.selectOption('#sidebar-lang-select', 'de');
+    await expect(page.locator('html')).toHaveAttribute('lang', 'de', { timeout: 15000 });
+    expect(dialogs).toBe(0);
+
+    // Back to English so later specs keep their expectations.
+    await page.selectOption('#sidebar-lang-select', 'en');
+    await expect(page.locator('html')).toHaveAttribute('lang', 'en', { timeout: 15000 });
+    expect(dialogs).toBe(0);
+
+    // Logout after another stale-making request must really end the session.
+    expect(await burn()).toBe(true);
+    await page.locator('form[action="/admin/logout.php"] button[type="submit"]').click();
+    await expect(page).toHaveURL(/admin\/index\.php/);
+    await page.goto('/admin/orders.php');
+    await expect(page).toHaveURL(/admin\/index\.php/);
+  } finally {
+    await closePage(page);
+  }
+});

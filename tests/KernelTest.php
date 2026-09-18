@@ -81,7 +81,7 @@ foreach (glob($root . '/admin/*.php') as $f) {
     }
     $checked += _kernel_guarded($name, $src);
 }
-T::ok('admin entry pages scanned', $checked === 33);
+T::ok('admin entry pages scanned', $checked === 34);
 
 // ── Same rule for every other entry point: public pages, cron, CLI tools,
 // and the docker journey script. Deliberate exceptions (not scanned):
