@@ -318,7 +318,7 @@ function s_label(array $s, string $key): string {
                             data-max-lat="<?= htmlspecialchars((string)$mz['max_lat'], ENT_QUOTES, 'UTF-8') ?>">
                             <td class="px-url"><?= htmlspecialchars((string)$mz['name'], ENT_QUOTES, 'UTF-8') ?></td>
                             <td>z<?= (int)$mz['maxzoom'] ?></td>
-                            <td class="mz-status"><?= htmlspecialchars(t('admin.maps.status.' . $mz['status']), ENT_QUOTES, 'UTF-8') ?></td>
+                            <td class="mz-status"><?= htmlspecialchars(t('admin.maps.status.' . $mz['status']), ENT_QUOTES, 'UTF-8') ?><?php if (maps_zone_is_stale($mz)): ?> — <?= htmlspecialchars(t('admin.maps.stale_badge'), ENT_QUOTES, 'UTF-8') ?><?php endif; ?></td>
                             <td class="mz-size"></td>
                             <td class="mz-speed"></td>
                             <td class="mz-eta"></td>
@@ -446,6 +446,8 @@ function s_label(array $s, string $key): string {
         'mz_confirm_delete' => t('admin.maps.confirm_delete'),
         'mz_request_failed' => t('admin.maps.js.request_failed'),
         'mz_retry'          => t('admin.maps.retry_button'),
+        'mz_refresh'        => t('admin.maps.refresh_button'),
+        'mz_stale'          => t('admin.maps.stale_badge'),
         'mz_delete'         => t('admin.maps.delete_button'),
         'mz_no_zones'       => t('admin.maps.no_zones_yet'),
         'mz_disk_free'      => t('admin.maps.disk_free'),
@@ -719,9 +721,13 @@ function s_label(array $s, string $key): string {
             eta = z.eta_secs !== null ? mzFmtDur(z.eta_secs) : '—';
             var status = mzStatusLabel(z.status);
             if (z.status === 'failed' && z.error) status += ' — ' + z.error;
+            if (z.stale) status += ' — ' + I.mz_stale;
             actions = z.status === 'failed'
                 ? '<button type="button" class="action-btn mz-retry">' + I.mz_retry + '</button> '
                 : '';
+            if (z.status === 'ready' && z.stale) {
+                actions += '<button type="button" class="action-btn mz-refresh">' + I.mz_refresh + '</button> ';
+            }
             actions += '<button type="button" class="action-btn action-btn--danger mz-del">' + I.mz_delete + '</button>';
             tr.innerHTML = '<td class="px-url"></td><td>z' + z.maxzoom + '</td>'
                 + '<td class="mz-status"></td><td class="mz-size"></td>'
@@ -771,6 +777,12 @@ function s_label(array $s, string $key): string {
             } else if (btn.classList.contains('mz-retry')) {
                 btn.disabled = true;
                 mzPost('retry', { id: tr.dataset.id }).then(function (res) {
+                    if (res.ok && res.j.ok) { mzPoll(); }
+                    else { btn.disabled = false; showPopup(res.j.error || I.save_error, true); }
+                });
+            } else if (btn.classList.contains('mz-refresh')) {
+                btn.disabled = true;
+                mzPost('refresh', { id: tr.dataset.id }).then(function (res) {
                     if (res.ok && res.j.ok) { mzPoll(); }
                     else { btn.disabled = false; showPopup(res.j.error || I.save_error, true); }
                 });

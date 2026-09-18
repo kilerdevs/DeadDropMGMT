@@ -66,6 +66,19 @@ switch ($action) {
         json_out(['ok' => true, 'kicked' => $kicked]);
     }
 
+    // ── Re-queue a ready/failed zone on a new planet build ──────────────────
+    // Same reset as retry; the worker re-sizes against the fresh build and
+    // republishes atomically, so the old file serves until the new one lands.
+    case 'refresh': {
+        $id = (int)($_POST['id'] ?? 0);
+        if ($id <= 0 || !maps_zone_refresh($id)) {
+            json_out(['error' => t('admin.common.invalid_request')], 422);
+        }
+        $kicked = maps_kick_worker();
+        audit('maps_zone_refresh', null, null, "id={$id}");
+        json_out(['ok' => true, 'kicked' => $kicked]);
+    }
+
     // ── Live queue state for the progress poll ──────────────────────────────
     case 'status': {
         $zones = [];
@@ -74,6 +87,7 @@ switch ($action) {
                 'id'             => (int)$z['id'],
                 'name'           => (string)$z['name'],
                 'status'         => (string)$z['status'],
+                'stale'          => maps_zone_is_stale($z),
                 'maxzoom'        => (int)$z['maxzoom'],
                 'min_lon'        => (float)$z['min_lon'],
                 'min_lat'        => (float)$z['min_lat'],

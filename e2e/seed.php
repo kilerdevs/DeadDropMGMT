@@ -64,4 +64,11 @@ copy(
     __DIR__ . '/../tiles/zone_' . $revealZoneId . '.pmtiles'
 );
 
+// Phase 5 freshness fixture: the cached planet build is newer than anything
+// the zone was cut from (its build_key stays NULL), so the zone renders the
+// stale badge + Refresh button. maps_build_at is fresh, so no suite ever
+// fetches the build list over the network to learn this.
+set_setting('maps_build_key', 'E2E-NEWER-BUILD');
+set_setting('maps_build_at', (string)time());
+
 echo "E2E fixtures seeded\n";

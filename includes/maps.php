@@ -526,6 +526,44 @@ function maps_zone_retry(int $id): bool {
     }
 }
 
+// Freshness: a ready zone is stale once the cached planet build key moves
+// past the zone's own build_key (daily planet builds). Only the CACHED key
+// is consulted — page views never fetch the build list; the worker refreshes
+// the cache whenever it sizes. Unknown cache ('') means unknown freshness:
+// not stale. A NULL row key (pre-freshness rows) never equals a known
+// build, so it reads stale — the safe direction (re-download, not silence).
+function maps_zone_is_stale(array $row): bool {
+    if (($row['status'] ?? '') !== 'ready') {
+        return false;
+    }
+    $latest = get_setting('maps_build_key', '');
+    if ($latest === '') {
+        return false;
+    }
+    return (string)($row['build_key'] ?? '') !== $latest;
+}
+
+// Re-queue a ready or failed zone (new planet build, or a manual nudge):
+// same reset as retry; the worker re-sizes, re-downloads, verifies, and
+// republishes atomically. In-flight rows are left alone (rowCount 0).
+function maps_zone_refresh(int $id): bool {
+    if ($id <= 0) {
+        return false;
+    }
+    try {
+        $st = get_db()->prepare(
+            "UPDATE map_zones SET status = 'queued', error = NULL,
+             bytes_expected = NULL, bytes_done = 0, speed_bps = NULL, eta_secs = NULL
+             WHERE id = ? AND status IN ('ready', 'failed')"
+        );
+        $st->execute([$id]);
+        return $st->rowCount() === 1;
+    } catch (Throwable $e) {
+        log_err('Zone refresh: ' . $e->getMessage());
+        return false;
+    }
+}
+
 // Best pool proxy URL for a long download (same ok → new → dead ordering as
 // osm_fetch), or null when none is usable. Never falls back to direct here.
 function maps_pick_proxy(): ?string {

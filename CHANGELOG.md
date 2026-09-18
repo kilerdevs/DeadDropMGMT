@@ -39,7 +39,15 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   outside every zone, or provider `osm`, keeps the OSM embed as the
   fallback. Pinned by `MapsTest` covering-zone arms plus a `maps-reveal`
   Playwright spec (rendered canvas + aborted-everything-else proof, and the
-  osm-fallback path).
+   osm-fallback path).
+- Self-hosted maps, Phase 5 (zone freshness): ready zones remember the
+  planet build they were cut from and show an *Update available* badge once
+  the worker learns a newer build, with a Refresh button that re-queues
+  them through the normal worker path (atomic republish — the old file
+  serves until the new one lands). Freshness reads the cached build key
+  only, so no page view ever fetches the build list. Pinned by `MapsTest`
+  stale/refresh arms plus a `maps-zones` Playwright test that refreshes the
+  seeded zone through the real settings UI.
 - Single active session per account: a login elsewhere supersedes the old
   one (`users.active_session_id`, set at every full login). The superseded
   browser is logged out to the login page with an explanatory notice

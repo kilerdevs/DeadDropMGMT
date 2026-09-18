@@ -134,6 +134,35 @@ T::eq('covering style carries only that source', ['zone_' . $zid], array_keys(ma
 [$covQ] = maps_zone_add('P4 Cover Queued', 20.0, 52.0, 22.0, 54.0, 14, false);
 T::eq('queued zone never covers', $coverWarsaw, maps_covering_zones(52.2297, 21.0122));
 $db->prepare('DELETE FROM map_zones WHERE id = ?')->execute([$covQ]);
+
+// ── Phase 5: freshness + refresh ──────────────────────────────────────────
+$db->prepare("UPDATE map_zones SET build_key = '20260918' WHERE id = ?")->execute([$zid]);
+$zrow = null;
+foreach (maps_zone_list() as $z) {
+    if ((int)$z['id'] === (int)$zid) {
+        $zrow = $z;
+    }
+}
+set_setting('maps_build_key', '20260918');
+T::ok('current build is fresh', !maps_zone_is_stale($zrow));
+set_setting('maps_build_key', '20260919');
+T::ok('newer build marks stale', maps_zone_is_stale($zrow));
+T::ok('non-ready never stale', !maps_zone_is_stale(['status' => 'queued', 'build_key' => 'x']));
+set_setting('maps_build_key', '');
+T::ok('unknown build is not stale', !maps_zone_is_stale($zrow));
+$db->prepare('UPDATE map_zones SET bytes_done = 5 WHERE id = ?')->execute([$zid]);
+T::ok('refresh re-queues ready', maps_zone_refresh((int)$zid));
+$rrow = null;
+foreach (maps_zone_list() as $z) {
+    if ((int)$z['id'] === (int)$zid) {
+        $rrow = $z;
+    }
+}
+T::eq('refresh lands queued', 'queued', $rrow['status'] ?? null);
+T::eq('refresh resets progress', 0, (int)($rrow['bytes_done'] ?? -1));
+T::ok('refresh refuses in-flight', !maps_zone_refresh((int)$zid));
+T::ok('refresh refuses bad id', !maps_zone_refresh(0));
+$db->prepare("UPDATE map_zones SET status = 'ready' WHERE id = ?")->execute([$zid]);
 $styled = maps_style($ready);
 T::ok('style carries the zone source', isset($styled['sources']['zone_' . $zid]));
 T::ok('zone delete removes the row', maps_zone_delete((int)$zid));

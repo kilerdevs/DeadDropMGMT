@@ -422,6 +422,8 @@ return [
     'admin.maps.queue_button'  => 'Ajouter le téléchargement',
     'admin.maps.delete_button' => 'Supprimer',
     'admin.maps.retry_button'  => 'Réessayer',
+    'admin.maps.refresh_button' => 'Actualiser',
+    'admin.maps.stale_badge' => 'Mise à jour disponible',
     'admin.maps.status.queued'      => 'En file',
     'admin.maps.status.sizing'      => 'Mesure…',
     'admin.maps.status.downloading' => 'Téléchargement',

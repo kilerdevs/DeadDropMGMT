@@ -50,3 +50,22 @@ test('non-numeric bbox is rejected with an error popup', async ({ browser }) => 
     await closePage(page);
   }
 });
+
+test('stale ready zone offers refresh and re-queues on click', async ({ browser }) => {
+  const page = await freshPage(browser);
+  try {
+    await login(page);
+    await page.goto('/admin/settings.php');
+    // Seeded ready zone with an older build than the cached planet build.
+    const row = page.locator('#maps-table tbody tr', { hasText: 'E2E Reveal Zone' });
+    await expect(row).toBeVisible();
+    await expect(row).toContainText('Update available');
+    // Runs last in this file: re-queueing leaves the zone queued (no worker
+    // runs in e2e), which later files never depend on as ready.
+    await row.locator('.mz-refresh').click();
+    await expect(row).toContainText('Queued', { timeout: 10000 });
+    expect(await row.locator('.mz-refresh').count()).toBe(0);
+  } finally {
+    await closePage(page);
+  }
+});
