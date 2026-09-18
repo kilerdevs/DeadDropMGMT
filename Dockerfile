@@ -32,8 +32,8 @@ RUN chmod +x /usr/local/bin/entrypoint.sh \
  # pristine config template outside the docroot for first-boot rendering
  && cp /var/www/html/config.php.example /usr/local/share/config.php.template \
  # writable runtime dirs; real content comes from volumes at runtime
- && mkdir -p /var/www/html/logs /var/www/html/uploads /var/www/html/cache/osm_tiles /config \
- && chown -R www-data:www-data /var/www/html/logs /var/www/html/uploads /var/www/html/cache /config
+ && mkdir -p /var/www/html/logs /var/www/html/uploads /var/www/html/cache/osm_tiles /var/www/html/data/maps /var/www/html/tiles /config \
+ && chown -R www-data:www-data /var/www/html/logs /var/www/html/uploads /var/www/html/cache /var/www/html/data /var/www/html/tiles /config
 
 WORKDIR /var/www/html
 # Real health signal: Apache + PHP + config rendering all working — a plain
