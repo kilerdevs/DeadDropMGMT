@@ -283,6 +283,77 @@ function s_label(array $s, string $key): string {
                     </div>
                 </div>
 
+                <!-- ── Self-hosted map zones ───────────────────────────────── -->
+                <?php $map_zones = maps_zone_list(); ?>
+                <div class="settings-group">
+                    <div class="settings-group-label"><?= htmlspecialchars(t('admin.maps.zones_section'), ENT_QUOTES, 'UTF-8') ?></div>
+                    <div class="proxies-hint"><?= t('admin.maps.zones_hint') ?></div>
+                    <div class="maps-disk" id="maps-disk">
+                        <?= htmlspecialchars(t('admin.maps.disk_free', ['x' => maps_fmt_bytes(maps_disk_free())]), ENT_QUOTES, 'UTF-8') ?>
+                    </div>
+
+                    <?php if (!$map_zones): ?>
+                    <div class="log-empty" id="maps-empty"><?= t('admin.maps.no_zones_yet') ?></div>
+                    <?php endif; ?>
+                    <table class="proxies-table" id="maps-table" <?= $map_zones ? '' : 'hidden' ?>>
+                        <thead>
+                        <tr>
+                            <th><?= t('admin.maps.th.zone') ?></th>
+                            <th><?= t('admin.maps.th.detail') ?></th>
+                            <th><?= t('admin.maps.th.status') ?></th>
+                            <th><?= t('admin.maps.th.size') ?></th>
+                            <th><?= t('admin.maps.th.speed') ?></th>
+                            <th><?= t('admin.maps.th.eta') ?></th>
+                            <th><?= t('admin.maps.th.via') ?></th>
+                            <th></th>
+                        </tr>
+                        </thead>
+                        <tbody id="maps-tbody">
+                        <?php foreach ($map_zones as $mz): ?>
+                        <tr data-id="<?= (int)$mz['id'] ?>">
+                            <td class="px-url"><?= htmlspecialchars((string)$mz['name'], ENT_QUOTES, 'UTF-8') ?></td>
+                            <td>z<?= (int)$mz['maxzoom'] ?></td>
+                            <td class="mz-status"><?= htmlspecialchars(t('admin.maps.status.' . $mz['status']), ENT_QUOTES, 'UTF-8') ?></td>
+                            <td class="mz-size"></td>
+                            <td class="mz-speed"></td>
+                            <td class="mz-eta"></td>
+                            <td><?= ((int)$mz['via_proxy'] === 1) ? t('admin.maps.via.proxy') : t('admin.maps.via.direct') ?></td>
+                            <td class="px-actions"></td>
+                        </tr>
+                        <?php endforeach; ?>
+                        </tbody>
+                    </table>
+
+                    <div class="form-group" style="margin-top:18px">
+                        <div class="field-label"><?= t('admin.maps.add_title') ?></div>
+                        <div class="maps-add-grid">
+                            <label><?= htmlspecialchars(t('admin.maps.name_label'), ENT_QUOTES, 'UTF-8') ?>
+                                <input type="text" id="mz-name" maxlength="64" autocomplete="off"></label>
+                            <label><?= htmlspecialchars(t('admin.maps.west_label'), ENT_QUOTES, 'UTF-8') ?>
+                                <input type="text" id="mz-min-lon" inputmode="decimal" autocomplete="off" placeholder="20.85"></label>
+                            <label><?= htmlspecialchars(t('admin.maps.south_label'), ENT_QUOTES, 'UTF-8') ?>
+                                <input type="text" id="mz-min-lat" inputmode="decimal" autocomplete="off" placeholder="52.05"></label>
+                            <label><?= htmlspecialchars(t('admin.maps.east_label'), ENT_QUOTES, 'UTF-8') ?>
+                                <input type="text" id="mz-max-lon" inputmode="decimal" autocomplete="off" placeholder="21.30"></label>
+                            <label><?= htmlspecialchars(t('admin.maps.north_label'), ENT_QUOTES, 'UTF-8') ?>
+                                <input type="text" id="mz-max-lat" inputmode="decimal" autocomplete="off" placeholder="52.40"></label>
+                            <label><?= htmlspecialchars(t('admin.maps.maxzoom_label'), ENT_QUOTES, 'UTF-8') ?>
+                                <select id="mz-maxzoom">
+                                    <option value="14"><?= t('admin.maps.z14') ?></option>
+                                    <option value="15"><?= t('admin.maps.z15') ?></option>
+                                </select></label>
+                        </div>
+                        <fieldset class="maps-route">
+                            <legend><?= t('admin.maps.route_legend') ?></legend>
+                            <label><input type="radio" name="mz-via" value="1" <?= osm_proxy_enabled() ? 'checked' : '' ?>>
+                                <?= htmlspecialchars(t('admin.maps.via_proxy_yes'), ENT_QUOTES, 'UTF-8') ?></label>
+                            <label><input type="radio" name="mz-via" value="0" <?= osm_proxy_enabled() ? '' : 'checked' ?>>
+                                <?= htmlspecialchars(t('admin.maps.via_proxy_no'), ENT_QUOTES, 'UTF-8') ?></label>
+                        </fieldset>
+                        <button type="button" id="mz-add" class="action-btn"><?= t('admin.maps.queue_button') ?></button>
+                    </div>
+                </div>
+
             </div>
         </div>
 
@@ -353,6 +424,21 @@ function s_label(array $s, string $key): string {
         'px_none_working'   => t('admin.proxies.js.none_working'),
         'log_verify_ok'     => t('admin.settings.log_verify_ok'),
         'log_verify_fail'   => t('admin.settings.log_verify_fail'),
+        'mz_queued_kicked'  => t('admin.maps.queued_kicked'),
+        'mz_queued_cron'    => t('admin.maps.queued_cron'),
+        'mz_confirm_delete' => t('admin.maps.confirm_delete'),
+        'mz_request_failed' => t('admin.maps.js.request_failed'),
+        'mz_retry'          => t('admin.maps.retry_button'),
+        'mz_delete'         => t('admin.maps.delete_button'),
+        'mz_no_zones'       => t('admin.maps.no_zones_yet'),
+        'mz_disk_free'      => t('admin.maps.disk_free'),
+        'mz_s_queued'      => t('admin.maps.status.queued'),
+        'mz_s_sizing'      => t('admin.maps.status.sizing'),
+        'mz_s_downloading' => t('admin.maps.status.downloading'),
+        'mz_s_ready'       => t('admin.maps.status.ready'),
+        'mz_s_failed'      => t('admin.maps.status.failed'),
+        'mz_via_proxy'  => t('admin.maps.via.proxy'),
+        'mz_via_direct' => t('admin.maps.via.direct'),
     ]) ?>;
 
     // Confirm destructive form submissions
@@ -545,6 +631,149 @@ function s_label(array $s, string $key): string {
             });
         });
     });
+    // ── Self-hosted map zones ───────────────────────────────────────────────
+    var mzTable = document.getElementById('maps-table');
+    var mzBody  = document.getElementById('maps-tbody');
+    var mzEmpty = document.getElementById('maps-empty');
+    var mzDisk  = document.getElementById('maps-disk');
+    var mzAdd   = document.getElementById('mz-add');
+
+    function mzPost(action, extra) {
+        var fd = new FormData();
+        fd.append('csrf_token', csrf);
+        fd.append('action', action);
+        if (extra) Object.keys(extra).forEach(function (k) { fd.append(k, extra[k]); });
+        return fetch('/admin/maps_action.php', { method: 'POST', body: fd })
+            .then(function (r) { return r.json().then(function (j) { if (j.csrf) csrf = j.csrf; return { ok: r.ok, j: j }; }); })
+            .catch(function () { return { ok: false, j: { error: I.mz_request_failed } }; });
+    }
+
+    function mzFmtBytes(n) {
+        if (n === null || n === undefined) return '—';
+        if (n < 1024) return n + ' B';
+        var units = ['KiB', 'MiB', 'GiB', 'TiB'];
+        var e = Math.min(4, Math.floor(Math.log(n) / Math.log(1024)));
+        return (n / Math.pow(1024, e)).toFixed(1) + ' ' + units[e - 1];
+    }
+
+    function mzFmtDur(s) {
+        if (s === null || s === undefined) return '—';
+        s = Math.max(0, Math.round(s));
+        var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+        if (h > 0) return h + 'h' + String(m).padStart(2, '0') + 'm';
+        if (m > 0) return m + 'm' + String(s % 60).padStart(2, '0') + 's';
+        return s + 's';
+    }
+
+    function mzStatusLabel(st) {
+        return { queued: I.mz_s_queued, sizing: I.mz_s_sizing,
+                 downloading: I.mz_s_downloading, ready: I.mz_s_ready,
+                 failed: I.mz_s_failed }[st] || st;
+    }
+
+    function mzRender(zones, diskFree) {
+        if (mzDisk) mzDisk.textContent = I.mz_disk_free.replace('{x}', mzFmtBytes(diskFree));
+        if (!mzBody) return;
+        mzBody.innerHTML = '';
+        var active = false;
+        zones.forEach(function (z) {
+            if (z.status === 'queued' || z.status === 'sizing' || z.status === 'downloading') active = true;
+            var tr = document.createElement('tr');
+            tr.dataset.id = z.id;
+            var size, speed, eta, actions;
+            if (z.status === 'ready' && z.bytes_expected !== null) {
+                size = mzFmtBytes(z.bytes_done || z.bytes_expected);
+            } else if (z.bytes_expected !== null) {
+                var pct = Math.floor(100 * z.bytes_done / Math.max(1, z.bytes_expected));
+                size = mzFmtBytes(z.bytes_done) + ' / ' + mzFmtBytes(z.bytes_expected) + ' (' + pct + '%)';
+            } else {
+                size = z.status === 'sizing' ? I.mz_s_sizing : '—';
+            }
+            speed = z.speed_bps !== null ? mzFmtBytes(z.speed_bps) + '/s' : '—';
+            eta = z.eta_secs !== null ? mzFmtDur(z.eta_secs) : '—';
+            var status = mzStatusLabel(z.status);
+            if (z.status === 'failed' && z.error) status += ' — ' + z.error;
+            actions = z.status === 'failed'
+                ? '<button type="button" class="action-btn mz-retry">' + I.mz_retry + '</button> '
+                : '';
+            actions += '<button type="button" class="action-btn action-btn--danger mz-del">' + I.mz_delete + '</button>';
+            tr.innerHTML = '<td class="px-url"></td><td>z' + z.maxzoom + '</td>'
+                + '<td class="mz-status"></td><td class="mz-size"></td>'
+                + '<td class="mz-speed"></td><td class="mz-eta"></td>'
+                + '<td>' + (z.via_proxy ? I.mz_via_proxy : I.mz_via_direct) + '</td>'
+                + '<td class="px-actions">' + actions + '</td>';
+            tr.children[0].textContent = z.name;
+            tr.children[2].textContent = status;
+            tr.children[3].textContent = size;
+            tr.children[4].textContent = speed;
+            tr.children[5].textContent = eta;
+            mzBody.appendChild(tr);
+        });
+        if (mzTable) mzTable.hidden = zones.length === 0;
+        if (mzEmpty) mzEmpty.hidden = zones.length !== 0;
+        return active;
+    }
+
+    function mzPoll() {
+        mzPost('status').then(function (res) {
+            if (!(res.ok && res.j.ok)) return;
+            if (!mzRender(res.j.zones, res.j.disk_free)) {
+                clearInterval(mzTimer);
+                mzTimer = null;
+            }
+        });
+    }
+    var mzTimer = null;
+
+    if (mzBody) {
+        // Row buttons are re-rendered by the poll — delegate once.
+        mzBody.addEventListener('click', function (e) {
+            var btn = e.target.closest('button');
+            if (!btn) return;
+            var tr = btn.closest('tr');
+            if (btn.classList.contains('mz-del')) {
+                if (!window.confirm(I.mz_confirm_delete)) return;
+                btn.disabled = true;
+                mzPost('delete', { id: tr.dataset.id }).then(function (res) {
+                    if (res.ok && res.j.ok) { tr.remove(); mzPoll(); }
+                    else { btn.disabled = false; showPopup(res.j.error || I.save_error, true); }
+                });
+            } else if (btn.classList.contains('mz-retry')) {
+                btn.disabled = true;
+                mzPost('retry', { id: tr.dataset.id }).then(function (res) {
+                    if (res.ok && res.j.ok) { mzPoll(); }
+                    else { btn.disabled = false; showPopup(res.j.error || I.save_error, true); }
+                });
+            }
+        });
+        // Start live for the server-rendered rows; keep polling while active.
+        mzPoll();
+        if (!mzTimer) mzTimer = setInterval(function () { if (!mzTimer) return; mzPoll(); }, 3000);
+    }
+
+    if (mzAdd) {
+        mzAdd.addEventListener('click', function () {
+            var via = document.querySelector('input[name="mz-via"]:checked');
+            mzAdd.disabled = true;
+            mzPost('add', {
+                name: document.getElementById('mz-name').value,
+                min_lon: document.getElementById('mz-min-lon').value,
+                min_lat: document.getElementById('mz-min-lat').value,
+                max_lon: document.getElementById('mz-max-lon').value,
+                max_lat: document.getElementById('mz-max-lat').value,
+                maxzoom: document.getElementById('mz-maxzoom').value,
+                via_proxy: via ? via.value : '1',
+            }).then(function (res) {
+                mzAdd.disabled = false;
+                if (res.ok && res.j.ok) {
+                    showPopup(res.j.kicked ? I.mz_queued_kicked : I.mz_queued_cron, false);
+                    setTimeout(function () { location.reload(); }, 1200);
+                } else {
+                    showPopup(res.j.error || I.save_error, true);
+                }
+            });
+        });
+    }
     // ── Log integrity verification ─────────────────────────────────────────────
     var vBtn    = document.getElementById('verify-log-btn');
     var vResult = document.getElementById('verify-log-result');

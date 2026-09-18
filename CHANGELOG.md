@@ -14,6 +14,13 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   CSP gains `worker-src 'self' blob:` (both profiles) for MapLibre's WebGL
   workers. Pinned by `MapsTest` + a `maps-selfhosted` Playwright spec that
   renders a committed Warsaw fixture with zero third-party requests.
+- Self-hosted maps, Phase 2 (zone downloads): `map_zones` manifest,
+  `pmtiles` CLI auto-fetch (pinned v1.31.2, TOFU hash pin), `cron/maps_sync.php`
+  worker (system cron + detached kick, one-at-a-time lock), exact dry-run
+  sizing with disk-budget enforcement, live speed/ETA progress, per-download
+  proxy consent (fail-closed), Settings → Maps zone manager with polling,
+  and a `maps-zones` Playwright spec for the hermetic UI paths. Page visits
+  never download — the hourly steward only fails stalled jobs.
 - Single active session per account: a login elsewhere supersedes the old
   one (`users.active_session_id`, set at every full login). The superseded
   browser is logged out to the login page with an explanatory notice

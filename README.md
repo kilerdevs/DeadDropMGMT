@@ -319,8 +319,10 @@ The PHP backend has zero dependencies — no Composer, no framework. The browser
 | [Leaflet](https://leafletjs.com/) | 1.9.4 | BSD-2-Clause | Interactive map picker (`admin/vendor/leaflet/`) |
 | [QRCode.js](https://github.com/davidshimjs/qrcodejs) (davidshimjs, based on Kazuhiko Arase's original) | — | MIT | Renders the 2FA enrollment QR code client-side (`admin/vendor/qrcode/`) |
 | [IBM Plex Mono](https://github.com/IBM/plex) | v20, latin + latin-ext subsets only | SIL OFL 1.1 | The site's monospace font (`fonts/ibm-plex-mono/`, ~56 KB for all 4 files) |
+| [MapLibre GL JS](https://maplibre.org/) | 5.13.0 | BSD-3-Clause | Vector renderer for the self-hosted map provider (`maplibre/`) |
+| [PMTiles JS client](https://github.com/protomaps/pmtiles) | 4.5.0 | BSD-3-Clause | Single-file tile reader (HTTP Range requests, no tile server) |
 
-All three are unmodified upstream source, committed as static files — nothing is fetched over the network to load them. Google Fonts previously served IBM Plex Mono; it's now self-hosted, subset to just the Latin ranges this UI (Polish/English) actually uses to keep it light — the cyrillic/vietnamese subsets Google's CSS also served were dropped entirely.
+All five are unmodified upstream source, committed as static files — nothing is fetched over the network to load them. Google Fonts previously served IBM Plex Mono; it's now self-hosted, subset to just the Latin ranges this UI (Polish/English) actually uses to keep it light — the cyrillic/vietnamese subsets Google's CSS also served were dropped entirely.
 
 ### Proxied server-side (admin panel only)
 
@@ -334,7 +336,17 @@ The admin map picker (`admin/new_order.php`, `admin/edit.php`) never talks to Op
 | Google Maps / Apple Maps | Public location-reveal page | Plain outbound `<a href>` links | Not a resource load at all — nothing is fetched or embedded, so there's nothing to bundle. Clicking just opens the respective site in a new tab |
 | Public proxy lists — Proxifly, monosans, TheSpeedX, roosterkid (`raw.githubusercontent.com`) | Admin → Settings → proxy pool, only when the owner clicks **Auto-discover** | Candidate anonymity-focused proxies for the optional OSM proxy routing | Live, regularly-refreshed community lists — bundling them would be stale within days. Unrated HTTP candidates are additionally vetted through a live header-echo judge so only proxies that demonstrably do not leak the server's IP are kept |
 
-These are exactly the hosts allowlisted in the public CSP (`includes/auth.php`) — nothing else can load. **Worth knowing:** the embedded map iframe sends the *customer's* IP to OSM when they view a delivered order's location — that's a request their own browser makes, and is in some tension with the "no tracking" claim shown on the public pages (that claim is about *this app* not tracking recipients, not about the third party it embeds a map from). If your threat model requires zero third-party contact even for that, the only remaining option is standing up your own tile server and pointing the public page at a self-hosted map instead of the OSM embed.
+These are exactly the hosts allowlisted in the public CSP (`includes/auth.php`) — nothing else can load. **Worth knowing:** the embedded map iframe sends the *customer's* IP to OSM when they view a delivered order's location — that's a request their own browser makes, and is in some tension with the "no tracking" claim shown on the public pages (that claim is about *this app* not tracking recipients, not about the third party it embeds a map from). If your threat model requires zero third-party contact even for that, switch the map provider to self-hosted (next section) for the admin panel; the public reveal follows in a later phase.
+
+### Self-hosted maps (opt-in, zero third-party tile contact)
+
+Settings → Maps → **Map provider**: `OpenStreetMap (online)` (default, unchanged behaviour) or `Self-hosted (offline zones)`. The self-hosted path renders same-origin PMTiles zone files with the vendored MapLibre client — the browser never contacts OSM, a font host, or a CDN (pinned by an e2e spec that aborts every non-local request and still sees a rendered map).
+
+- **Zones** are admin-drawn rectangles (name + west/south/east/north + z14 standard / z15 max detail). Each becomes one `tiles/zone_<id>.pmtiles` file carved from the daily Protomaps planet build — only the zone's bytes cross the wire, never the ~140 GB planet.
+- **Route consent per download:** proxy pool (anonymous, can be extremely slow — pool proxies are volunteer-run) or direct (fast, reveals the server IP to the tile host). Proxy mode is fail-closed: no working pool proxy means a failed job, never silent direct.
+- **Sizing before downloading:** the worker dry-runs each zone for its exact byte count and refuses zones that don't fit the free disk (512 MiB headroom always kept). Deleting a zone frees its disk immediately; the worker measures, downloads with live speed/ETA, verifies, and publishes atomically.
+- **Worker:** `cron/maps_sync.php` (system cron recommended, e.g. every 15 min; the Settings page kicks it detached after queueing when the platform allows). Page visits never download — extracts can't resume, so a killed request would waste the whole transfer; the hourly pseudo-cron steward only fails jobs whose worker died silently (`maps_steward_if_due()` in `index.php`).
+- The `pmtiles` CLI (pinned v1.31.2, Linux x86_64/arm64) is fetched automatically on first use (TLS + trust-on-first-use hash pin in `maps_cli_sha256`); address search still uses the proxied Nominatim path — self-hosted geocoding (100 GB+ PostGIS) is deliberately out of scope.
 
 ### Proxy auto-discovery sources (server-side, only on explicit owner action)
 

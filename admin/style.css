@@ -1547,6 +1547,50 @@ h1 {
     pointer-events:   none;
 }
 
+/* Settings → Maps: zones table + add form */
+.maps-disk {
+    font-family:    'IBM Plex Mono', monospace;
+    font-size:      11px;
+    color:          var(--text-muted);
+    letter-spacing: 0.06em;
+    margin:         8px 0 12px;
+}
+
+.maps-add-grid {
+    display:               grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap:                   10px;
+    margin-bottom:         12px;
+}
+
+.maps-add-grid label {
+    display:        flex;
+    flex-direction: column;
+    gap:            4px;
+    font-size:      11px;
+}
+
+.maps-route {
+    border:         1px solid var(--border);
+    padding:        10px 14px;
+    margin:         0 0 12px;
+    display:        flex;
+    flex-direction: column;
+    gap:            8px;
+    font-size:      12px;
+}
+
+.maps-route legend {
+    padding: 0 6px;
+    color:   var(--text-muted);
+}
+
+.maps-route label {
+    display:     flex;
+    gap:         8px;
+    align-items: baseline;
+}
+
 .map-coords {
     font-family:    'IBM Plex Mono', monospace;
     font-size:      11px;

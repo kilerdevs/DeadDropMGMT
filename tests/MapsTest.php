@@ -12,6 +12,8 @@ $prevSettings = [];
 foreach ($db->query('SELECT key_name, value FROM settings')->fetchAll() as $r) {
     $prevSettings[$r['key_name']] = $r['value'];
 }
+// The proxy-path probe below empties the shared pool — snapshot it too.
+$prevProxies = $db->query('SELECT url, source, last_status, latency_ms, last_checked FROM osm_proxies')->fetchAll();
 
 // Missing row answers the historic default (OSM path, untouched behaviour).
 $db->prepare("DELETE FROM settings WHERE key_name = 'map_provider'")->execute();
@@ -62,6 +64,174 @@ T::eq('style survives JSON round trip', $one, $rt);
 // the constants — cache-busting and notices depend on them).
 T::ok('maplibre version pinned', MAPLIBRE_VERSION !== '');
 T::ok('pmtiles js version pinned', PMTILES_JS_VERSION !== '');
+
+// ── Phase 2: bbox, progress, overlap, errors, zones, worker ────────────────
+
+[$bok, $berr] = maps_validate_bbox(20.85, 52.05, 21.30, 52.40);
+T::ok('valid bbox passes', $bok);
+T::eq('lon range code', 'code:lon_range', maps_validate_bbox(20.85, 52.05, 181.0, 52.40)[1]);
+T::eq('lat range code', 'code:lat_range', maps_validate_bbox(20.85, -86.0, 21.30, 52.40)[1]);
+T::eq('unordered code', 'code:unordered', maps_validate_bbox(21.30, 52.05, 20.85, 52.40)[1]);
+T::eq('tiny code', 'code:tiny', maps_validate_bbox(21.0, 52.0, 21.00001, 52.00001)[1]);
+
+// Real CLI lines captured in the P0 spike (units, missing groups, \r tails).
+$p0 = maps_parse_progress('fetching chunks   0% |                                   | ( 0 B/32 MB) [0s:0s]');
+T::eq('opening line parses', ['pct' => 0, 'done' => 0, 'total' => 33554432, 'speed' => 0, 'eta' => 0], $p0);
+$p1 = maps_parse_progress('fetching chunks   0% |                     | (24 kB/32 MB, 50 kB/s) [0s:10m55s]');
+T::eq('mid line parses', ['pct' => 0, 'done' => 24576, 'total' => 33554432, 'speed' => 51200, 'eta' => 655], $p1);
+$p2 = maps_parse_progress("fetching chunks   4% |x| (1.4/32 MB, 1.2 MB/s) [0s:24s]\r");
+T::eq('unitless done inherits total unit', ['pct' => 4, 'done' => 1468006, 'total' => 33554432, 'speed' => 1258291, 'eta' => 24], $p2);
+$p3 = maps_parse_progress('fetching chunks 100% |xxx| (32/32 MB, 1.1 MB/s)');
+T::eq('closing line parses without eta', ['pct' => 100, 'done' => 33554432, 'total' => 33554432, 'speed' => 1153434, 'eta' => 0], $p3);
+T::eq('non-progress line is null', null, maps_parse_progress('Completed in 43s'));
+T::eq('directory line is null', null, maps_parse_progress('extract.go:401: fetching 7 dirs'));
+
+T::eq('bytes MB', 33554432, maps_parse_bytes('32', 'MB'));
+T::eq('bytes fractional', 1468006, maps_parse_bytes('1.4', 'MB'));
+T::eq('bytes kB lowercase', 51200, maps_parse_bytes('50', 'kB'));
+T::eq('bytes unknown unit', null, maps_parse_bytes('3', 'XB'));
+T::eq('dur seconds', 24, maps_parse_dur('24s'));
+T::eq('dur minutes', 655, maps_parse_dur('10m55s'));
+T::eq('dur hours', 3723, maps_parse_dur('1h02m03s'));
+T::eq('dur zero', 0, maps_parse_dur('0s'));
+T::eq('dur garbage', 0, maps_parse_dur('soon'));
+
+$boxA = ['min_lon' => 20.0, 'min_lat' => 52.0, 'max_lon' => 22.0, 'max_lat' => 54.0];
+T::eq('identical overlap is 1', 1.0, maps_overlap_frac($boxA, $boxA));
+T::eq('disjoint overlap is 0', 0.0, maps_overlap_frac($boxA, ['min_lon' => 30.0, 'min_lat' => 52.0, 'max_lon' => 32.0, 'max_lat' => 54.0]));
+T::eq('half overlap is 0.5', 0.5, maps_overlap_frac(
+    ['min_lon' => 20.0, 'min_lat' => 52.0, 'max_lon' => 21.0, 'max_lat' => 54.0], $boxA));
+
+// Error codes render localized; details append raw (numbers/CLI tails only).
+$diskMsg = maps_zone_error_text('code:disk_short|2097152');
+T::ok('disk_short formats bytes', str_contains($diskMsg, '2 MiB') && !str_contains($diskMsg, 'code:'));
+T::ok('stalled translates', ($m = maps_zone_error_text('code:stalled')) !== '' && !str_contains($m, 'code:'));
+T::eq('free text passes through', 'boom', maps_zone_error_text('boom'));
+T::eq('empty error is empty', '', maps_zone_error_text(null));
+T::ok('sizing detail appends', str_ends_with((string)maps_zone_error_text('code:sizing_failed|exit 1'), 'exit 1'));
+
+// Zone round trip (rows cleaned below; files never created for queued rows).
+[$zid, $zerr] = maps_zone_add('P2 Test Zone', 20.85, 52.05, 21.30, 52.40, 14, false);
+T::ok('zone add queues', $zid !== null && $zid > 0);
+T::eq('bad name code', 'code:bad_name', maps_zone_add('', 20.85, 52.05, 21.30, 52.40, 14, false)[1]);
+T::eq('bad zoom code', 'code:bad_zoom', maps_zone_add('x', 20.85, 52.05, 21.30, 52.40, 13, false)[1]);
+T::eq('unordered add code', 'code:unordered', maps_zone_add('x', 21.30, 52.05, 20.85, 52.40, 14, false)[1]);
+$names = array_column(maps_zone_list(), 'name');
+T::ok('zone listed', in_array('P2 Test Zone', $names, true));
+T::eq('queued zone not ready', [], maps_ready_zones());
+$db->prepare("UPDATE map_zones SET status = 'ready' WHERE id = ?")->execute([$zid]);
+$ready = maps_ready_zones();
+T::eq('ready zone advertised', [['id' => 'zone_' . $zid, 'file' => 'zone_' . $zid . '.pmtiles']], $ready);
+$styled = maps_style($ready);
+T::ok('style carries the zone source', isset($styled['sources']['zone_' . $zid]));
+T::ok('zone delete removes the row', maps_zone_delete((int)$zid));
+T::ok('zone gone after delete', !in_array('P2 Test Zone', array_column(maps_zone_list(), 'name'), true));
+
+// Steward fails jobs whose worker died without a word.
+[$sid] = maps_zone_add('P2 Stale Zone', 20.85, 52.05, 21.30, 52.40, 14, false);
+$db->prepare("UPDATE map_zones SET status = 'downloading', updated_at = '2020-01-01 00:00:00' WHERE id = ?")->execute([$sid]);
+maps_steward();
+$stale = null;
+foreach (maps_zone_list() as $z) {
+    if ((int)$z['id'] === (int)$sid) {
+        $stale = $z;
+    }
+}
+T::eq('stale job failed', 'failed', $stale['status'] ?? null);
+T::eq('stale reason coded', 'code:stalled', $stale['error'] ?? null);
+
+// Full pipeline against a stub CLI (no network, no real binary): sizing →
+// extract with live progress → verify → atomic publish → ready.
+set_setting('maps_build_key', '20260918');
+set_setting('maps_build_at', (string)time());
+$seenEnv = null;
+maps_cli_runner(static function (array $args, ?array $env, ?callable $onChunk) use (&$seenEnv): array {
+    if ($env !== null) {
+        $seenEnv = $env; // verify passes none — only extract calls carry env
+    }
+    if ($args[0] === '--version') {
+        return [true, 'pmtiles ' . PMTILES_CLI_VERSION];
+    }
+    if ($args[0] === 'extract') {
+        if ($onChunk !== null) {
+            $onChunk("fetching chunks 100% |x| (1.0/1.0 MB, 2.0 MB/s) [1s:0s]\r");
+        }
+        $body = "Completed in 1s\nExtract transferred 1.0 MB (overfetch 0.05) for an archive size of 1.0 MB";
+        if (!in_array('--dry-run', $args, true)) {
+            file_put_contents($args[2], str_repeat('x', 1048576));
+        }
+        return [true, $body];
+    }
+    if ($args[0] === 'verify') {
+        return [true, 'Completed verify'];
+    }
+    return [false, 'stub: unknown command'];
+});
+[$pid] = maps_zone_add('P2 Pipe Zone', 20.85, 52.05, 21.30, 52.40, 14, false);
+$prow = null;
+foreach (maps_zone_list() as $z) {
+    if ((int)$z['id'] === (int)$pid) {
+        $prow = $z;
+    }
+}
+[$pok, $perr] = maps_process_one($prow);
+T::ok('stubbed pipeline succeeds: ' . $perr, $pok);
+$final = null;
+foreach (maps_zone_list() as $z) {
+    if ((int)$z['id'] === (int)$pid) {
+        $final = $z;
+    }
+}
+T::eq('pipeline ends ready', 'ready', $final['status'] ?? null);
+T::eq('sizing recorded exact bytes', 1048576, (int)($final['bytes_expected'] ?? 0));
+T::ok('published file exists', is_file(maps_tiles_dir() . '/zone_' . $pid . '.pmtiles'));
+T::eq('direct run passes no proxy env', null, $seenEnv);
+
+// Proxy path: pool proxy is exported to the CLI env, never bypassed.
+$db->prepare('INSERT INTO osm_proxies (url, source, last_status) VALUES (?, "manual", "new")')
+    ->execute(['http://127.0.0.1:9/']);
+[$qid] = maps_zone_add('P2 Proxy Zone', 20.85, 52.05, 21.30, 52.40, 14, true);
+$qrow = null;
+foreach (maps_zone_list() as $z) {
+    if ((int)$z['id'] === (int)$qid) {
+        $qrow = $z;
+    }
+}
+[$qok] = maps_process_one($qrow);
+T::ok('proxied pipeline succeeds', $qok);
+T::eq('proxy exported to CLI env', 'http://127.0.0.1:9/', $seenEnv['HTTP_PROXY'] ?? null);
+
+// Fail-closed: proxy requested, pool empty → failed, no direct attempt.
+$db->prepare('DELETE FROM osm_proxies')->execute();
+[$fid] = maps_zone_add('P2 Fail Zone', 20.85, 52.05, 21.30, 52.40, 14, true);
+$frow = null;
+foreach (maps_zone_list() as $z) {
+    if ((int)$z['id'] === (int)$fid) {
+        $frow = $z;
+    }
+}
+[$fok, $ferr] = maps_process_one($frow);
+T::ok('empty pool fails the job', !$fok && $ferr === 'code:proxy_empty');
+
+// Cleanup: rows, published files, scratch settings, stub runner.
+foreach ([$pid, $qid, $fid, $sid] as $cid) {
+    @unlink(maps_tiles_dir() . '/zone_' . $cid . '.pmtiles');
+    $db->prepare('DELETE FROM map_zones WHERE id = ?')->execute([$cid]);
+}
+maps_cli_runner(null, true);
+$db->prepare('DELETE FROM osm_proxies')->execute();
+$pxIns = $db->prepare(
+    'INSERT INTO osm_proxies (url, source, last_status, latency_ms, last_checked)
+     VALUES (?, ?, ?, ?, ?)'
+);
+foreach ($prevProxies as $px) {
+    $pxIns->execute([$px['url'], $px['source'], $px['last_status'], $px['latency_ms'], $px['last_checked']]);
+}
+foreach (['maps_build_key', 'maps_build_at'] as $k) {
+    if (!array_key_exists($k, $prevSettings)) {
+        $db->prepare('DELETE FROM settings WHERE key_name = ?')->execute([$k]);
+    }
+}
 
 // Restore every row the probes above touched so later suites inherit sanity.
 foreach ($prevSettings as $k => $v) {
