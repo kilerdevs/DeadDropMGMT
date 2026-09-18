@@ -98,24 +98,21 @@ all without the underlying data ever leaving the server in readable form.
 ### How an order travels
 
 ```mermaid
-%%{init: {"sequence": {"mirrorActors": false, "width": 110, "actorMargin": 30, "messageMargin": 28}}}%%
 sequenceDiagram
     autonumber
-    actor C as Owner /<br/>Courier
-    participant A as App
-    participant DB as Database
+    actor C as Owner / Courier
+    participant A as App + database
     actor R as Recipient
 
     C->>A: Create order<br/>(pin, photos)
-    A->>DB: Store encrypted<br/>location + hash
-    A-->>C: Passphrase<br/>shown once
+    Note over A: Location encrypted,<br/>passphrase hashed
+    A-->>C: Passphrase shown once
     C->>A: Mark delivered<br/>(TTL starts)
     R->>A: Look up by token
     R->>A: Unlock with passphrase<br/>(CSRF + rate limits)
-    A->>DB: Verify hash,<br/>decrypt
-    A-->>R: Reveal map<br/>and photos
+    A-->>R: Reveal map and photos<br/>(decrypted server-side)
     R->>A: Confirm receipt
-    A->>DB: Delete order,<br/>photos, events
+    Note over A: Order, photos and<br/>events deleted
 ```
 
 ### Order lifecycle
