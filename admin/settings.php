@@ -359,6 +359,7 @@ function s_label(array $s, string $key): string {
                         </div>
                         <div id="mz-map" class="maps-editor-map"></div>
                         <div class="maps-overlap" id="mz-overlap" hidden></div>
+                        <div class="maps-overlap" id="mz-placelabel" hidden></div>
                         <fieldset class="maps-route">
                             <legend><?= t('admin.maps.route_legend') ?></legend>
                             <label><input type="radio" name="mz-via" value="1" <?= osm_proxy_enabled() ? 'checked' : '' ?>>
@@ -420,6 +421,7 @@ function s_label(array $s, string $key): string {
     </main>
 </div>
 
+<script src="/admin/pin-label.js"></script>
 <script src="/admin/vendor/leaflet/leaflet.js"></script>
 <script nonce="<?= htmlspecialchars($csp_nonce, ENT_QUOTES, 'UTF-8') ?>">
 (function () {
@@ -905,6 +907,28 @@ function s_label(array $s, string $key): string {
             mzFields.max_lon.value = d.max_lon;
             mzFields.max_lat.value = d.max_lat;
             mzRefreshOverlap();
+            mzRefreshPlace(d);
+        }
+        // Human area label for the draft ("Country, State" of its center —
+        // raw coordinates stay out of the UI by policy). Debounced: drags
+        // fire syncs continuously, the lookup only on pause.
+        var mzPlaceTimer = null;
+        var mzPlaceLabel = document.getElementById('mz-placelabel');
+        function mzRefreshPlace(d) {
+            if (!mzPlaceLabel || typeof ddmgmtPinLabel !== 'function') return;
+            if (mzPlaceTimer) clearTimeout(mzPlaceTimer);
+            mzPlaceTimer = setTimeout(function () {
+                ddmgmtPinLabel((d.min_lat + d.max_lat) / 2, (d.min_lon + d.max_lon) / 2)
+                    .then(function (res) {
+                        if (!res.current) return;
+                        if (res.label) {
+                            mzPlaceLabel.textContent = res.label;
+                            mzPlaceLabel.hidden = false;
+                        } else {
+                            mzPlaceLabel.hidden = true;
+                        }
+                    });
+            }, 400);
         }
         function mzClearHandles() {
             mzHandles.forEach(function (h) { mzMap.removeLayer(h); });
@@ -914,6 +938,7 @@ function s_label(array $s, string $key): string {
             if (mzDraft) { mzMap.removeLayer(mzDraft); mzDraft = null; }
             mzClearHandles();
             if (mzOverlap) mzOverlap.hidden = true;
+            if (mzPlaceLabel) mzPlaceLabel.hidden = true;
         }
         function mzAddHandles() {
             mzClearHandles();

@@ -20,6 +20,15 @@ async function openEditor(page) {
   // Same-origin tile proxy, but abort the upstream traffic: the editor
   // must work on an empty grid.
   await page.route('**/admin/tile_proxy.php**', (route) => route.abort());
+  // Stub the reverse-geocode place label (draft area readout): fixed Warsaw
+  // answer keeps the run hermetic while pinning the label path end to end.
+  await page.route('**/admin/geocode_proxy.php*reverse=1*', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ country: 'Poland', state: 'Masovian Voivodeship' }),
+    })
+  );
   await page.goto('/admin/settings.php');
   await expect(page.locator('#mz-map.leaflet-container')).toBeVisible({ timeout: 15000 });
 }
@@ -67,6 +76,8 @@ test('drag-draw fills the bbox inputs', async ({ browser }) => {
     expect(s).toBeLessThan(n);
     // Draft rectangle + 4 corner handles rendered.
     await expect(page.locator('#mz-map .leaflet-overlay-pane path')).not.toHaveCount(0);
+    // The draft area reads as a place, never raw coordinates.
+    await expect(page.locator('#mz-placelabel:not([hidden])')).toContainText('Poland, Masovian', { timeout: 10000 });
   } finally {
     await closePage(page);
   }

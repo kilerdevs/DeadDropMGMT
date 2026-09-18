@@ -48,6 +48,11 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   only, so no page view ever fetches the build list. Pinned by `MapsTest`
   stale/refresh arms plus a `maps-zones` Playwright test that refreshes the
   seeded zone through the real settings UI.
+- Map pin readouts show the reverse-geocoded place ("Country, State" via the
+  proxied Nominatim reverse path) instead of raw coordinates: the order
+  pickers (Leaflet + MapLibre) and the zone editor's draft label. Lat/lng
+  stay in form fields and data attributes where the code needs them, but no
+  owner-facing surface renders them anymore.
 - Single active session per account: a login elsewhere supersedes the old
   one (`users.active_session_id`, set at every full login). The superseded
   browser is logged out to the login page with an explanatory notice
@@ -80,6 +85,11 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   can't pin the first request's language.
 
 ### Fixed
+- `pmtiles` CLI version probe used a `--version` flag the real tool never
+  had (it takes a `version` subcommand), so every freshly downloaded tool
+  failed its check and all zone downloads died as `code:version_mismatch`.
+  The probe now runs `pmtiles version` (whose `pmtiles 1.31.2, commit …`
+  line still contains the pinned version); the test doubles mirror it.
 - Stale keystroke poll no longer logs freshly-logged-in admins out: the
   login form polls `check_setup.php` per keystroke, and a poll in flight
   across login's session-regenerate landed with a dead session id — a

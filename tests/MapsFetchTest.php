@@ -254,7 +254,7 @@ $runPipe = static function (string $name, callable $stub): array {
 $verStub = static fn(): array => [true, 'pmtiles ' . PMTILES_CLI_VERSION];
 
 [$ok, $err, $st] = $runPipe('P2 Arm SizFail', static function (array $a) use ($verStub): array {
-    if ($a[0] === '--version') {
+    if ($a[0] === 'version') {
         return $verStub();
     }
     return [false, 'boom'];
@@ -262,7 +262,7 @@ $verStub = static fn(): array => [true, 'pmtiles ' . PMTILES_CLI_VERSION];
 T::ok('sizing exec failure codes', !$ok && $err === 'code:sizing_failed' && $st['error'] === 'code:sizing_failed|boom');
 
 [$ok, $err, $st] = $runPipe('P2 Arm SizEmpty', static function (array $a) use ($verStub): array {
-    if ($a[0] === '--version') {
+    if ($a[0] === 'version') {
         return $verStub();
     }
     return [true, 'Completed with no size line'];
@@ -270,7 +270,7 @@ T::ok('sizing exec failure codes', !$ok && $err === 'code:sizing_failed' && $st[
 T::ok('sizing without size codes', !$ok && $err === 'code:sizing_empty');
 
 [$ok, $err] = $runPipe('P2 Arm DlFail', static function (array $a) use ($verStub): array {
-    if ($a[0] === '--version') {
+    if ($a[0] === 'version') {
         return $verStub();
     }
     if (in_array('--dry-run', $a, true)) {
@@ -281,7 +281,7 @@ T::ok('sizing without size codes', !$ok && $err === 'code:sizing_empty');
 T::ok('extract failure codes', !$ok && $err === 'code:download_failed');
 
 [$ok, $err] = $runPipe('P2 Arm VerifyFail', static function (array $a) use ($verStub): array {
-    if ($a[0] === '--version') {
+    if ($a[0] === 'version') {
         return $verStub();
     }
     if ($a[0] === 'verify') {
@@ -299,7 +299,7 @@ T::ok('verify failure codes', !$ok && $err === 'code:verify_failed');
 // real CLI would have downloaded.
 [$rid2] = maps_zone_add('P2 Arm Ready', 20.85, 52.05, 21.30, 52.40, 14, false);
 maps_cli_runner(static function (array $a, ?array $env = null, ?callable $onChunk = null) use ($verStub): array {
-    if ($a[0] === '--version') {
+    if ($a[0] === 'version') {
         return $verStub();
     }
     if ($a[0] === 'verify') {
@@ -354,7 +354,7 @@ get_db()->prepare('DELETE FROM map_zones WHERE id = ?')->execute([$fid]);
 // Sizing past every disk on earth fails before a byte is kept.
 [$did] = maps_zone_add('P2 Arm DiskShort', 20.85, 52.05, 21.30, 52.40, 14, false);
 maps_cli_runner(static function (array $a) use ($verStub): array {
-    if ($a[0] === '--version') {
+    if ($a[0] === 'version') {
         return $verStub();
     }
     return [true, 'for an archive size of 99 TB'];

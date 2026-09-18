@@ -6,8 +6,12 @@
  *
  *   data-init-lat / data-init-lng / data-init-zoom / data-has-pin ("1"/"0")
  *   data-geolocate ("1" = center on browser location when available)
- *   data-i18n-pin / data-i18n-not-found / data-i18n-error
+ *   data-i18n-pin / data-i18n-locating / data-i18n-placed
+ *   data-i18n-not-found / data-i18n-error
  *   data-i18n-load-error / data-i18n-no-zones
+ *
+ * Requires /admin/pin-label.js first: the pin readout shows the
+ * reverse-geocoded place ("Country, State"), never raw coordinates.
  *
  * Pin changes are published as a bubbling 'map-pin' CustomEvent on the
  * container (edit.php autosave listens); initial rendering never fires it.
@@ -38,7 +42,12 @@
     function setPin(lat, lng, silent) {
         latInput.value = lat.toFixed(7);
         lngInput.value = lng.toFixed(7);
-        coordsDisp.textContent = box.dataset.i18nPin + lat.toFixed(6) + ', ' + lng.toFixed(6);
+        coordsDisp.textContent = box.dataset.i18nLocating || '…';
+        if (typeof ddmgmtPinLabel === 'function') {
+            ddmgmtPinLabel(lat, lng).then(function (res) {
+                if (res.current) coordsDisp.textContent = res.label || box.dataset.i18nPlaced || '';
+            });
+        }
         if (marker) {
             marker.setLngLat([lng, lat]);
         } else {

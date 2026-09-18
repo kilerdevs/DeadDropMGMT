@@ -169,6 +169,8 @@ return [
     'admin.new_order.notes_placeholder' => 'Facultatif',
     'admin.new_order.submit_button' => 'Créer la commande',
     'admin.new_order.pin_prefix'         => 'Repère : ',
+    'admin.new_order.pin_locating'       => 'Localisation…',
+    'admin.new_order.pin_placed'         => 'Repère placé',
     'admin.new_order.geocode_not_found'  => 'Lieu introuvable.',
     'admin.new_order.geocode_error'      => 'Erreur de recherche.',
 
@@ -355,7 +357,6 @@ return [
     'admin.edit.new_pw_placeholder' => 'Nouveau mot de passe (min. 8 caractères)',
     'admin.edit.location_hint' => 'chiffré AES-256',
     'admin.edit.pin_hint'      => 'cliquez pour déplacer — vide = conserver l\'actuelle',
-    'admin.edit.current_pin'   => 'Repère actuel : {lat}, {lng}',
     'admin.edit.notes_placeholder' => 'Visible par le client après déverrouillage',
     'admin.edit.photos_count_label' => 'Photos ({n})',
     'admin.edit.photos_click_hint'  => 'cliquez pour tout voir',

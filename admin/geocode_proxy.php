@@ -6,6 +6,28 @@ require_admin();
 // Release the session lock during the proxy chain (see tile_proxy.php).
 session_write_close();
 
+// Reverse mode for pin labels: ?reverse=1&lat=..&lon=.. answers
+// {"country": .., "state": ..} ('' when Nominatim knows no name for the
+// half). The client shows the joined label and must never fall back to raw
+// coordinates — lat/lng stay out of owner-facing surfaces by policy.
+if (($_GET['reverse'] ?? '') === '1') {
+    $lat = is_numeric($_GET['lat'] ?? null) ? (float)$_GET['lat'] : null;
+    $lon = is_numeric($_GET['lon'] ?? null) ? (float)$_GET['lon'] : null;
+    $addr = ($lat === null || $lon === null) ? null : osm_reverse_lookup($lat, $lon);
+    if ($addr === null) {
+        header('Content-Type: text/plain');
+        http_response_code(502);
+        exit('reverse lookup failed');
+    }
+    osm_last_via_flush();
+    header('Content-Type: application/json');
+    echo json_encode([
+        'country' => trim((string)($addr['country'] ?? '')),
+        'state'   => trim((string)($addr['state'] ?? '')),
+    ]);
+    exit;
+}
+
 $q = trim((string)($_GET['q'] ?? ''));
 if ($q === '' || strlen($q) > 200) {
     http_response_code(400);

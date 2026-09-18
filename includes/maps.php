@@ -293,7 +293,8 @@ function maps_ensure_cli(bool $viaProxy, ?string $proxy): array {
     // probe below, so the file check is skipped in that case — hermetic
     // suites must never reach the network for a CLI download.
     if ((is_file($bin) && is_executable($bin)) || maps_cli_runner() !== null) {
-        [$ok, $out] = maps_cli_exec(['--version']);
+        // The real CLI takes a `version` subcommand (no --version flag).
+        [$ok, $out] = maps_cli_exec(['version']);
         if ($ok && str_contains($out, PMTILES_CLI_VERSION)) {
             if (!is_file($bin)) {
                 return [true, '']; // stubbed CLI under test
@@ -338,7 +339,7 @@ function maps_ensure_cli(bool $viaProxy, ?string $proxy): array {
     }
     @unlink($tmp);
     @chmod($bin, 0750);
-    [$ok, $out] = maps_cli_exec(['--version']);
+    [$ok, $out] = maps_cli_exec(['version']);
     if (!$ok || !str_contains($out, PMTILES_CLI_VERSION)) {
         return [false, 'code:version_mismatch'];
     }

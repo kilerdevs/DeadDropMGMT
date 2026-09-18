@@ -227,6 +227,63 @@ function osm_fetch(string $url, int $maxBytes = 2097152): string|false {
     return false;
 }
 
+// Reverse-geocode one point through Nominatim (same proxy routing as the
+// forward search — never direct when routing is enabled). Returns the raw
+// address array or null. Callers display osm_place_label(), never raw
+// coordinates: owner-facing surfaces hide lat/lng by policy.
+/** @return ?array<string,mixed> */
+function osm_reverse_lookup(float $lat, float $lng): ?array {
+    $url = osm_reverse_url($lat, $lng);
+    if ($url === null) {
+        return null;
+    }
+    $data = osm_fetch($url, 65536);
+    if ($data === false) {
+        return null;
+    }
+    return osm_reverse_parse($data);
+}
+
+// Decode one Nominatim reverse answer to its address array (pure half of
+// the lookup — garbage in answers null, never a partial address).
+/** @return ?array<string,mixed> */
+function osm_reverse_parse(string $data): ?array {
+    $j = json_decode($data, true);
+    if (!is_array($j)) {
+        return null;
+    }
+    $addr = $j['address'] ?? null;
+    return is_array($addr) ? $addr : null;
+}
+
+// Nominatim reverse URL for a point, or null outside geography (pure —
+// the network half of osm_reverse_lookup stays thin and untested by unit
+// suites, which must never reach tile hosts).
+function osm_reverse_url(float $lat, float $lng): ?string {
+    if (!is_finite($lat) || !is_finite($lng) || $lat < -90.0 || $lat > 90.0 || $lng < -180.0 || $lng > 180.0) {
+        return null;
+    }
+    return 'https://nominatim.openstreetmap.org/reverse?lat=' . $lat . '&lon=' . $lng . '&format=json&accept-language=en';
+}
+
+// Human label for a Nominatim address: "Country, State". Either half may be
+// absent (sea points, nameless hamlets) — what's there is what's shown.
+// Nothing known renders '' and the caller falls back to a generic
+// placed/draft text instead of coordinates.
+function osm_place_label(mixed $addr): string {
+    if (!is_array($addr)) {
+        return '';
+    }
+    $parts = [];
+    foreach (['country', 'state'] as $k) {
+        $v = trim((string)($addr[$k] ?? ''));
+        if ($v !== '') {
+            $parts[] = $v;
+        }
+    }
+    return implode(', ', $parts);
+}
+
 // Shared storage for the staged badge info of the current request.
 // func_num_args() distinguishes an explicit osm_last_via_stage(null)
 // ("consume") from a parameterless read — the previous !== null check made

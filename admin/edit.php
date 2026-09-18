@@ -347,6 +347,8 @@ $init_zoom = $has_pin ? 17 : 12;
                          data-init-zoom="<?= htmlspecialchars(json_encode($init_zoom), ENT_QUOTES, 'UTF-8') ?>"
                          data-has-pin="<?= $has_pin ? '1' : '0' ?>" data-geolocate="0"
                          data-i18n-pin="<?= htmlspecialchars(t('admin.new_order.pin_prefix'), ENT_QUOTES, 'UTF-8') ?>"
+                         data-i18n-locating="<?= htmlspecialchars(t('admin.new_order.pin_locating'), ENT_QUOTES, 'UTF-8') ?>"
+                         data-i18n-placed="<?= htmlspecialchars(t('admin.new_order.pin_placed'), ENT_QUOTES, 'UTF-8') ?>"
                          data-i18n-not-found="<?= htmlspecialchars(t('admin.new_order.geocode_not_found'), ENT_QUOTES, 'UTF-8') ?>"
                          data-i18n-error="<?= htmlspecialchars(t('admin.new_order.geocode_error'), ENT_QUOTES, 'UTF-8') ?>"
                          data-i18n-load-error="<?= htmlspecialchars(t('admin.maps.load_error'), ENT_QUOTES, 'UTF-8') ?>"
@@ -354,7 +356,7 @@ $init_zoom = $has_pin ? 17 : 12;
                     <div class="map-coords" id="coords-display">
                         <?= htmlspecialchars(
                             $has_pin
-                                ? t('admin.edit.current_pin', ['lat' => number_format((float)$loc['lat'], 6), 'lng' => number_format((float)$loc['lng'], 6)])
+                                ? t('admin.new_order.pin_locating')
                                 : t('admin.new_order.no_pin'),
                             ENT_QUOTES,
                             'UTF-8'
@@ -493,9 +495,11 @@ $init_zoom = $has_pin ? 17 : 12;
 <?php if (map_provider() === MAP_PROVIDER_SELFHOSTED): ?>
 <script src="/maplibre/maplibre-gl.js"></script>
 <script src="/maplibre/pmtiles.js"></script>
+<script src="/admin/pin-label.js"></script>
 <script src="/admin/maplibre-picker.js"></script>
 <?php else: ?>
 <script src="/admin/vendor/leaflet/leaflet.js"></script>
+<script src="/admin/pin-label.js"></script>
 <?php endif; ?>
 <script src="/admin/admin.js"></script>
 <script nonce="<?= htmlspecialchars($csp_nonce, ENT_QUOTES, 'UTF-8') ?>">
@@ -608,7 +612,18 @@ $init_zoom = $has_pin ? 17 : 12;
     function setPin(lat, lng) {
         latInput.value = lat.toFixed(7);
         lngInput.value = lng.toFixed(7);
-        coordsDisp.textContent = <?= json_encode(t('admin.new_order.pin_prefix')) ?> + lat.toFixed(6) + ', ' + lng.toFixed(6);
+        // Raw coordinates stay out of the UI by policy — the readout shows
+        // the reverse-geocoded place, with a generic fallback when unknown.
+        var locating = <?= json_encode(t('admin.new_order.pin_locating')) ?>;
+        var placed = <?= json_encode(t('admin.new_order.pin_placed')) ?>;
+        coordsDisp.textContent = locating;
+        if (typeof ddmgmtPinLabel === 'function') {
+            ddmgmtPinLabel(lat, lng).then(function (res) {
+                if (res.current) coordsDisp.textContent = res.label || placed;
+            });
+        } else {
+            coordsDisp.textContent = placed;
+        }
         if (mapReady) scheduleSave(500);
         if (marker) {
             marker.setLatLng([lat, lng]);

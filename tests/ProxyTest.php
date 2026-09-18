@@ -81,4 +81,48 @@ T::eq('mixed pool: all three survive with positive verdicts', 3, count($kept));
 $kept = proxy_filter_anonymity($working, $cands, '203.0.113.9', []);
 T::eq('mixed pool: only rated + https survive without verdicts', 2, count($kept));
 
+// ── Reverse-geocode place labels (lat/lng hidden from owners by policy) ───
+T::eq('country + state join', 'Poland, Masovian Voivodeship',
+    osm_place_label(['country' => 'Poland', 'state' => 'Masovian Voivodeship', 'city' => 'Warsaw']));
+T::eq('country alone when no state', 'Poland', osm_place_label(['country' => 'Poland']));
+T::eq('state alone when no country', 'Mazowieckie', osm_place_label(['state' => 'Mazowieckie']));
+T::eq('nothing known is empty', '', osm_place_label(['city' => 'Nowhere']));
+T::eq('non-array is empty', '', osm_place_label(null));
+T::eq('blank parts ignored', 'Poland', osm_place_label(['country' => ' Poland ', 'state' => '  ']));
+
+// Reverse URL builder (pure half of the lookup — the fetch itself must never
+// run in unit suites).
+T::eq('valid point builds the reverse URL',
+    'https://nominatim.openstreetmap.org/reverse?lat=52.2297&lon=21.0122&format=json&accept-language=en',
+    osm_reverse_url(52.2297, 21.0122));
+T::eq('latitude out of range is null', null, osm_reverse_url(91.0, 21.0));
+T::eq('longitude out of range is null', null, osm_reverse_url(52.0, 181.0));
+T::eq('non-finite is null', null, osm_reverse_url(NAN, 21.0));
+T::ok('lookup rejects geography without network', osm_reverse_lookup(91.0, 21.0) === null);
+
+// Reverse answer decoding (pure — no network in any arm).
+T::eq('parse keeps the address', ['country' => 'Poland', 'state' => 'X'],
+    osm_reverse_parse('{"address":{"country":"Poland","state":"X"}}'));
+T::eq('parse without address is null', null, osm_reverse_parse('{"error":"nope"}'));
+T::eq('parse garbage is null', null, osm_reverse_parse('not json'));
+
+// Fail-closed lookup: routing enabled with an empty pool answers null
+// without touching the network (covers the fetch-failed arm). Pool and
+// setting restored below — later suites inherit sanity.
+$db = get_db();
+$prevProxies = $db->query('SELECT url, source, last_status, latency_ms, last_checked FROM osm_proxies')->fetchAll();
+$prevRouting = get_setting('osm_proxy_enabled', '0');
+set_setting('osm_proxy_enabled', '1');
+$db->prepare('DELETE FROM osm_proxies')->execute();
+T::ok('lookup fails closed on empty pool', osm_reverse_lookup(52.2297, 21.0122) === null);
+$db->prepare('DELETE FROM osm_proxies')->execute();
+$pxIns = $db->prepare(
+    'INSERT INTO osm_proxies (url, source, last_status, latency_ms, last_checked)
+     VALUES (?, ?, ?, ?, ?)'
+);
+foreach ($prevProxies as $px) {
+    $pxIns->execute([$px['url'], $px['source'], $px['last_status'], $px['latency_ms'], $px['last_checked']]);
+}
+set_setting('osm_proxy_enabled', $prevRouting);
+
 exit(T::done());

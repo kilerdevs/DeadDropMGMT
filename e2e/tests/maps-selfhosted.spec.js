@@ -101,6 +101,11 @@ test('selfhosted provider renders the fixture map with zero external requests', 
       if (url.pathname === '/tiles/style.php') {
         return route.fulfill({ json: stubStyle() });
       }
+      // Reverse-geocode pin label: fixed Warsaw answer, still proving the
+      // readout path (raw coordinates never reach the UI).
+      if (url.pathname === '/admin/geocode_proxy.php') {
+        return route.fulfill({ json: { country: 'Poland', state: 'Masovian Voivodeship' } });
+      }
       return route.continue();
     });
 
@@ -116,10 +121,11 @@ test('selfhosted provider renders the fixture map with zero external requests', 
     await expect(page.locator('#map-picker canvas')).toBeVisible({ timeout: 20000 });
     expect(ranges).toBeGreaterThan(0);
 
-    // Click-to-pin fills the coordinate inputs (same contract as Leaflet).
+    // Click-to-pin fills the coordinate inputs (same contract as Leaflet)
+    // while the readout shows the place, never raw coordinates.
     await page.locator('#map-picker').click({ position: { x: 200, y: 150 } });
     await expect(page.locator('#lat')).not.toHaveValue('', { timeout: 5000 });
-    await expect(page.locator('#coords-display')).toContainText('Pin:');
+    await expect(page.locator('#coords-display')).toContainText('Poland, Masovian', { timeout: 10000 });
 
     // Nothing ever left the origin: no tile server, no font host, no CDN.
     expect(external).toBe(0);

@@ -190,7 +190,7 @@ maps_cli_runner(static function (array $args, ?array $env, ?callable $onChunk) u
     if ($env !== null) {
         $seenEnv = $env; // verify passes none — only extract calls carry env
     }
-    if ($args[0] === '--version') {
+    if ($args[0] === 'version') {
         return [true, 'pmtiles ' . PMTILES_CLI_VERSION];
     }
     if ($args[0] === 'extract') {
