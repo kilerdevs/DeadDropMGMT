@@ -32,7 +32,7 @@ $null   = DIRECTORY_SEPARATOR === '\\' ? 'NUL' : '/dev/null';
 // script) is the only clue when it does not come up, so keep it.
 $errLog = tempnam(sys_get_temp_dir(), 'ddsp');
 $proc = proc_open($cmd, [['pipe', 'r'], ['file', $null, 'w'], ['file', $errLog, 'w']], $p);
-register_shutdown_function(function () use ($proc): void {
+register_shutdown_function(function () use ($proc, $errLog): void {
     $st = proc_get_status($proc);
     if (!empty($st['running'])) {
         if (DIRECTORY_SEPARATOR === '\\') {
