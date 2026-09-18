@@ -72,10 +72,15 @@ test('language switch and logout survive a stale page token', async ({ browser }
     await expect(page).toHaveURL(/admin\/orders\.php/);
     await page.goto('/admin/settings.php');
 
-    // Burn the token this page was rendered with: one verified request from the page.
+    // Burn the token this page was rendered with: one verified request from the
+    // page. The live token comes from the server (the page's own zones poll may
+    // already have rotated the rendered one, which would make this a 403 and
+    // the test about something else) — verifying it rotates it again, so every
+    // copy rendered into the page is stale afterwards, whatever ran before.
     const burn = () => page.evaluate(async () => {
+      const live = await (await fetch('/admin/csrf_token.php', { credentials: 'same-origin' })).json();
       const fd = new FormData();
-      fd.append('csrf_token', document.querySelector('meta[name="csrf-token"]').content);
+      fd.append('csrf_token', live.csrf);
       fd.append('action', 'status');
       const r = await fetch('/admin/maps_action.php', { method: 'POST', body: fd });
       return r.ok;
