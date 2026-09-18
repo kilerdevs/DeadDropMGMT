@@ -241,8 +241,8 @@ DB password, port, AES key.
 
 > [!NOTE]
 > `data/` and `tiles/` (self-hosted map zone files) are **not** volumes: they live in the container layer and are wiped by
-> a rebuild or recreate. The zone list survives in the database, but the files must be downloaded again (**Refresh** in
-> Settings → Maps).
+> a rebuild or recreate. The zone list survives in the database, but the files must be downloaded again (delete the zone in
+> Settings → Maps and draw it again).
 
 The Docker image also runs `cron/cleanup.php` every 15 minutes in the background and warns at boot when the published
 default DB password is still in use. TLS is never terminated by the app — put certbot, a load balancer or
@@ -781,21 +781,21 @@ DeadDropMGMT/
 ├── docker/                   Apache/nginx/Caddy front configs, entrypoint,
 │                             php.ini overrides, e2e journey
 ├── docs/                     ADRs + troubleshooting guide
-├── .github/                  CI + SAST workflows, Dependabot
+├── .github/                  CI + SAST workflows, Dependabot, issue forms, PR template
 │
 ├── Dockerfile, Dockerfile.fpm
 ├── docker-compose.yml, docker-compose.nginx.yml, docker-compose.caddy.yml
 ├── composer.json, package.json, playwright.config.js, phpstan.neon
 │                             Dev tooling only — the app has no runtime dependencies
-└── CHANGELOG.md, CONTRIBUTING.md, SECURITY.md, THIRD-PARTY-NOTICES.md,
-    TOTP-APPS.md, LICENSE
+└── CHANGELOG.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md, SECURITY.md,
+    THIRD-PARTY-NOTICES.md, TOTP-APPS.md, LICENSE
 ```
 
 ---
 
 ## Contributing
 
-Bug fixes, security hardening, and documentation improvements are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for coding conventions, how to submit changes, and — importantly — how to report a security vulnerability privately rather than through a public issue. The vulnerability policy lives in [SECURITY.md](SECURITY.md); design rationale in [docs/ADR.md](docs/ADR.md); release notes in [CHANGELOG.md](CHANGELOG.md).
+Bug fixes, security hardening, and documentation improvements are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for coding conventions, how to submit changes, and — importantly — how to report a security vulnerability privately rather than through a public issue. Please follow the [Code of Conduct](CODE_OF_CONDUCT.md); the issue forms and the pull request template guide you through the rest. The vulnerability policy lives in [SECURITY.md](SECURITY.md); design rationale in [docs/ADR.md](docs/ADR.md); release notes in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 

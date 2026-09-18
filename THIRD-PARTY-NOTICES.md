@@ -1,10 +1,21 @@
 # Third-Party Notices
 
-DeadDropMGMT bundles the following third-party components. All of them are
-committed unmodified as static files and served from your own domain — nothing
-is fetched over the network to load them. Runtime calls to external *services*
-(OpenStreetMap tiles/Nominatim) involve no third-party code distribution and
-are documented in the README instead.
+DeadDropMGMT bundles the following third-party components, listed in the table below and detailed in the sections after
+it. The JavaScript and CSS libraries are committed as unmodified upstream files, and the map-label glyph files are
+generated from Noto Sans with MapLibre's font-maker; everything is served from your own domain — nothing is fetched over the
+network to load it. Runtime calls to external *services* (OpenStreetMap tiles and Nominatim, Protomaps planet builds,
+public proxy lists) involve no third-party code distribution and are documented in the
+[README](README.md#third-party-code--external-services) instead.
+
+| Component | Version | License | Where |
+|---|---|---|---|
+| [Leaflet](#leaflet-194) | 1.9.4 | BSD-2-Clause | `admin/vendor/leaflet/` |
+| [QRCode.js](#qrcodejs) | — | MIT | `admin/vendor/qrcode/` |
+| [IBM Plex Mono](#ibm-plex-mono-v20-latin--latin-ext-subsets) | v20 (latin, latin-ext) | SIL OFL 1.1 | `fonts/ibm-plex-mono/` |
+| [Noto Sans map-label glyphs](#noto-sans-map-label-glyphs-regular-medium-italic) | — | SIL OFL 1.1 | `fonts/glyphs/` |
+| [MapLibre GL JS](#maplibre-gl-js-5130) | 5.13.0 | BSD-3-Clause | `maplibre/` |
+| [PMTiles JS client](#pmtiles-js-client-450) | 4.5.0 | BSD-3-Clause | `maplibre/pmtiles.js` |
+| [E2E map fixture](#e2e-map-fixture-protomaps-basemap-extract) | build 20260918 | ODbL | `e2e/fixtures/` (test-only) |
 
 ---
 
@@ -14,8 +25,8 @@ are documented in the README instead.
 - **Homepage:** https://leafletjs.com/
 - **License:** BSD-2-Clause
 
-Copyright (c) 2010-2024, Vladimir Agafonkin
-Copyright (c) 2011-2019, CloudMade
+Copyright (c) 2010-2023, Vladimir Agafonkin
+Copyright (c) 2010-2011, CloudMade
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -50,7 +61,8 @@ POSSIBILITY OF SUCH DAMAGE.
 - **Note:** davidshimjs' port builds on Kazuhiko Arase's original QRCode
   generator (also MIT, https://www.d-project.com/).
 
-Copyright (c) 2012 davidshimjo
+Copyright (c) 2012 davidshimjs
+Includes QRCode for JavaScript, Copyright (c) 2009 Kazuhiko Arase
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

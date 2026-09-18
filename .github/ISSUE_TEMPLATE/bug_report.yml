@@ -1,0 +1,125 @@
+name: Bug report
+description: Something is broken or behaves unexpectedly (not a security vulnerability)
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug.
+
+        > **Found a security problem?** Do not file it here. Use
+        > [private vulnerability reporting](https://github.com/kilerdevs/DeadDropMGMT/security/advisories/new) instead.
+        >
+        > **Redact before you paste.** Never include real order tokens, pickup passphrases, drop locations, AES keys,
+        > session cookies or unredacted logs (they contain IP addresses).
+
+        The [troubleshooting guide](https://github.com/kilerdevs/DeadDropMGMT/blob/HEAD/docs/TROUBLESHOOTING.md)
+        covers many common symptoms (blank page, rate limiting, "Invalid CSRF", expired orders that linger).
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: A clear, concise description of the bug.
+      placeholder: When I click …, the page …
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The smallest sequence that triggers it. Say whether you were logged in as owner, courier or not at all.
+      placeholder: |
+        1. Go to …
+        2. Click …
+        3. See …
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What you thought would happen instead.
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: A release tag such as `v1.4.0`, or the output of `git rev-parse --short HEAD`.
+      placeholder: v1.4.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: How are you running it?
+      options:
+        - Docker — Apache (docker-compose.yml)
+        - Docker — nginx + PHP-FPM
+        - Docker — Caddy + PHP-FPM
+        - Manual install — Apache
+        - Manual install — nginx or Caddy
+        - PHP built-in server (php -S)
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: php
+    attributes:
+      label: PHP version
+      description: Output of `php -v` (Docker images ship PHP 8.5).
+      placeholder: PHP 8.5.0
+    validations:
+      required: false
+
+  - type: dropdown
+    id: database
+    attributes:
+      label: Database
+      options:
+        - MariaDB 11
+        - MariaDB 10.x
+        - MySQL 8
+        - MySQL 5.7
+        - Other
+    validations:
+      required: false
+
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and OS
+      description: Only if the problem is visual or client-side.
+      placeholder: Firefox 130 on Linux
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: |
+        From `logs/error.log`, `logs/app.log`, the browser console or `docker compose logs`. Redact IP addresses,
+        tokens and keys. This is rendered as code, no backticks needed.
+      render: text
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and the troubleshooting guide.
+          required: true
+        - label: This is not a security vulnerability (those go through private reporting).
+          required: true
+        - label: I removed real tokens, passphrases, locations, keys and IP addresses from everything I pasted.
+          required: true

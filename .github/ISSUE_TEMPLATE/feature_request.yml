@@ -1,0 +1,67 @@
+name: Feature request
+description: Suggest an improvement or a new capability
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. This project deliberately stays small and dependency-free (no framework, no runtime Composer
+        packages), so please describe the problem first — the best solution is often smaller than the first one that comes
+        to mind. Hardening proposals ("should we also rate-limit X?") are welcome here too.
+
+        > **Found a vulnerability rather than an idea?** Use
+        > [private vulnerability reporting](https://github.com/kilerdevs/DeadDropMGMT/security/advisories/new).
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Who is affected and what is hard or impossible today?
+      placeholder: As a courier I can't …
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What you would like to happen. Sketches, flows and wording are welcome.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches, or workarounds you use today.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Public recipient flow
+        - Admin panel
+        - Maps (OSM / self-hosted)
+        - Security or cryptography
+        - Docker and deployment
+        - Tests and CI
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Project fit
+      options:
+        - label: I understand that a feature needing a framework or a runtime dependency needs discussion before any code.
+          required: true
+        - label: I considered the security and privacy impact (data stored, data shown, third-party requests).
+          required: true
+        - label: I would be willing to help implement or test this.
+          required: false
