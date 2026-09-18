@@ -69,12 +69,28 @@ function i18n_public_lang_cookie(): string {
 // recipient following a stale or hand-typed link keeps their current
 // language instead of meeting an error page.
 //
+// A switch is a session write + Set-Cookie per request — the same price as
+// any page view, but a bot hammering ?lang= rotates sessions and cookie
+// headers for free. A dedicated IP budget (30 changes / 10 min) blunts
+// that; past it the switch is ignored and the page renders in the current
+// language — graceful, never an error page. The budget inherits rl_hit's
+// fail-closed verdict, which here only means "keep the current language",
+// so a limiter outage degrades to a static language, not a denial.
+// Requesting the already-effective language spends nothing, so bookmarked
+// ?lang= URLs and back-button revisits never burn budget.
+//
 // Call BEFORE the first t()/current_lang() on the page (the choice must be
 // visible to this same request) and AFTER start_secure_session() (it writes
 // the session and must emit Set-Cookie before any output).
 function i18n_handle_public_lang_param(): void {
     $raw = $_GET['lang'] ?? null;
     if (!is_string($raw) || !in_array($raw, i18n_supported_langs(), true)) {
+        return;
+    }
+    if ($raw === current_lang()) {
+        return;
+    }
+    if (rl_hit('lang_switch', 30, 600)['blocked']) {
         return;
     }
     if (session_status() === PHP_SESSION_ACTIVE) {

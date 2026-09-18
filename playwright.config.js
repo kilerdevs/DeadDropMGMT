@@ -33,6 +33,11 @@ module.exports = defineConfig({
   testDir: './e2e/tests',
   timeout: 30_000,
   retries: process.env.CI ? 1 : 0,
+  // Serial: the harness server is single-threaded `php -S`, so parallel
+  // workers only contend on its accept queue (and on shared IP budgets)
+  // without going faster — and contention there once flaked an admin
+  // session between two sequential same-context requests.
+  workers: 1,
   use: {
     baseURL: `http://127.0.0.1:${PORT}`,
     trace: 'retain-on-failure',

@@ -10,7 +10,7 @@ test('no-JS: Apply button switches language and it persists', async ({ browser }
     await page.goto('/');
     const switcher = page.locator('form.lang-switch');
     await expect(switcher).toBeVisible();
-    // The select auto-submit is gone by design — the button is the path.
+    // Without JavaScript the <noscript> Apply button is the only path.
     await switcher.locator('select#lang').selectOption('de');
     await switcher.locator('button[type="submit"]').click();
     await expect(page.locator('h1')).toHaveText('Sendung verfolgen');
@@ -27,14 +27,26 @@ test('no-JS: Apply button switches language and it persists', async ({ browser }
   }
 });
 
-test('with JS: switching works identically', async ({ browser }) => {
+test('with JS: change auto-applies, footer-placed, no button rendered', async ({ browser }) => {
   const page = await freshPage(browser);
   try {
     await page.goto('/');
     const switcher = page.locator('form.lang-switch');
+    // Footer placement: the switcher follows the trust bar in DOM order
+    // (4 = DOCUMENT_POSITION_FOLLOWING; the Node global is not reliably
+    // visible inside evaluate, so the literal is used).
+    const order = await page.evaluate(() => {
+      const trust = document.querySelector('.trust-bar');
+      const form = document.querySelector('form.lang-switch');
+      if (!trust || !form) return -1;
+      return trust.compareDocumentPosition(form);
+    });
+    expect(order & 4).toBeTruthy();
+    // No click: the debounced auto-apply submits the form itself.
     await switcher.locator('select#lang').selectOption('de');
-    await switcher.locator('button[type="submit"]').click();
     await expect(page.locator('h1')).toHaveText('Sendung verfolgen');
+    await expect(page).toHaveURL(/lang=de/);
+    expect(await switcher.locator('button[type="submit"]').count()).toBe(0);
   } finally {
     await closePage(page);
   }

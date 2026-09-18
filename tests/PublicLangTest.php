@@ -194,6 +194,37 @@ if (is_resource($proc2)) {
 @unlink($router);
 @rmdir($webDir);
 
+// ── Language-switch budget: 30 changes / 10 min per IP ───────────────────
+// Hammering ?lang= rotates sessions and cookie headers for free, so the
+// handler spends from a dedicated scope and ignores past-budget switches
+// (page renders in the current language — never an error). Runs LAST: the
+// budget is per-IP and the HTTP section above spends from the same scope,
+// so reset first for determinism and clean up after for the next suite.
+$keepGet = $_GET;
+$keepSession = $_SESSION;
+$dbPl = get_db();
+$dbPl->exec("DELETE FROM rate_limits WHERE scope = 'lang_switch'");
+$_SESSION = [];
+$codes = ['de', 'fr'];
+for ($i = 0; $i < 30; $i++) {
+    $_GET['lang'] = $codes[$i % 2];
+    i18n_handle_public_lang_param();
+}
+T::eq('30th switch still applies', 'fr', $_SESSION['public_lang'] ?? null);
+$_GET['lang'] = 'de';
+i18n_handle_public_lang_param();
+T::eq('31st switch ignored, current language kept', 'fr', $_SESSION['public_lang'] ?? null);
+$spent = (int)$dbPl->query("SELECT count FROM rate_limits WHERE scope = 'lang_switch' LIMIT 1")->fetchColumn();
+$_GET['lang'] = 'fr';
+i18n_handle_public_lang_param();
+T::eq('same-language request spends nothing and stays',
+    [$spent, 'fr'],
+    [(int)$dbPl->query("SELECT count FROM rate_limits WHERE scope = 'lang_switch' LIMIT 1")->fetchColumn(),
+     $_SESSION['public_lang'] ?? null]);
+$dbPl->exec("DELETE FROM rate_limits WHERE scope = 'lang_switch'");
+$_GET = $keepGet;
+$_SESSION = $keepSession;
+
 exit(T::done());
 
 // ── tiny HTTP helpers (multi-cookie jar, no redirects followed) ─────────────

@@ -54,6 +54,16 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   as `index.php`): forged floods no longer burn the victim's IP budget.
   Covered by a no-spend probe in `PublicFlowTest`.
 
+### Changed
+- Public language switcher restyled and relocated: a quiet footer row under
+  the trust bar instead of a header control (plus `color-scheme: dark`, which
+  is what actually keeps the native select out of the OS light theme). With
+  JavaScript the choice auto-applies 500 ms after the last change
+  (debounced, CSP-clean via `public.js`); without it a `<noscript>` Apply
+  button remains the path. Switches spend from a dedicated IP budget
+  (30 / 10 min, same-language requests free) — past it the switch is ignored
+  and the page renders in the current language, never an error.
+
 ## [1.4.0] - 2026-09-17
 
 ### Changed

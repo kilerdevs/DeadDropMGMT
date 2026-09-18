@@ -37,11 +37,14 @@ test('login, edit order, CSP-proof extend form, logout', async ({ browser }) => 
     // no other spec touches it): only delivered orders render extend forms.
     await page.locator('tr', { hasText: 'E2EADMDELIV00001' }).locator('a.action-btn').click();
     await expect(page).toHaveURL(/admin\/edit\.php/);
+    // The right order, then the form: the token pin catches a wrong-row
+    // click, the retrying visibility absorbs loaded-server slowness.
+    await expect(page.locator('span.token').first()).toContainText('E2EADMDELIV00001');
     // CSP-proof extend path: real POST forms (one per action on the page),
     // zero inline handlers anywhere.
     const extend = page.locator('form.extend-form');
-    expect(await extend.count()).toBeGreaterThan(0);
     await expect(extend.first()).toBeVisible();
+    expect(await extend.count()).toBeGreaterThan(0);
     expect(await page.locator('[onclick]').count()).toBe(0);
 
     const logout = page.locator('form[action="/admin/logout.php"]');

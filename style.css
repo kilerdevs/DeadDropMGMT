@@ -33,6 +33,10 @@
 }
 
 :root {
+    /* Without this the UA paints native controls (select button + dropdown,
+       scrollbar) in the OS light theme even on a dark page — the white
+       language select in the wild came from exactly this omission. */
+    color-scheme:   dark;
     --bg:         #0a0a0a;
     --surface:    #111111;
     --border:     #222222;
@@ -76,28 +80,59 @@ main { width: 100%; max-width: 500px; }
     margin-bottom:  28px;
 }
 
-/* ── Public language switcher ──────────────────────────────────────────── */
+/* ── Public language switcher (page footer) ──────────────────────────────
+   A quiet footer row, not a header control: dimmed mono micro-label with a
+   borderless select that brightens on hover/focus. With JavaScript the form
+   auto-applies (public.js, debounced) and the <noscript> Apply button never
+   renders; without it the button is the path. */
 
 .lang-switch {
     display:         flex;
     align-items:     center;
-    justify-content: flex-end;
-    gap:             8px;
-    margin-bottom:   18px;
+    justify-content: center;
+    gap:             10px;
+    margin-top:     22px;
     font-family:     'IBM Plex Mono', monospace;
-    font-size:       11px;
-    letter-spacing:  0.05em;
+    font-size:       10px;
+    letter-spacing:  0.14em;
+    text-transform:  uppercase;
     color:           var(--text-muted);
 }
 
 .lang-switch select {
-    background:   var(--surface);
+    appearance:     none;
+    -webkit-appearance: none;
+    background:     transparent;
+    color:          var(--text-muted);
+    border:         1px solid var(--border);
+    border-radius:  4px;
+    padding:        5px 26px 5px 10px;
+    font:           inherit;
+    letter-spacing: inherit;
+    text-transform: inherit;
+    cursor:         pointer;
+    background-image:
+        linear-gradient(45deg, transparent 50%, var(--text-muted) 50%),
+        linear-gradient(135deg, var(--text-muted) 50%, transparent 50%);
+    background-position:
+        calc(100% - 14px) center,
+        calc(100% - 10px) center;
+    background-size: 4px 4px;
+    background-repeat: no-repeat;
+    transition:     color 150ms ease, border-color 150ms ease;
+}
+
+.lang-switch select:hover,
+.lang-switch select:focus-visible {
     color:        var(--text);
-    border:       1px solid var(--border);
-    border-radius: 4px;
-    padding:      4px 6px;
-    font:         inherit;
-    cursor:       pointer;
+    border-color: var(--text-muted);
+    outline:      none;
+}
+
+.lang-switch select option {
+    background:     var(--surface);
+    color:          var(--text);
+    text-transform: none;
 }
 
 .btn-lang { padding: 4px 10px; font-size: 11px; }

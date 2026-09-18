@@ -251,31 +251,6 @@ $csrf_public = generate_csrf();
 </head>
 <body>
 <main>
-    <?php if ($loc_data === null && !$correct_preparing): ?>
-    <!-- No inline event handlers anywhere on this page: the public CSP is
-         script-src 'self' + nonce, which never authorizes on* attributes —
-         an onchange here would be dead in every modern browser. The plain
-         submit button works with and without JavaScript alike.
-         Hidden while a reveal (or preparing card) is on screen: that state
-         is single-use session data a fresh GET would consume and destroy,
-         and the pickup password cannot be carried through a language
-         switch — so changing language mid-reveal is refused instead of
-         silently discarding the reveal. -->
-    <form class="lang-switch" method="GET" action="">
-        <?php if ($prefill_token !== '' || (isset($_GET['token']) && is_string($_GET['token']))): ?>
-        <input type="hidden" name="token"
-               value="<?= htmlspecialchars($prefill_token !== '' ? $prefill_token : (string)$_GET['token'], ENT_QUOTES, 'UTF-8') ?>">
-        <?php endif; ?>
-        <label for="lang"><?= t('public.lang.label') ?></label>
-        <select id="lang" name="lang">
-            <?php foreach (i18n_lang_names() as $code => $name): ?>
-            <option value="<?= htmlspecialchars($code, ENT_QUOTES, 'UTF-8') ?>"
-                <?= $code === current_lang() ? 'selected' : '' ?>><?= htmlspecialchars($name, ENT_QUOTES, 'UTF-8') ?></option>
-            <?php endforeach; ?>
-        </select>
-        <button type="submit" class="btn btn-lang"><?= t('public.lang.apply') ?></button>
-    </form>
-    <?php endif; ?>
     <div class="wordmark">DEAD DROP // <?= htmlspecialchars(site_name(), ENT_QUOTES, 'UTF-8') ?></div>
     <h1><?= t('public.index.title') ?></h1>
 
@@ -459,6 +434,32 @@ $csrf_public = generate_csrf();
         <span class="trust-text"><?= t('public.trust.no_tracking') ?></span>
     </div>
     <?php if (compliance_note_enabled()): ?><div class="compliance-note"><?= t('common.compliance_note') ?></div><?php endif; ?>
+    <?php if ($loc_data === null && !$correct_preparing): ?>
+    <!-- No inline event handlers anywhere on this page: the public CSP is
+         script-src 'self' + nonce, which never authorizes on* attributes —
+         an onchange here would be dead in every modern browser. With
+         JavaScript, public.js auto-applies 500 ms after the last change and
+         the <noscript> Apply button never renders; without it the button is
+         the only path, so it stays. Hidden while a reveal (or preparing
+         card) is on screen: that state is single-use session data a fresh
+         GET would consume and destroy, and the pickup password cannot be
+         carried through a language switch — so changing language mid-reveal
+         is refused instead of silently discarding the reveal. -->
+    <form class="lang-switch" method="GET" action="">
+        <?php if ($prefill_token !== '' || (isset($_GET['token']) && is_string($_GET['token']))): ?>
+        <input type="hidden" name="token"
+               value="<?= htmlspecialchars($prefill_token !== '' ? $prefill_token : (string)$_GET['token'], ENT_QUOTES, 'UTF-8') ?>">
+        <?php endif; ?>
+        <label for="lang"><?= t('public.lang.label') ?></label>
+        <select id="lang" name="lang" autocomplete="off">
+            <?php foreach (i18n_lang_names() as $code => $name): ?>
+            <option value="<?= htmlspecialchars($code, ENT_QUOTES, 'UTF-8') ?>"
+                <?= $code === current_lang() ? 'selected' : '' ?>><?= htmlspecialchars($name, ENT_QUOTES, 'UTF-8') ?></option>
+            <?php endforeach; ?>
+        </select>
+        <noscript><button type="submit" class="btn btn-lang"><?= t('public.lang.apply') ?></button></noscript>
+    </form>
+    <?php endif; ?>
 </main>
 <?php if ($order_expires_ts > 0 || !empty($photos)): ?>
 <script nonce="<?= htmlspecialchars($csp_nonce, ENT_QUOTES, 'UTF-8') ?>">
@@ -469,8 +470,11 @@ window.I18N = <?= json_encode([
     'gallery_next'  => t('public.gallery.next'),
 ]) ?>;
 </script>
-<script src="/public.js"></script>
 <?php endif; ?>
+<!-- Always loaded: the language auto-apply listener lives here (CSP-clean —
+     an inline onchange would be dead under script-src 'self' + nonce), and
+     every other block in the file no-ops when its element is absent. -->
+<script src="/public.js"></script>
 <?php if (!empty($photos)): ?>
 <script src="/gallery.js"></script>
 <?php endif; ?>
