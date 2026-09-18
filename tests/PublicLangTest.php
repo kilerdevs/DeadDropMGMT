@@ -37,7 +37,12 @@ $_SESSION['user_lang'] = 'pl';
 $_SESSION['public_lang'] = 'de';
 $_COOKIE[i18n_public_lang_cookie()] = 'fr';
 set_setting('default_lang', 'es');
-T::eq('account preference beats everything', 'pl', current_lang());
+// The handler above flagged this request as a public page; precedence for the
+// ADMIN area is checked on a request that is not.
+T::ok('the handler flags the request as a public page', !empty($GLOBALS['DDMGMT_PUBLIC_PAGE']));
+T::eq('on a public page the public choice beats the account language', 'de', current_lang());
+unset($GLOBALS['DDMGMT_PUBLIC_PAGE']);
+T::eq('account preference beats everything (admin area)', 'pl', current_lang());
 
 unset($_SESSION['user_lang']);
 T::eq('public session beats cookie and default', 'de', current_lang());
@@ -225,12 +230,53 @@ $dbPl->exec("DELETE FROM rate_limits WHERE scope = 'lang_switch'");
 $_GET = $keepGet;
 $_SESSION = $keepSession;
 
+// ── A logged-in admin browsing the public page ─────────────────────────────
+// The account language rules the admin area only: the public switcher (and the
+// public choice) must win on the public pages, or it does nothing for anyone
+// who has an admin session in the same browser.
+$dbA = get_db();
+$dbA->exec("DELETE FROM users WHERE username = 't_pl_admin'");
+$dbA->prepare("INSERT INTO users (username, password_hash, role, lang) VALUES ('t_pl_admin', ?, 'owner', 'pl')")
+    ->execute([password_hash('AzPass123!', PASSWORD_BCRYPT)]);
+$dbA->exec("DELETE FROM rate_limits WHERE scope LIKE 'admin_login%' OR scope = 'lang_switch'");
+[, $bLogin, $jarA] = _pl_get("$base/admin/index.php");
+preg_match('/name="csrf_token"\s*value="([0-9a-f]{64})"/', $bLogin, $mA);
+[$stLogin,,$jarA] = _pl_post("$base/admin/login.php", ['csrf_token' => $mA[1] ?? '', 'username' => 't_pl_admin', 'password' => 'AzPass123!'], $jarA);
+T::eq('admin login for the language probe', 302, $stLogin);
+[, $adm1, $jarA] = _pl_get("$base/admin/orders.php", $jarA);
+T::ok('admin area speaks the account language', str_contains($adm1, '<html lang="pl"'));
+[, $pub1, $jarA] = _pl_get("$base/?lang=de", $jarA);
+T::ok('public switcher works for a logged-in admin', str_contains($pub1, '<html lang="de"'));
+[, $pub2, $jarA] = _pl_get("$base/", $jarA);
+T::ok('the public choice sticks on the next public page', str_contains($pub2, '<html lang="de"'));
+[, $adm2] = _pl_get("$base/admin/orders.php", $jarA);
+T::ok('...and the admin area still follows the account language', str_contains($adm2, '<html lang="pl"'));
+$dbA->exec("DELETE FROM users WHERE username = 't_pl_admin'");
+$dbA->exec("DELETE FROM rate_limits WHERE scope LIKE 'admin_login%' OR scope = 'lang_switch'");
+
 exit(T::done());
 
 // ── tiny HTTP helpers (multi-cookie jar, no redirects followed) ─────────────
 
 function _pl_get(string $url, string $jar = ''): array {
     return _pl_req($url, $jar);
+}
+
+function _pl_post(string $url, array $fields, string $jar = ''): array {
+    $opts = ['http' => [
+        'method' => 'POST', 'ignore_errors' => true, 'follow_location' => 0, 'timeout' => 15,
+        'header' => "Content-Type: application/x-www-form-urlencoded\r\n" . ($jar !== '' ? "Cookie: $jar\r\n" : ''),
+        'content' => http_build_query($fields),
+    ]];
+    $body = @file_get_contents($url, false, stream_context_create($opts));
+    $status = 0;
+    $headers = function_exists('http_get_last_response_headers')
+        ? (http_get_last_response_headers() ?? [])
+        : ($http_response_header ?? []);
+    foreach ($headers as $h) {
+        if (preg_match('#^HTTP/\S+\s+(\d{3})#', $h, $m)) { $status = (int)$m[1]; }
+    }
+    return [$status, $body === false ? '' : $body, _pl_jar_merge($jar, $headers), $headers];
 }
 
 function _pl_req(string $url, string $jar): array {

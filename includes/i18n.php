@@ -39,7 +39,11 @@ function i18n_load(string $lang): array {
 // cost left is a session/cookie read plus allowlist checks.
 function current_lang(): string {
     $supported = i18n_supported_langs();
-    if (session_status() === PHP_SESSION_ACTIVE && !empty($_SESSION['user_lang'])) {
+    // An admin's account language rules the ADMIN area only. On the public
+    // pages (flagged by i18n_handle_public_lang_param) the public choice wins:
+    // an admin logged in in the same browser used to be pinned to their own
+    // language there, so the public switcher did nothing at all.
+    if (empty($GLOBALS['DDMGMT_PUBLIC_PAGE']) && session_status() === PHP_SESSION_ACTIVE && !empty($_SESSION['user_lang'])) {
         // An account preference, corrupt or not, decides for its owner: an
         // invalid stored code collapses to English (the guaranteed-complete
         // dictionary), never to a visitor-level fallback.
@@ -83,6 +87,7 @@ function i18n_public_lang_cookie(): string {
 // visible to this same request) and AFTER start_secure_session() (it writes
 // the session and must emit Set-Cookie before any output).
 function i18n_handle_public_lang_param(): void {
+    $GLOBALS['DDMGMT_PUBLIC_PAGE'] = true; // from here on this request is a public page
     $raw = $_GET['lang'] ?? null;
     if (!is_string($raw) || !in_array($raw, i18n_supported_langs(), true)) {
         return;
