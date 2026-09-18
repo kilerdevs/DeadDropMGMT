@@ -25,14 +25,14 @@ $probe = static function (string $mode, string $arg) use ($devnull): array {
 $mk = static function (string $token, string $status) use ($db): int {
     $delivered = $status === 'delivered' ? 'NOW()' : 'NULL';
     $db->prepare(
-        "INSERT INTO orders (order_token, pickup_password_hash, location_encrypted, location_iv,
+        "INSERT INTO orders (token_hmac, token_enc, token_iv, pickup_password_hash, location_encrypted, location_iv,
                              status, delivered_at, expires_at)
-         VALUES (?, 'x', 'ZQ==', 'abababababababababababab', '$status', $delivered, NOW() + INTERVAL 24 HOUR)"
-    )->execute([$token]);
+         VALUES (?, ?, ?, 'x', 'ZQ==', 'abababababababababababab', '$status', $delivered, NOW() + INTERVAL 24 HOUR)"
+    )->execute(tk($token));
     return (int)$db->lastInsertId();
 };
 $cleanup = static function (string $like) use ($db): void {
-    $db->prepare('DELETE FROM orders WHERE order_token LIKE ?')->execute([$like]);
+    purge_orders_like($db, rtrim($like, '%'));
 };
 
 // 1 ── six processes race to RECEIVE the same delivered order
@@ -75,7 +75,7 @@ T::ok('exactly one of the two transitions succeeded',
 // 4 ── cleanup after the races is idempotent
 $cleanup('srcerace000%');
 T::eq('cleanup sweeps the race leftovers', 0,
-    (int)$db->query("SELECT COUNT(*) FROM orders WHERE order_token LIKE 'srcerace%'")->fetchColumn());
+    orders_count_like($db, 'srcerace'));
 $cleanup('srcreceive%'); $cleanup('srcedeliver%');
 
 exit(T::done());

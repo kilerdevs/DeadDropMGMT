@@ -28,7 +28,7 @@ if (($_GET['reverse'] ?? '') === '1') {
     exit;
 }
 
-$q = trim((string)($_GET['q'] ?? ''));
+$q = trim(get_string('q'));
 if ($q === '' || strlen($q) > 200) {
     http_response_code(400);
     exit;

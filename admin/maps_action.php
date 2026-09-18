@@ -38,7 +38,7 @@ switch ($action) {
         $maxzoom = (int)($_POST['maxzoom'] ?? 14);
         $viaProxy = ($_POST['via_proxy'] ?? '1') === '1';
         [$id, $err] = maps_zone_add(
-            (string)($_POST['name'] ?? ''), $minLon, $minLat, $maxLon, $maxLat,
+            post_string('name'), $minLon, $minLat, $maxLon, $maxLat,
             $maxzoom, $viaProxy
         );
         if ($id === null) {

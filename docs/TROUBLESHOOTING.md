@@ -23,6 +23,8 @@ Symptom → cause → fix. For setup, see the [README](../README.md); for design
 | Panic page restarts | [Panic](#panic-page-resets-to-step-1-with-an-error) |
 | First-owner form asks for a token | [Setup token](#first-owner-form-asks-for-a-setup-token) |
 | `config.php` fatals on first login | [config.php](#fresh-configphp-fatals-on-first-login) |
+| Broken links or redirects after moving the app under a sub-path | [Sub-path install](#links-redirects-or-assets-break-under-a-sub-path) |
+| Recipients get "not found" for orders created before an upgrade | [Legacy tokens](#orders-from-before-an-upgrade-are-not-found) |
 | Sensitive paths reachable on nginx/Caddy | [Web server denies](#manual-nginxcaddy-install-serves-sensitive-paths) |
 | Self-hosted map: zones missing, stuck or failing | [Zones missing](#map-zones-vanished-after-a-rebuild) · [Zone download stuck](#a-zone-download-is-stuck-or-failed) · [CLI hash mismatch](#pmtiles-cli-hash-mismatch) |
 | Developing locally | [Local quirks](#local-development-quirks) |
@@ -44,7 +46,7 @@ chmod 750 logs uploads
 ## Rate-limited / logins rejected
 
 Several independent budgets exist: the pickup, admin-login and 2FA-code surfaces each count per IP, login and 2FA also
-count per *account*, and pickup adds a per-session failure bucket. The attempt count (3–10, default 5) and window
+count per *account*, and pickup adds a per-session failure bucket (fixed at 5 failures per window; it does not follow the attempt count). The attempt count (3–10, default 5) and window
 (5–60 min, default 15) live in **Settings → Security**; one switch turns the whole limiter on or off.
 
 Work through the usual causes:
@@ -193,6 +195,41 @@ the form has no such field and the app logs a `bootstrap_unguarded` warning.
 The `DUMMY_AUTH_HASH` / `DUMMY_TOTP_SECRET` constants are required — a `config.php` written by hand (without them) will fatal.
 Copy `config.php.example` whole instead — it also carries helpers such as `overwrite_and_unlink()`; the dummy values are
 fixed by design, not secrets.
+
+## Orders from before an upgrade are "not found"
+
+**Symptom:** after upgrading, recipients get "not found" for orders that existed before, while newly created orders work.
+`logs/app.log` carries a `legacy_order_tokens` warning from the hourly cleanup.
+
+**Cause:** order tokens are no longer stored in the clear (ADR-019). Older orders still hold theirs in the plaintext
+`order_token` column and have no index yet, so lookups cannot match them.
+
+**Fix:** back up the database, make sure the current `setup.sql` has been loaded (on Docker it is only auto-loaded on a
+database's first boot), then move the tokens across:
+
+```bash
+php tools/migrate_order_tokens.php --dry-run
+php tools/migrate_order_tokens.php
+```
+
+The tool works in one transaction and drops the plaintext columns at the end. Older dumps and backups still contain the
+tokens — delete or re-create them. If you also rotated the AES key before migrating, the tool needs the key that is
+currently deployed; `rotate_aes_key.php` refuses to run while plaintext token columns exist.
+
+---
+
+## Links, redirects or assets break under a sub-path
+
+**Symptom:** the app works at `https://drop.example.org/` but `https://example.org/drop/` shows a login that redirects to
+`/admin/…` on the wrong site, missing styles, or 404s on `/uploads/…`.
+
+**Cause:** every internal URL is root-relative (`/admin/`, `/uploads/`, `Location: /`, plus the `.htaccess` rules and the
+nginx/Caddy configs). There is no base-path setting.
+
+**Fix:** serve the app from the root of its own host — a virtual host or subdomain. On a reverse proxy, forward the whole
+host to the app; do not mount it under a prefix (with or without stripping it).
+
+---
 
 ## Manual nginx/Caddy install serves sensitive paths
 

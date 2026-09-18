@@ -18,10 +18,10 @@ if (!verify_csrf($_POST['csrf_token'] ?? '')) {
     exit;
 }
 
-$location     = trim($_POST['location']     ?? '');
-$password     = (string)($_POST['pickup_password'] ?? '');
-$notes        = trim($_POST['notes']        ?? '');
-$instructions = trim($_POST['instructions'] ?? '');
+$location     = trim(post_string('location'));
+$password     = post_string('pickup_password');
+$notes        = trim(post_string('notes'));
+$instructions = trim(post_string('instructions'));
 $raw_lat      = $_POST['lat'] ?? '';
 $raw_lng      = $_POST['lng'] ?? '';
 
@@ -76,11 +76,13 @@ try {
     $db   = get_db();
     $stmt = $db->prepare(
         'INSERT INTO orders
-         (order_token, pickup_password_hash, location_encrypted, location_iv, notes, created_by)
-         VALUES (?, ?, ?, ?, ?, ?)'
+         (token_hmac, token_enc, token_iv, pickup_password_hash, location_encrypted, location_iv, notes, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
     );
+    // The token itself is never stored: a keyed index for lookups plus an
+    // encrypted copy for the admin views (ADR-019).
     $stmt->execute([
-        $token,
+        ...array_values(token_columns($token)),
         $pw_hash,
         $enc['ciphertext'],
         $enc['iv'],

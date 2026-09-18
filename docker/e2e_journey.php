@@ -139,14 +139,16 @@ $orderPass = 'Recipient9!';
     'notes'           => 'journey test order',
     'pickup_password' => $orderPass,
 ], $ck);
-$row = get_db()->query('SELECT id, order_token, status FROM orders ORDER BY id DESC LIMIT 1')->fetch();
+$row = get_db()->query('SELECT id, token_hmac, token_enc, token_iv, status FROM orders ORDER BY id DESC LIMIT 1')->fetch();
 if (!is_array($row)) {
     // Nothing was created: every later step would only cascade into noise.
     jok(false, 'order created through the admin UI');
     echo "\nJourney FAILED: $fail assertion(s).\n";
     exit(1);
 }
-$token   = (string)$row['order_token'];
+// The database only holds the keyed index and an encrypted copy (ADR-019).
+$token   = (string)order_token_plain($row);
+jok(!in_array($token, array_map('strval', $row), true), 'the token is not stored in the clear');
 $orderId = (int)$row['id'];
 jok(strlen($token) === 16, "order created with token $token");
 
@@ -164,8 +166,8 @@ $csrf = _j_csrf($html);
     'notes'        => 'journey test order',
     'new_password' => '',
 ], $ck);
-$st = get_db()->prepare('SELECT status FROM orders WHERE order_token = ?');
-$st->execute([$token]);
+$st = get_db()->prepare('SELECT status FROM orders WHERE token_hmac = ?');
+$st->execute([token_index($token)]);
 $row = $st->fetch();
 jok(is_array($row) && $row['status'] === 'delivered', 'order delivered through the admin UI');
 
@@ -198,11 +200,11 @@ $cnt = static function (string $sql, array $args) use ($db): int {
     $st->execute($args);
     return (int)$st->fetchColumn();
 };
-jok($cnt('SELECT COUNT(*) FROM orders WHERE order_token = ?', [$token]) === 0,
+jok($cnt('SELECT COUNT(*) FROM orders WHERE token_hmac = ?', [token_index($token)]) === 0,
     'order row gone');
 jok($cnt('SELECT COUNT(*) FROM order_photos WHERE order_id = ?', [$orderId]) === 0,
     'photo rows gone');
-jok($cnt('SELECT COUNT(*) FROM order_events WHERE order_token = ?', [$token]) >= 1,
+jok($cnt('SELECT COUNT(*) FROM order_events WHERE token_hmac = ?', [token_index($token)]) >= 1,
     'event log recorded the lifecycle');
 $uploadsDir = dirname(__DIR__) . '/uploads/' . $orderId;
 jok(!is_dir($uploadsDir) || count(glob_list($uploadsDir . '/*')) === 0, 'no orphaned upload files');

@@ -53,8 +53,9 @@ $tokD2 = 'PFTOKENDELIVER02';
 $tokD3 = 'PFTOKENDELIVER03';
 $tokD4 = 'PFTOKENDELIVER04';
 $tokP  = 'PFTOKENPREPARIN2';
+$tokArr = 'PFTOKENARRAY0001';
 $pass  = 'RevealPass1!';
-foreach ([$tokD, $tokD2, $tokD3, $tokD4, $tokP] as $t) { $db->prepare('DELETE FROM orders WHERE order_token = ?')->execute([$t]); }
+purge_orders($db, [$tokD, $tokD2, $tokD3, $tokD4, $tokP, $tokArr]);
 $enc = encrypt_location_data([
     'text'         => 'PUBLICFLOWTEST skrzynka pod trzecią ławą',
     'lat'          => 52.2297,
@@ -63,14 +64,14 @@ $enc = encrypt_location_data([
 ]);
 $hash = password_hash($pass, PASSWORD_BCRYPT);
 $ins  = $db->prepare(
-    'INSERT INTO orders (order_token, pickup_password_hash, location_encrypted, location_iv, status, delivered_at, expires_at, notes)
-     VALUES (?, ?, ?, ?, ?, ?, NOW() + INTERVAL 24 HOUR, ?)'
+    'INSERT INTO orders (token_hmac, token_enc, token_iv, pickup_password_hash, location_encrypted, location_iv, status, delivered_at, expires_at, notes)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW() + INTERVAL 24 HOUR, ?)'
 );
-$ins->execute([$tokD, $hash, $enc['ciphertext'], $enc['iv'], 'delivered', date('Y-m-d H:i:s'), 'notka dla odbiorcy']);
-$ins->execute([$tokD2, $hash, $enc['ciphertext'], $enc['iv'], 'delivered', date('Y-m-d H:i:s'), '']);
-$ins->execute([$tokD3, $hash, $enc['ciphertext'], $enc['iv'], 'delivered', date('Y-m-d H:i:s'), '']);
-$ins->execute([$tokD4, $hash, $enc['ciphertext'], $enc['iv'], 'delivered', date('Y-m-d H:i:s'), '']);
-$ins->execute([$tokP, $hash, $enc['ciphertext'], $enc['iv'], 'preparing', null, '']);
+$ins->execute([...tk($tokD), $hash, $enc['ciphertext'], $enc['iv'], 'delivered', date('Y-m-d H:i:s'), 'notka dla odbiorcy']);
+$ins->execute([...tk($tokD2), $hash, $enc['ciphertext'], $enc['iv'], 'delivered', date('Y-m-d H:i:s'), '']);
+$ins->execute([...tk($tokD3), $hash, $enc['ciphertext'], $enc['iv'], 'delivered', date('Y-m-d H:i:s'), '']);
+$ins->execute([...tk($tokD4), $hash, $enc['ciphertext'], $enc['iv'], 'delivered', date('Y-m-d H:i:s'), '']);
+$ins->execute([...tk($tokP), $hash, $enc['ciphertext'], $enc['iv'], 'preparing', null, '']);
 
 set_setting('rate_limit_max', '3');
 set_setting('rate_limit_window_min', '15');
@@ -166,7 +167,7 @@ $csrf2 = $m2[1] ?? '';
 // 8. Step=2 without a valid CSRF token must NOT delete
 _pf_post("http://127.0.0.1:$port/receive.php", ['csrf_token' => str_repeat('0', 64), 'order_token' => $token, 'step' => '2'], $cookie);
 T::ok('bad CSRF blocks deletion',
-    (bool)$db->query("SELECT 1 FROM orders WHERE order_token = '$token'")->fetch());
+    order_row_exists($db, $token));
 
 // 9. Correct confirmation actually deletes the order
 [, $body] = _pf_post(
@@ -176,7 +177,7 @@ T::ok('bad CSRF blocks deletion',
 );
 T::ok('receipt confirmed (done page)', str_contains($body, 'status-badge delivered'));
 T::ok('order deleted from DB',
-    !$db->query("SELECT 1 FROM orders WHERE order_token = '$token'")->fetch());
+    !order_row_exists($db, $token));
 
 // 9b. Replaying the receipt is a safe failure — nothing resurrects, no oracle
 // (fresh budget first so the block below comes from STATE, not the limiter).
@@ -192,7 +193,7 @@ $db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
 T::ok('replayed receipt is refused',
       $stReplay === 302 || str_contains((string)$bodyReplay, 'class="alert"'));
 T::ok('replayed receipt does not resurrect the order',
-    !$db->query("SELECT 1 FROM orders WHERE order_token = '$token'")->fetch());
+    !order_row_exists($db, $token));
 
 // 9d. A session that NEVER unlocked cannot arm destruction: even posting a
 // freshly harvested (fully valid) token without the receipt capability is
@@ -210,7 +211,7 @@ T::ok('unlock form hands out a session token (test setup)', ($mN[1] ?? '') !== '
 T::ok('token-only destruction attempt fails closed (alert, no delete)',
     $stNoUnlock === 200 && str_contains((string)$bodyNoUnlock2, 'class="alert"'));
 T::ok('order survives token-only deletion attempt',
-    (bool)$db->query("SELECT 1 FROM orders WHERE order_token = '$tokD3'")->fetch());
+    order_row_exists($db, $tokD3));
 
 // 9e. THE CORE INVARIANT: even a fully valid session (own CSRF, completed
 // unlock of tokD3) may only destroy the token it unlocked. The receipt
@@ -231,10 +232,10 @@ preg_match('/name="csrf_token"\s*value="([0-9a-f]{64})"/', $bodyE, $mE);
 T::ok('capability for another token is rejected (cross-token attack)',
     str_contains((string)$bodyCross, 'class="alert"'));
 T::ok('cross-token target survives',
-    (bool)$db->query("SELECT 1 FROM orders WHERE order_token = '$tokD4'")->fetch());
+    order_row_exists($db, $tokD4));
 // The denied attempt still consumed the single-use capability:
 T::ok('order intact after denied cross-token attempt',
-    (bool)$db->query("SELECT 1 FROM orders WHERE order_token = '$tokD3'")->fetch());
+    order_row_exists($db, $tokD3));
 
 // Fresh unlock re-arms the capability: own-token receipt now completes.
 $pf_unlock($tokD3, '', $cookieE);
@@ -249,7 +250,7 @@ preg_match('/name="csrf_token"\s*value="([0-9a-f]{64})"/', $bodyOwn, $mO);
 T::ok('own-token receipt completes after re-unlock',
     str_contains((string)$bodyOwn2, 'status-badge delivered'));
 T::ok('unlocked order deleted by its own capability',
-    !$db->query("SELECT 1 FROM orders WHERE order_token = '$tokD3'")->fetch());
+    !order_row_exists($db, $tokD3));
 
 // 9c. A PREPARING order cannot be confirmed or destroyed over HTTP, even by
 // a fully valid session holding fresh tokens. CSRF rotation retires tokens
@@ -284,7 +285,7 @@ $pc2 = $pf_csrf_after_unlock($tokD4, $pass, $cookieP);
 T::ok('preparing order cannot be destroyed via step 2',
       $stPrep2 === 200 && str_contains((string)$bodyPrep2, 'class="alert"'));
 T::ok('preparing order still exists after attack',
-    (bool)$db->query("SELECT 1 FROM orders WHERE order_token = '$tokP'")->fetch());
+    order_row_exists($db, $tokP));
 
 // 10. Preparing order: correct password → "not ready yet" note, no location
 [$st, , $cookie] = $pf_unlock($tokP, $pass, $cookie);
@@ -293,15 +294,20 @@ T::eq('correct password on preparing order redirects too', 302, $st);
 T::ok('preparing order hides location', !str_contains($body, 'PUBLICFLOWTEST'));
 
 // 11. Session cookie bucket: blocks on ITS OWN budget even when the IP row is
-// clean — and does not punish a different browser behind the same IP.
-set_setting('rate_limit_max', '3');
+// clean — and does not punish a different browser behind the same IP. The
+// bucket threshold is SESSION_BUCKET_MAX, not the IP slider: with the IP max
+// raised far above it the session still stops at its own limit.
+set_setting('rate_limit_max', '50');
 $db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
 $cookieA = '';
-for ($i = 0; $i < 3; $i++) {
+for ($i = 0; $i < SESSION_BUCKET_MAX - 1; $i++) {
     [, , $cookieA] = $pf_unlock($tokP, 'nope', $cookieA);
 }
+[, $body] = $pf_unlock($tokP, 'nope', $cookieA); // the failure that fills the bucket
+T::ok('session bucket still open one failure short of its limit', !str_contains($body, 'cooldown-heading'));
 [, $body] = $pf_unlock($tokP, $pass, $cookieA);
-T::ok('session bucket blocks despite clean IP budget', str_contains($body, 'cooldown-heading'));
+T::ok('session bucket blocks despite clean IP budget and a raised IP limit', str_contains($body, 'cooldown-heading'));
+set_setting('rate_limit_max', '3');
 $db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
 $cookieFresh = '';
 [, $body] = $pf_unlock($tokP, '', $cookieFresh);
@@ -337,7 +343,7 @@ for ($i = 0; $i < 3; $i++) {
 );
 T::ok('blocked budget refuses even the destructive confirmation', str_contains($body, 'class="alert"'));
 T::ok('order survives blocked deletion attempt',
-    (bool)$db->query("SELECT 1 FROM orders WHERE order_token = '$tokD2'")->fetch());
+    order_row_exists($db, $tokD2));
 
 // 12b. Forged (tokenless) receive POSTs spend NOTHING: even a full budget
 // worth of forgeries must leave the victim's limiter untouched, and a
@@ -372,7 +378,7 @@ $db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
 $cookieR = '';
 [$stR, , $cookieR] = $pf_unlock($tokD2, $pass, $cookieR);
 T::eq('reveal-after-delete setup unlock redirects', 302, $stR);
-$db->prepare('DELETE FROM orders WHERE order_token = ?')->execute([$tokD2]);
+purge_orders($db, [$tokD2]);
 [, $bodyR] = _pf_get("http://127.0.0.1:$port/", $cookieR);
 T::ok('deleted order reveals nothing after unlock',
     !str_contains($bodyR, 'reveal-value') && !str_contains($bodyR, 'PUBLICFLOWTEST skrzynka'));
@@ -380,11 +386,11 @@ T::ok('deleted order reveals nothing after unlock',
 // 10. Expiry is exact: an order past its lifetime is gone for recipients even
 // though the periodic sweep has not deleted the row yet.
 $tokX = 'PFTOKENEXPIRED01';
-$db->prepare('DELETE FROM orders WHERE order_token = ?')->execute([$tokX]);
+purge_orders($db, [$tokX]);
 $db->prepare(
-    'INSERT INTO orders (order_token, pickup_password_hash, location_encrypted, location_iv, status, delivered_at, expires_at, notes)
-     VALUES (?, ?, ?, ?, "delivered", NOW() - INTERVAL 30 HOUR, NOW() - INTERVAL 1 HOUR, "")'
-)->execute([$tokX, $hash, $enc['ciphertext'], $enc['iv']]);
+    'INSERT INTO orders (token_hmac, token_enc, token_iv, pickup_password_hash, location_encrypted, location_iv, status, delivered_at, expires_at, notes)
+     VALUES (?, ?, ?, ?, ?, ?, "delivered", NOW() - INTERVAL 30 HOUR, NOW() - INTERVAL 1 HOUR, "")'
+)->execute([...tk($tokX), $hash, $enc['ciphertext'], $enc['iv']]);
 set_setting('rate_limit_max', '50');
 $db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
 $ckX = '';
@@ -395,8 +401,8 @@ T::ok('expired order shows no status card', !str_contains($bX, 'status-badge'));
 [, $bX] = _pf_get("http://127.0.0.1:$port/?token=$tokX");
 T::ok('expired order token link prefills nothing', !str_contains($bX, 'status-badge') && preg_match('/id="order_token"[^>]*value="' . $tokX . '"/s', $bX) !== 1);
 T::ok('the row itself is still there (sweep has not run)',
-    (bool)$db->query("SELECT 1 FROM orders WHERE order_token = '$tokX'")->fetch());
-$db->prepare('DELETE FROM orders WHERE order_token = ?')->execute([$tokX]);
+    order_row_exists($db, $tokX));
+purge_orders($db, [$tokX]);
 
 // 11. Free requests cannot launder guesses: with a budget of 3, wrong
 // passwords interleaved with token-only lookups AND with successful unlocks
@@ -407,8 +413,8 @@ $db->prepare('DELETE FROM orders WHERE order_token = ?')->execute([$tokX]);
 $tokG1 = 'PFTOKENGUESS0001'; // the victim's order
 $tokG2 = 'PFTOKENGUESS0002'; // the attacker's own, legitimately unlockable
 foreach ([$tokG1, $tokG2] as $tg) {
-    $db->prepare('DELETE FROM orders WHERE order_token = ?')->execute([$tg]);
-    $ins->execute([$tg, $hash, $enc['ciphertext'], $enc['iv'], 'delivered', date('Y-m-d H:i:s'), '']);
+    purge_orders($db, [$tg]);
+    $ins->execute([...tk($tg), $hash, $enc['ciphertext'], $enc['iv'], 'delivered', date('Y-m-d H:i:s'), '']);
 }
 set_setting('rate_limit_max', '3');
 $db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
@@ -426,12 +432,43 @@ for ($i = 0; $i < 3; $i++) {
 $ckFinal = '';
 [, $bFinal] = $pf_unlock($tokG1, 'wrong-guess-final', $ckFinal);
 T::ok('interleaved lookups and unlocks did not reset the budget', str_contains($bFinal, 'cooldown-heading'));
-$db->prepare('DELETE FROM orders WHERE order_token IN (?, ?)')->execute([$tokG1, $tokG2]);
+purge_orders($db, [$tokG1, $tokG2]);
 
 // Cleanup
-$db->prepare('DELETE FROM orders WHERE order_token IN (?, ?, ?, ?, ?)')->execute([$tokD, $tokD2, $tokD3, $tokD4, $tokP]);
+purge_orders($db, [$tokD, $tokD2, $tokD3, $tokD4, $tokP, $tokArr]);
 $db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
 
+// 13. Array-shaped fields (order_token[]=x, step[]=x) are input errors, not
+// crashes: the form re-renders and receive.php refuses to pick a step.
+set_setting('rate_limit_max', '50');
+$db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
+$ins->execute([...tk($tokArr), $hash, $enc['ciphertext'], $enc['iv'], 'delivered', date('Y-m-d H:i:s'), '']);
+$ckArr = '';
+$csrfArr = static function () use ($port, &$ckArr): string {
+    [, $g, $ckArr] = _pf_get("http://127.0.0.1:$port/", $ckArr);
+    preg_match('/name="csrf_token"\s*value="([0-9a-f]{64})"/', (string)$g, $m);
+    return $m[1] ?? '';
+};
+[$stArr, $bodyArr, $ckArr] = _pf_post("http://127.0.0.1:$port/",
+    ['csrf_token' => $csrfArr(), 'order_token' => ['x'], 'pickup_password' => 'nope'], $ckArr);
+T::eq('array order_token: page renders (no 500)', 200, $stArr);
+// The status line is already 200 once output has started, so a crash mid-render
+// shows up as a truncated page: require the closing tag, not just the status.
+T::ok('array order_token: form re-rendered with an alert, page complete',
+    str_contains($bodyArr, 'class="alert"') && str_contains($bodyArr, 'name="order_token"')
+    && str_contains($bodyArr, '</html>'));
+[$stArr, $bodyArr, $ckArr] = _pf_post("http://127.0.0.1:$port/",
+    ['csrf_token' => $csrfArr(), 'order_token' => $tokArr, 'pickup_password' => ['x']], $ckArr);
+T::ok('array pickup_password: page renders completely', $stArr === 200 && str_contains($bodyArr, '</html>'));
+[$stArr, , $ckArr] = _pf_post("http://127.0.0.1:$port/receive.php",
+    ['csrf_token' => $csrfArr(), 'order_token' => $tokArr, 'step' => ['x']], $ckArr);
+T::eq('array step never reaches the confirmation card', 302, $stArr);
+[$stArr, , $ckArr] = _pf_post("http://127.0.0.1:$port/receive.php",
+    ['csrf_token' => $csrfArr(), 'order_token' => $tokArr, 'step' => '1abc'], $ckArr);
+T::eq('non-literal step is refused, not cast to 1', 302, $stArr);
+[$stArr, , $ckArr] = _pf_post("http://127.0.0.1:$port/receive.php",
+    ['csrf_token' => $csrfArr(), 'order_token' => $tokArr, 'step' => '1'], $ckArr);
+T::eq('literal step 1 still renders the confirmation card', 200, $stArr);
 exit(T::done());
 
 // ── tiny HTTP helpers (cookie-aware, no redirects followed) ──────────────────

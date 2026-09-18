@@ -50,7 +50,7 @@ try {
 http_response_code($limited ? 429 : 200);
 
 if (!$limited) {
-    $username = trim((string)($_GET['username'] ?? ''));
+    $username = trim(get_string('username'));
     if ($username !== '' && strlen($username) <= 64) {
         try {
             $stmt = get_db()->prepare(

@@ -59,7 +59,7 @@ try {
     }
 
     $stmt = $db->prepare(
-        "SELECT o.id, o.order_token, o.status, o.created_at, o.delivered_at, o.expires_at,
+        "SELECT o.id, o.token_hmac, o.token_enc, o.token_iv, o.status, o.created_at, o.delivered_at, o.expires_at,
                 o.created_by,
                 u.username AS courier_name,
                 COUNT(p.id) AS photo_count
@@ -72,6 +72,12 @@ try {
     );
     $stmt->execute($where_args);
     $rows = $stmt->fetchAll();
+    // The token is stored encrypted (ADR-019); open it for display here so the
+    // template below stays a plain read of $o['order_token'].
+    foreach ($rows as &$row) {
+        $row['order_token'] = token_label(order_token_plain($row), $row['token_hmac']);
+    }
+    unset($row);
 
     // Pickup passwords are hash-only since the recovery copy was removed:
     // they exist once at creation and are otherwise replaced, not displayed.

@@ -85,6 +85,19 @@ function rot_encrypt(string $newKey, ?string $info, string $plaintext): array {
 }
 
 $db = get_db();
+
+// Plaintext tokens still in the schema mean the ADR-019 migration has not run:
+// there would be nothing to re-index them from, so refuse rather than half-rotate.
+$legacyTokens = (int)$db->query(
+    "SELECT COUNT(*) FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND COLUMN_NAME = 'order_token'
+       AND TABLE_NAME IN ('orders', 'order_events', 'audit_log')"
+)->fetchColumn();
+if ($legacyTokens > 0) {
+    fwrite(STDERR, "Plaintext order_token columns still exist — run tools/migrate_order_tokens.php first.\n");
+    exit(1);
+}
+
 $db->beginTransaction();
 $total = 0;
 $fail  = 0;
@@ -129,6 +142,69 @@ foreach ($targets as [$table, $pk, $encCol, $ivCol, $info, $nullable]) {
     printf("%s %-20s %s rows\n", $dry ? '[dry-run]' : 'rotated ', "$table.$encCol", $n);
     $total += $n;
 }
+
+// ── Order tokens (ADR-019) ───────────────────────────────────────────────────
+// token_hmac is keyed by a subkey of the MASTER key, so rotating the master
+// changes every index. The only plaintext copy is orders.token_enc: each new
+// index is computed from it. Event and audit rows carry the OLD index and are
+// remapped through it; rows whose order no longer exists cannot be recomputed
+// and lose their index (the order is gone — only the correlation is).
+$oldIndexKey = rot_hkdf($oldKey, 'deaddrop:token-index-v1');
+$newIndexKey = rot_hkdf($newKey, 'deaddrop:token-index-v1');
+$tokenMap    = [];
+$tokenCount  = 0;
+
+foreach ($db->query('SELECT id, token_hmac, token_enc, token_iv FROM orders')->fetchAll() as $row) {
+    if ($row['token_enc'] === null || $row['token_iv'] === null) {
+        fwrite(STDERR, sprintf("FAIL orders#%d token_enc: order has no token copy — aborting\n", $row['id']));
+        $fail++;
+        continue;
+    }
+    $plain = rot_decrypt($oldKey, 'deaddrop:token-v1', $row['token_enc'], $row['token_iv']);
+    if ($plain === false) {
+        fwrite(STDERR, sprintf("FAIL orders#%d token_enc: cannot decrypt with OLD key — aborting\n", $row['id']));
+        $fail++;
+        continue;
+    }
+    if (!hash_equals((string)$row['token_hmac'], hash_hmac('sha256', strtolower($plain), $oldIndexKey))) {
+        fwrite(STDERR, sprintf("FAIL orders#%d token_hmac: index does not match the token under the OLD key — aborting\n", $row['id']));
+        $fail++;
+        continue;
+    }
+    $tokenMap[(string)$row['token_hmac']] = [
+        'id'   => (int)$row['id'],
+        'hmac' => hash_hmac('sha256', strtolower($plain), $newIndexKey),
+        'enc'  => $dry ? null : rot_encrypt($newKey, 'deaddrop:token-v1', $plain),
+        'plain' => $plain,
+    ];
+    $tokenCount++;
+}
+
+if (!$dry && $fail === 0) {
+    foreach (['order_events', 'audit_log'] as $t) {
+        $db->exec("UPDATE $t x LEFT JOIN orders o ON o.token_hmac = x.token_hmac
+                   SET x.token_hmac = NULL
+                   WHERE x.token_hmac IS NOT NULL AND o.id IS NULL");
+    }
+    $remapEv = $db->prepare('UPDATE order_events SET token_hmac = ? WHERE token_hmac = ?');
+    $remapAu = $db->prepare('UPDATE audit_log SET token_hmac = ? WHERE token_hmac = ?');
+    $setOrd  = $db->prepare('UPDATE orders SET token_hmac = ?, token_enc = ?, token_iv = ? WHERE id = ?');
+    foreach ($tokenMap as $oldHmac => $m) {
+        $remapEv->execute([$m['hmac'], $oldHmac]);
+        $remapAu->execute([$m['hmac'], $oldHmac]);
+        $setOrd->execute([$m['hmac'], $m['enc']['ciphertext'], $m['enc']['iv'], $m['id']]);
+        $chk = $db->prepare('SELECT token_hmac, token_enc, token_iv FROM orders WHERE id = ?');
+        $chk->execute([$m['id']]);
+        $cur = $chk->fetch();
+        if (!is_array($cur) || $cur['token_hmac'] !== $m['hmac']
+            || rot_decrypt($newKey, 'deaddrop:token-v1', $cur['token_enc'], $cur['token_iv']) !== $m['plain']) {
+            fwrite(STDERR, sprintf("FAIL orders#%d token: read-back verification failed\n", $m['id']));
+            $fail++;
+        }
+    }
+}
+printf("%s %-20s %s rows\n", $dry ? '[dry-run]' : 'rotated ', 'orders.token_enc+hmac', $tokenCount);
+$total += $tokenCount;
 
 if ($fail > 0) {
     $db->rollBack();

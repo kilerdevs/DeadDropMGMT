@@ -120,14 +120,26 @@ function _proxy_peer_trusted(string $peer): bool {
 // Behind a TLS-terminating reverse proxy PHP sees plain HTTP, so $_SERVER
 //['HTTPS'] lies about the browser-side security context. With
 // DDMGMT_TRUST_PROXY=1 the X-Forwarded-Proto header decides (only the literal
-// "https" counts, first hop of a comma list) — but ONLY from a trusted proxy
+// "https" counts) — but ONLY from a trusted proxy
 // peer (same _proxy_peer_trusted() gate as get_client_ip()): otherwise anyone
 // reaching the app directly could flip the scheme, planting a "secure" cookie
 // over plain HTTP that the browser then refuses to send back. Without proxy
 // trust PHP's own view wins.
+// A multi-hop list follows the same rule as X-Forwarded-For in get_client_ip():
+// the LAST entry is the one the trusted peer wrote, so it is the only one the
+// client cannot forge; earlier entries may be client input passed through by
+// an appending proxy.
 function request_is_https(): bool {
     if (_proxy_peer_trusted((string)($_SERVER['REMOTE_ADDR'] ?? '0.0.0.0'))) {
-        $proto = strtolower(trim(explode(',', (string)($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? ''))[0]));
+        $hops  = explode(',', (string)($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? ''));
+        if (count($hops) > 1) {
+            static $multihop_warned = false;
+            if (!$multihop_warned) {
+                $multihop_warned = true;
+                log_warn('xfp_multihop', ['msg' => 'X-Forwarded-Proto carries multiple hops; last entry used (peer-appended) — verify the proxy overwrites the header']);
+            }
+        }
+        $proto = strtolower(trim((string)end($hops)));
         if ($proto !== '') {
             return $proto === 'https';
         }

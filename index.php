@@ -45,8 +45,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && !empty($_SESSION['reveal'])) {
             // unlock and this GET deletes the row, and the reveal must die
             // with it instead of rendering a deleted order for 180 s.
             try {
-                $chk = get_db()->prepare('SELECT 1 FROM orders WHERE order_token = ? AND ' . ORDER_LIVE_SQL . ' LIMIT 1');
-                $chk->execute([$dec['token']]);
+                $chk = get_db()->prepare('SELECT 1 FROM orders WHERE token_hmac = ? AND ' . ORDER_LIVE_SQL . ' LIMIT 1');
+                $chk->execute([token_index($dec['token'])]);
                 $alive = (bool)$chk->fetchColumn();
             } catch (Exception $e) {
                 $alive = false; // unreadable registry reveals nothing
@@ -72,8 +72,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && $loc_data === null && !$correct_prep
     if (strlen($get_token) === 16 && ctype_alnum($get_token)) {
         try {
             $db_g  = get_db();
-            $st_g  = $db_g->prepare('SELECT id, status FROM orders WHERE order_token = ? AND ' . ORDER_LIVE_SQL . ' LIMIT 1');
-            $st_g->execute([$get_token]);
+            $st_g  = $db_g->prepare('SELECT id, status FROM orders WHERE token_hmac = ? AND ' . ORDER_LIVE_SQL . ' LIMIT 1');
+            $st_g->execute([token_index($get_token)]);
             $ord_g = $st_g->fetch();
             if ($ord_g) {
                 $prefill_token = $get_token;
@@ -107,7 +107,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // A non-failure outcome refunds the spend below, so the IP budget keeps
     // counting failed guesses — not legitimate traffic.
     $hit = rl_hit('public');
-    $bkt = bucket_status('public', rl_max());
+    $bkt = bucket_status('public', SESSION_BUCKET_MAX);
 
     if ($hit['blocked'] || $bkt['blocked']) {
         $blocked       = true;
@@ -121,8 +121,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } else {
             try {
                 $db   = get_db();
-                $stmt = $db->prepare('SELECT * FROM orders WHERE order_token = ? AND ' . ORDER_LIVE_SQL . ' LIMIT 1');
-                $stmt->execute([$raw_token]);
+                $stmt = $db->prepare('SELECT * FROM orders WHERE token_hmac = ? AND ' . ORDER_LIVE_SQL . ' LIMIT 1');
+                $stmt->execute([token_index($raw_token)]);
                 $order = $stmt->fetch();
 
                 if (!$order) {
@@ -163,7 +163,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         } else {
                             $dec = decrypt_location_data($order['location_encrypted'], $order['location_iv']);
                             if ($dec === false) {
-                                log_err('Decryption failed for ' . $raw_token);
+                                log_err('Decryption failed for order #' . (int)$order['id']);
                                 $error = t('public.index.error.server_decrypt');
                             } else {
                                 log_event('unlock_success', (int)$order['id'], $raw_token);
@@ -441,7 +441,7 @@ if ($map_src !== '' && isset($lat, $lng) && map_provider() === MAP_PROVIDER_SELF
             <label for="order_token"><?= t('public.index.token_label') ?></label>
             <input type="text" id="order_token" name="order_token"
                    maxlength="16" placeholder="XXXXXXXXXXXXXXXX"
-                   value="<?= htmlspecialchars($prefill_token ?: ($_POST['order_token'] ?? ''), ENT_QUOTES, 'UTF-8') ?>"
+                   value="<?= htmlspecialchars($prefill_token ?: post_string('order_token'), ENT_QUOTES, 'UTF-8') ?>"
                    autocomplete="off" spellcheck="false">
         </div>
         <div class="form-group">
@@ -485,9 +485,9 @@ if ($map_src !== '' && isset($lat, $lng) && map_provider() === MAP_PROVIDER_SELF
          carried through a language switch — so changing language mid-reveal
          is refused instead of silently discarding the reveal. -->
     <form class="lang-switch" method="GET" action="">
-        <?php if ($prefill_token !== '' || (isset($_GET['token']) && is_string($_GET['token']))): ?>
+        <?php if ($prefill_token !== '' || get_string('token') !== ''): ?>
         <input type="hidden" name="token"
-               value="<?= htmlspecialchars($prefill_token !== '' ? $prefill_token : (string)$_GET['token'], ENT_QUOTES, 'UTF-8') ?>">
+               value="<?= htmlspecialchars($prefill_token !== '' ? $prefill_token : get_string('token'), ENT_QUOTES, 'UTF-8') ?>">
         <?php endif; ?>
         <label for="lang"><?= t('public.lang.label') ?></label>
         <select id="lang" name="lang" autocomplete="off">

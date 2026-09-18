@@ -16,6 +16,7 @@ function do_cleanup(): int {
     // covers both the real cron and the pseudo-cron path.
     log_checkpoint_write();
     _purge_stale_records();
+    _warn_legacy_tokens();
     osm_tile_cache_prune();
     return cleanup_expired_orders();
 }
@@ -31,7 +32,7 @@ function _purge_stale_records(): void {
         $db = get_db();
         $db->prepare(
             'DELETE e FROM order_events e
-             LEFT JOIN orders o ON o.id = e.order_id OR o.order_token = e.order_token
+             LEFT JOIN orders o ON o.id = e.order_id OR o.token_hmac = e.token_hmac
              WHERE o.id IS NULL AND e.created_at < (NOW() - INTERVAL ' . ORPHAN_EVENT_RETENTION_DAYS . ' DAY)'
         )->execute();
         $db->prepare(
@@ -39,6 +40,28 @@ function _purge_stale_records(): void {
         )->execute();
     } catch (Throwable $e) {
         log_err('Record purge failed: ' . $e->getMessage());
+    }
+}
+
+// Orders that predate hashed tokens (ADR-019) cannot be found by the app until
+// tools/migrate_order_tokens.php has moved them over. Say so once per sweep —
+// a recipient's "not found" would otherwise be the only symptom.
+function _warn_legacy_tokens(): void {
+    try {
+        $db = get_db();
+        $has = (int)$db->query(
+            "SELECT COUNT(*) FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'orders' AND COLUMN_NAME = 'order_token'"
+        )->fetchColumn();
+        if ($has === 0) {
+            return;
+        }
+        $n = (int)$db->query('SELECT COUNT(*) FROM orders WHERE order_token IS NOT NULL AND token_hmac IS NULL')->fetchColumn();
+        if ($n > 0) {
+            log_warn('legacy_order_tokens', ['msg' => $n . ' order(s) still carry a plaintext token and cannot be looked up — run: php tools/migrate_order_tokens.php']);
+        }
+    } catch (Throwable $e) {
+        log_err('Legacy token check failed: ' . $e->getMessage());
     }
 }
 

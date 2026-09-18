@@ -2,6 +2,7 @@
 declare(strict_types=1);
 require_once dirname(__DIR__) . '/config.php';
 require_once dirname(__DIR__) . '/includes/db.php';
+require_once dirname(__DIR__) . '/includes/crypto.php';
 
 // ── Atomic order state machine ────────────────────────────────────────────────
 // Single source of truth for every destructive state change:
@@ -52,9 +53,10 @@ function order_receive_atomic(string $token): bool {
     $db->beginTransaction();
     try {
         $stmt = $db->prepare(
-            'SELECT id FROM orders WHERE order_token = ? AND status = "delivered" LIMIT 1 FOR UPDATE'
+            'SELECT id FROM orders WHERE token_hmac = ? AND status = "delivered" LIMIT 1 FOR UPDATE'
         );
-        $stmt->execute([$token]);
+        $index = token_index($token);
+        $stmt->execute([$index]);
         $order = $stmt->fetch();
 
         if (!$order) {
@@ -72,7 +74,7 @@ function order_receive_atomic(string $token): bool {
             $db->rollBack();
             return false;
         }
-        _delete_order_events($db, (int)$order['id'], $token);
+        _delete_order_events($db, (int)$order['id'], $index);
 
         $db->commit();
         _unlink_order_files((int)$order['id'], $files);
@@ -87,18 +89,22 @@ function order_receive_atomic(string $token): bool {
 }
 
 // Admin close/remove → deleted, same guarantees as receiving but keyed by id.
-// Returns [token, files] on success, null when nothing was deleted.
+// Returns [token, files] on success, null when nothing was deleted. The
+// token is the plaintext display copy ('' if it cannot be opened): callers
+// use it for their audit entry, which re-indexes it.
 function order_delete_atomic(int $id): ?array {
     $db = get_db();
     $db->beginTransaction();
     try {
-        $stmt = $db->prepare('SELECT order_token FROM orders WHERE id = ? LIMIT 1 FOR UPDATE');
+        $stmt = $db->prepare('SELECT token_hmac, token_enc, token_iv FROM orders WHERE id = ? LIMIT 1 FOR UPDATE');
         $stmt->execute([$id]);
-        $token = $stmt->fetchColumn();
-        if ($token === false || $token === null) {
+        $row = $stmt->fetch();
+        if (!$row) {
             $db->rollBack();
             return null;
         }
+        $index = is_string($row['token_hmac'] ?? null) ? $row['token_hmac'] : null;
+        $token = order_token_plain($row) ?? '';
 
         $photos = $db->prepare('SELECT filename FROM order_photos WHERE order_id = ?');
         $photos->execute([$id]);
@@ -110,11 +116,11 @@ function order_delete_atomic(int $id): ?array {
             $db->rollBack();
             return null;
         }
-        _delete_order_events($db, $id, is_string($token) ? $token : null);
+        _delete_order_events($db, $id, $index);
 
         $db->commit();
         _unlink_order_files($id, $files);
-        return ['token' => (string)$token, 'files' => $files];
+        return ['token' => $token, 'files' => $files];
     } catch (Throwable $e) {
         if ($db->inTransaction()) {
             $db->rollBack();
@@ -147,7 +153,7 @@ function cleanup_expired_orders(int $batch = 200): int {
             $db->beginTransaction();
             try {
                 $lock = $db->prepare(
-                    'SELECT id, order_token FROM orders WHERE id = ? AND status = "delivered" AND expires_at IS NOT NULL AND expires_at <= NOW() LIMIT 1 FOR UPDATE'
+                    'SELECT id, token_hmac FROM orders WHERE id = ? AND status = "delivered" AND expires_at IS NOT NULL AND expires_at <= NOW() LIMIT 1 FOR UPDATE'
                 );
                 $lock->execute([$oid]);
                 $locked = $lock->fetch();
@@ -161,7 +167,7 @@ function cleanup_expired_orders(int $batch = 200): int {
                 $files = $photos->fetchAll(PDO::FETCH_COLUMN);
 
                 $db->prepare('DELETE FROM orders WHERE id = ?')->execute([$oid]);
-                _delete_order_events($db, $oid, $locked['order_token'] ?? null);
+                _delete_order_events($db, $oid, is_string($locked['token_hmac'] ?? null) ? $locked['token_hmac'] : null);
                 $db->commit();
 
                 _unlink_order_files($oid, $files);
@@ -182,12 +188,13 @@ function cleanup_expired_orders(int $batch = 200): int {
 // The order's own event rows die with it, in the same transaction: lookup /
 // unlock / reveal probes carry IPs and user agents, and keeping them after
 // the order is gone is a privacy liability with no operational value. Both
-// keys are matched — analytics rows sometimes carry only the token (no id).
+// keys are matched — analytics rows sometimes carry only the token index (no
+// id). $token_index is the order's token_hmac, never the token itself.
 // A flow's own post-delete log_event() (e.g. 'received') lands AFTERWARDS,
 // so the deletion itself stays on record as a single terminal row.
-function _delete_order_events(PDO $db, int $order_id, ?string $token): void {
-    $db->prepare('DELETE FROM order_events WHERE order_id = ? OR order_token = ?')
-       ->execute([$order_id, $token]);
+function _delete_order_events(PDO $db, int $order_id, ?string $token_index): void {
+    $db->prepare('DELETE FROM order_events WHERE order_id = ? OR token_hmac = ?')
+       ->execute([$order_id, $token_index]);
 }
 
 // Best-effort filesystem sweep AFTER the DB rows are gone. Filenames come

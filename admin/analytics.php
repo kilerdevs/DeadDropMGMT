@@ -75,18 +75,18 @@ try {
 
     // Per-order activity
     $per_order = $db->query(
-        "SELECT e.order_token,
+        "SELECT e.token_hmac, MAX(o.token_enc) AS token_enc, MAX(o.token_iv) AS token_iv,
                 SUM(e.event_type = 'lookup')         AS wyszukania,
                 SUM(e.event_type = 'unlock_success') AS odblokowania,
                 SUM(e.event_type = 'unlock_fail')    AS bledy,
                 MAX(e.created_at)                    AS ostatnia_aktywnosc,
                 o.status
          FROM order_events e
-         LEFT JOIN orders o ON o.order_token = e.order_token
+         LEFT JOIN orders o ON o.token_hmac = e.token_hmac
          WHERE e.event_type NOT LIKE 'admin_%'
-           AND e.order_token IS NOT NULL
+           AND e.token_hmac IS NOT NULL
            $date_cond_e
-         GROUP BY e.order_token
+         GROUP BY e.token_hmac
          ORDER BY ostatnia_aktywnosc DESC
          LIMIT 25"
     )->fetchAll();
@@ -119,8 +119,9 @@ try {
 
     // Recent events (paginated)
     $recent = $db->query(
-        "SELECT e.event_type, e.order_token, e.ip_address, e.user_agent, e.created_at
+        "SELECT e.event_type, e.token_hmac, o.token_enc, o.token_iv, e.ip_address, e.user_agent, e.created_at
          FROM order_events e
+         LEFT JOIN orders o ON o.token_hmac = e.token_hmac
          WHERE e.event_type NOT LIKE 'admin_%' $date_cond_e
          ORDER BY e.created_at DESC
          LIMIT " . (int)$per_page . ' OFFSET ' . (int)$offset
@@ -253,7 +254,7 @@ $csrf = generate_csrf();
                 <tbody>
                 <?php foreach ($per_order as $o): ?>
                 <tr>
-                    <td><span class="token"><?= htmlspecialchars($o['order_token'] ?? '—', ENT_QUOTES, 'UTF-8') ?></span></td>
+                    <td><span class="token"><?= htmlspecialchars(token_label(order_token_plain($o), $o['token_hmac']), ENT_QUOTES, 'UTF-8') ?></span></td>
                     <td>
                         <?php if ($o['status'] === null): ?>
                         <span class="td-muted"><?= t('admin.analytics.deleted') ?></span>
@@ -341,7 +342,7 @@ $csrf = generate_csrf();
                             <?= htmlspecialchars($labels[$ev['event_type']] ?? $ev['event_type'], ENT_QUOTES, 'UTF-8') ?>
                         </span>
                     </td>
-                    <td class="token td-muted"><?= htmlspecialchars($ev['order_token'] ?? '—', ENT_QUOTES, 'UTF-8') ?></td>
+                    <td class="token td-muted"><?= htmlspecialchars(token_label(order_token_plain($ev), $ev['token_hmac']), ENT_QUOTES, 'UTF-8') ?></td>
                     <td class="token"><?= htmlspecialchars($ev['ip_address'], ENT_QUOTES, 'UTF-8') ?></td>
                     <td class="meta td-muted ua-cell"><?= htmlspecialchars(parse_browser($ev['user_agent'] ?? ''), ENT_QUOTES, 'UTF-8') ?></td>
                 </tr>

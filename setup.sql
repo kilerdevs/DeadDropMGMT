@@ -82,7 +82,14 @@ PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 CREATE TABLE IF NOT EXISTS orders (
     id                   INT           AUTO_INCREMENT PRIMARY KEY,
     created_by           INT                    DEFAULT NULL,
-    order_token          CHAR(16)      NOT NULL UNIQUE,
+    -- The token is never stored in the clear (ADR-019): token_hmac is the
+    -- keyed lookup index, token_enc/token_iv an AES-GCM copy the admin panel
+    -- can display again. Installs that predate this carry a plaintext
+    -- order_token column instead: tools/migrate_order_tokens.php fills the
+    -- three columns below from it and then drops it.
+    token_hmac           CHAR(64)               DEFAULT NULL,
+    token_enc            VARCHAR(96)            DEFAULT NULL,
+    token_iv             CHAR(24)               DEFAULT NULL,
     pickup_password_hash VARCHAR(255)  NOT NULL,
     -- Deprecated: legacy installs may still carry the recoverable AES copy
     -- of the pickup password. New code never writes it — run
@@ -97,7 +104,7 @@ CREATE TABLE IF NOT EXISTS orders (
     expires_at           DATETIME               DEFAULT NULL,
     notes                TEXT                   DEFAULT NULL,
 
-    INDEX idx_token      (order_token),
+    UNIQUE KEY uq_token_hmac (token_hmac),
     INDEX idx_status     (status),
     INDEX idx_created    (created_at),
     INDEX idx_expires    (expires_at),
@@ -109,6 +116,26 @@ CREATE TABLE IF NOT EXISTS orders (
 SET @c = (SELECT COUNT(*) FROM information_schema.COLUMNS
     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'orders' AND COLUMN_NAME = 'created_by');
 SET @s = IF(@c = 0, 'ALTER TABLE orders ADD COLUMN created_by INT DEFAULT NULL AFTER id', 'SELECT 1');
+PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
+
+-- Installs from before hashed tokens (ADR-019) lack the three token columns.
+-- The plaintext order_token they still carry becomes nullable so new orders
+-- can be inserted without it. The migration tool then moves the old values
+-- across and drops the column. Until it has run, those old orders are
+-- unreachable by the app — loudly (cleanup logs a warning), not silently.
+SET @c = (SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'orders' AND COLUMN_NAME = 'token_hmac');
+SET @s = IF(@c = 0, 'ALTER TABLE orders ADD COLUMN token_hmac CHAR(64) DEFAULT NULL, ADD COLUMN token_enc VARCHAR(96) DEFAULT NULL, ADD COLUMN token_iv CHAR(24) DEFAULT NULL', 'SELECT 1');
+PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
+
+SET @c = (SELECT COUNT(*) FROM information_schema.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'orders' AND INDEX_NAME = 'uq_token_hmac');
+SET @s = IF(@c = 0, 'ALTER TABLE orders ADD UNIQUE KEY uq_token_hmac (token_hmac)', 'SELECT 1');
+PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
+
+SET @c = (SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'orders' AND COLUMN_NAME = 'order_token' AND IS_NULLABLE = 'NO');
+SET @s = IF(@c = 1, 'ALTER TABLE orders MODIFY order_token CHAR(16) DEFAULT NULL', 'SELECT 1');
 PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 
 SET @c = (SELECT COUNT(*) FROM information_schema.STATISTICS
@@ -257,24 +284,30 @@ PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 CREATE TABLE IF NOT EXISTS order_events (
     id           INT           AUTO_INCREMENT PRIMARY KEY,
     order_id     INT                    DEFAULT NULL,
-    order_token  CHAR(16)               DEFAULT NULL,
+    token_hmac   CHAR(64)               DEFAULT NULL,   -- keyed index of the order token (ADR-019)
     event_type   VARCHAR(32)   NOT NULL,
     ip_address   VARCHAR(45)   NOT NULL,
     user_agent   TEXT                   DEFAULT NULL,
     created_at   DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     INDEX idx_order_id   (order_id),
-    INDEX idx_order_token (order_token),
+    INDEX idx_token_hmac (token_hmac),
     INDEX idx_event_type (event_type),
     INDEX idx_ip         (ip_address(20)),
     INDEX idx_created    (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Older installs lack the token index (analytics per-order breakdown and
--- the order-state cleanup OR-delete filter on it).
+-- Older installs carry a plaintext order_token here instead (ADR-019):
+-- add the keyed index and its lookup index. The migration tool converts the
+-- old values and drops the plaintext column.
+SET @c = (SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'order_events' AND COLUMN_NAME = 'token_hmac');
+SET @s = IF(@c = 0, 'ALTER TABLE order_events ADD COLUMN token_hmac CHAR(64) DEFAULT NULL', 'SELECT 1');
+PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
+
 SET @c = (SELECT COUNT(*) FROM information_schema.STATISTICS
-    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'order_events' AND INDEX_NAME = 'idx_order_token');
-SET @s = IF(@c = 0, 'ALTER TABLE order_events ADD INDEX idx_order_token (order_token)', 'SELECT 1');
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'order_events' AND INDEX_NAME = 'idx_token_hmac');
+SET @s = IF(@c = 0, 'ALTER TABLE order_events ADD INDEX idx_token_hmac (token_hmac)', 'SELECT 1');
 PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 
 -- ── Rate limiting (IP-based, DB-backed) ──────────────────────────────────────
@@ -302,7 +335,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
     username    VARCHAR(64)   NOT NULL,
     action      VARCHAR(64)   NOT NULL,
     order_id    INT                    DEFAULT NULL,
-    order_token CHAR(16)               DEFAULT NULL,
+    token_hmac  CHAR(64)               DEFAULT NULL,   -- keyed index of the order token (ADR-019)
     detail      VARCHAR(255)           DEFAULT NULL,
     ip_address  VARCHAR(45)   NOT NULL,
     created_at  DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -311,6 +344,11 @@ CREATE TABLE IF NOT EXISTS audit_log (
     INDEX idx_user     (user_id),
     INDEX idx_action   (action)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+SET @c = (SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'audit_log' AND COLUMN_NAME = 'token_hmac');
+SET @s = IF(@c = 0, 'ALTER TABLE audit_log ADD COLUMN token_hmac CHAR(64) DEFAULT NULL', 'SELECT 1');
+PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 
 -- ── Settings ──────────────────────────────────────────────────────────────────
 

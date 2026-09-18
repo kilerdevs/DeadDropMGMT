@@ -33,7 +33,10 @@ $error = $rl['blocked']
     : '';
 
 $raw_token = trim(post_string('order_token'));
-$step      = (int)($_POST['step'] ?? 0);
+// Strict: only the literal strings "1" / "2" are steps. A (int) cast turned
+// step[]=x into 1 and " 1" / "1abc" into 1 as well.
+$step_raw  = post_string('step');
+$step      = $step_raw === '1' ? 1 : ($step_raw === '2' ? 2 : 0);
 $deleted   = false;
 $csrf      = generate_csrf();
 
@@ -71,9 +74,9 @@ if ($step !== 1 && $step !== 2) {
 if ($step === 1 && $error === '') {
     try {
         $stmt = get_db()->prepare(
-            "SELECT id FROM orders WHERE order_token = ? AND status = 'delivered' AND " . ORDER_LIVE_SQL . ' LIMIT 1'
+            "SELECT id FROM orders WHERE token_hmac = ? AND status = 'delivered' AND " . ORDER_LIVE_SQL . ' LIMIT 1'
         );
-        $stmt->execute([$raw_token]);
+        $stmt->execute([token_index($raw_token)]);
         $order = $stmt->fetch();
     } catch (Exception $e) {
         log_err('Receive step1: ' . $e->getMessage());

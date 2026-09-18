@@ -123,12 +123,12 @@ T::ok(sprintf('passphrase entropy %.2f bits >= 64', $bits), $bits >= 64.0);
 
 // ── CBC → GCM migration tool, from a representative pre-migration state ──────
 $db = get_db();
-$db->exec("DELETE FROM orders WHERE order_token LIKE 'cbcmig%'");
+purge_orders_like($db, 'cbcmig');
 $db->prepare(
-    "INSERT INTO orders (order_token, pickup_password_hash, location_encrypted, location_iv,
+    "INSERT INTO orders (token_hmac, token_enc, token_iv, pickup_password_hash, location_encrypted, location_iv,
                          status, delivered_at, expires_at)
-     VALUES ('cbcmigrate001', 'x', ?, ?, 'delivered', NOW(), NOW() + INTERVAL 24 HOUR)"
-)->execute([base64_encode($cbc_ct), bin2hex($cbc_iv)]);
+     VALUES (?, ?, ?, 'x', ?, ?, 'delivered', NOW(), NOW() + INTERVAL 24 HOUR)"
+)->execute([...tk('cbcmigrate001'), base64_encode($cbc_ct), bin2hex($cbc_iv)]);
 $migId = (int)$db->lastInsertId();
 
 $out = shell_exec(escapeshellarg(PHP_BINARY) . ' ' .
@@ -147,17 +147,17 @@ $out2 = shell_exec(escapeshellarg(PHP_BINARY) . ' ' .
 T::ok('re-run finds nothing left to migrate', is_string($out2) && str_contains($out2, '0 row(s)'));
 
 // A corrupt legacy row aborts the whole migration transactionally
-$db->exec("DELETE FROM orders WHERE order_token LIKE 'cbcmig%'");
+purge_orders_like($db, 'cbcmig');
 $db->prepare(
-    "INSERT INTO orders (order_token, pickup_password_hash, location_encrypted, location_iv,
+    "INSERT INTO orders (token_hmac, token_enc, token_iv, pickup_password_hash, location_encrypted, location_iv,
                          status, delivered_at, expires_at)
-     VALUES ('cbcmigrate002', 'x', ?, ?, 'delivered', NOW(), NOW() + INTERVAL 24 HOUR)"
-)->execute([base64_encode('corrupt-cbc-ciphertext-not-real'), bin2hex($cbc_iv)]);
+     VALUES (?, ?, ?, 'x', ?, ?, 'delivered', NOW(), NOW() + INTERVAL 24 HOUR)"
+)->execute([...tk('cbcmigrate002'), base64_encode('corrupt-cbc-ciphertext-not-real'), bin2hex($cbc_iv)]);
 $out3 = shell_exec(escapeshellarg(PHP_BINARY) . ' ' .
     escapeshellarg(dirname(__DIR__) . '/tools/migrate_cbc_to_gcm.php') . ' 2>&1; echo EXIT:$?');
 T::ok('undecryptable row aborts migration', is_string($out3) && str_contains($out3, 'ABORTED'));
 
-$db->exec("DELETE FROM orders WHERE order_token LIKE 'cbcmig%'");
+purge_orders_like($db, 'cbcmig');
 
 // ── HKDF key separation (ADR-016) ─────────────────────────────────────────────
 // Every purpose derives its own subkey from the master; cross-purpose reuse
@@ -174,6 +174,15 @@ $sec = encrypt_secret('TOTPSECRET123456');
 T::ok('totp secret roundtrip', decrypt_secret($sec['ciphertext'], $sec['iv']) === 'TOTPSECRET123456');
 T::ok('totp blob refused by location decrypt', decrypt_location($sec['ciphertext'], $sec['iv']) === false);
 T::ok('location blob refused by totp decrypt', decrypt_secret($enc['ciphertext'], $enc['iv']) === false);
+
+// Flash messages have their own purpose subkey: sealed flashes and TOTP
+// secrets cannot be swapped for one another (ADR-016).
+$fl = encrypt_flash('Password: SeCr3t&Pass!');
+T::ok('flash roundtrip', decrypt_flash($fl['ciphertext'], $fl['iv']) === 'Password: SeCr3t&Pass!');
+T::ok('flash blob refused by totp decrypt', decrypt_secret($fl['ciphertext'], $fl['iv']) === false);
+T::ok('totp blob refused by flash decrypt', decrypt_flash($sec['ciphertext'], $sec['iv']) === false);
+T::ok('flash blob refused by location decrypt', decrypt_location($fl['ciphertext'], $fl['iv']) === false);
+T::ok('flash decrypt rejects non-hex IV', decrypt_flash($fl['ciphertext'], str_repeat('g', 24)) === false);
 
 $sealed = seal_payload(['token' => 'PFTOKENDELIVER01']);
 T::ok('sealed payload roundtrip', open_payload($sealed) === ['token' => 'PFTOKENDELIVER01']);
@@ -214,17 +223,17 @@ unlink($tmpLog);
 
 // ── separate_keys.php tool, from a representative pre-separation state ───────
 $rawEnc = openssl_encrypt($plain, 'aes-256-gcm', hex2bin(AES_KEY_HEX), OPENSSL_RAW_DATA, $rawNonce = random_bytes(12), $rawTag);
-$db->exec("DELETE FROM orders WHERE order_token LIKE 'keysep%'");
+purge_orders_like($db, 'keysep');
 $db->prepare(
-    "INSERT INTO orders (order_token, pickup_password_hash, location_encrypted, location_iv,
+    "INSERT INTO orders (token_hmac, token_enc, token_iv, pickup_password_hash, location_encrypted, location_iv,
                          status, delivered_at, expires_at)
-     VALUES ('keysepmigrate1', 'x', ?, ?, 'delivered', NOW(), NOW() + INTERVAL 24 HOUR)"
-)->execute([base64_encode($rawEnc . $rawTag), bin2hex($rawNonce)]);
+     VALUES (?, ?, ?, 'x', ?, ?, 'delivered', NOW(), NOW() + INTERVAL 24 HOUR)"
+)->execute([...tk('keysepmigrate1'), base64_encode($rawEnc . $rawTag), bin2hex($rawNonce)]);
 
 $out = shell_exec(escapeshellarg(PHP_BINARY) . ' ' .
     escapeshellarg(dirname(__DIR__) . '/tools/separate_keys.php') . ' 2>&1');
-$row = $db->prepare('SELECT location_encrypted AS enc, location_iv AS iv FROM orders WHERE order_token = ?');
-$row->execute(['keysepmigrate1']);
+$row = $db->prepare('SELECT location_encrypted AS enc, location_iv AS iv FROM orders WHERE token_hmac = ?');
+$row->execute([token_index('keysepmigrate1')]);
 $sepRow = $row->fetch();
 T::ok('separated row decrypts at runtime (purpose subkey)',
     decrypt_location($sepRow['enc'], $sepRow['iv']) === $plain);
@@ -237,14 +246,14 @@ T::ok('re-run migrates nothing new', is_string($out2) && str_contains($out2, '0 
 
 // A row decryptable by NEITHER key aborts transactionally.
 $db->prepare(
-    "INSERT INTO orders (order_token, pickup_password_hash, location_encrypted, location_iv,
+    "INSERT INTO orders (token_hmac, token_enc, token_iv, pickup_password_hash, location_encrypted, location_iv,
                          status, delivered_at, expires_at)
-     VALUES ('keysepmigrate2', 'x', ?, ?, 'delivered', NOW(), NOW() + INTERVAL 24 HOUR)"
-)->execute([base64_encode($rawEnc . $rawTag), bin2hex(random_bytes(12))]); // right ct, wrong nonce
+     VALUES (?, ?, ?, 'x', ?, ?, 'delivered', NOW(), NOW() + INTERVAL 24 HOUR)"
+)->execute([...tk('keysepmigrate2'), base64_encode($rawEnc . $rawTag), bin2hex(random_bytes(12))]); // right ct, wrong nonce
 $out3 = shell_exec(escapeshellarg(PHP_BINARY) . ' ' .
     escapeshellarg(dirname(__DIR__) . '/tools/separate_keys.php') . ' 2>&1; echo EXIT:$?');
 T::ok('undecryptable row aborts key separation', is_string($out3) && str_contains($out3, 'ABORTED'));
 
-$db->exec("DELETE FROM orders WHERE order_token LIKE 'keysep%'");
+purge_orders_like($db, 'keysep');
 
 exit(T::done());

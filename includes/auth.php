@@ -292,7 +292,7 @@ function admin_login(string $username, string $password): string {
     // empty-hash branch is not a timing oracle for "this account exists
     // and awaits enrollment".
     if ($hash === '') {
-        $enrollment = trim((string)($_POST['enrollment'] ?? ''));
+        $enrollment = trim(post_string('enrollment'));
         if ($password !== '' || $enrollment === '' || !enrollment_secret_valid((int)$user['id'], $enrollment)) {
             password_verify($password, DUMMY_AUTH_HASH);
             return 'fail';
@@ -339,13 +339,13 @@ function admin_logout(): void {
 
 // ── Flash messages ────────────────────────────────────────────────────────────
 // One-shot notices across a redirect. A message that carries a credential
-// (generated pickup password, enrollment secret) is sealed with the TOTP
+// (generated pickup password, enrollment secret) is sealed with the flash-v1
 // subkey, so the session store never rests in plaintext with it.
 
 function flash_set(string $msg, bool $ok, bool $sensitive = false): void {
     unset($_SESSION['flash'], $_SESSION['flash_sealed']);
     if ($sensitive) {
-        $_SESSION['flash_sealed'] = encrypt_secret($msg);
+        $_SESSION['flash_sealed'] = encrypt_flash($msg);
     } else {
         $_SESSION['flash'] = $msg;
     }
@@ -357,7 +357,7 @@ function flash_take(): array {
     $msg = (string)($_SESSION['flash'] ?? '');
     $sealed = $_SESSION['flash_sealed'] ?? null;
     if (is_array($sealed)) {
-        $dec = decrypt_secret((string)($sealed['ciphertext'] ?? ''), (string)($sealed['iv'] ?? ''));
+        $dec = decrypt_flash((string)($sealed['ciphertext'] ?? ''), (string)($sealed['iv'] ?? ''));
         $msg = is_string($dec) ? $dec : $msg;
     }
     $ok = (bool)($_SESSION['flash_ok'] ?? false);
@@ -670,8 +670,12 @@ function rl_reset(string $scope = 'public', ?string $subject = null): void {
 // Legit users behind shared NAT keep their own bucket; an attacker must now
 // rotate both IP and cookie per attempt. Server-side storage means clearing
 // cookies is also visible as a brand-new session with zero history.
-// Window follows the configured IP-limiter window (rl_window_seconds) so the
-// two layers can never silently diverge when an admin retunes one of them.
+// The WINDOW follows the configured IP-limiter window (rl_window_seconds) so
+// the two layers can never silently diverge in time. The THRESHOLD is its own
+// constant: raising the IP budget for a busy NAT exit must not silently
+// loosen the per-cookie budget as well, and each layer stays tunable alone.
+
+const SESSION_BUCKET_MAX = 5;
 
 function bucket_fail(string $scope = 'public'): void {
     $cur = $_SESSION['pw_fail'][$scope] ?? null;

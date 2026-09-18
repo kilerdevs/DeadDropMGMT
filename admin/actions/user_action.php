@@ -115,7 +115,7 @@ if ($action === 'delete_courier') {
 // ── Change password ───────────────────────────────────────────────────────────
 if ($action === 'change_password') {
     $uid      = (int)($_POST['user_id']      ?? 0);
-    $password = (string)($_POST['new_password'] ?? '');
+    $password = post_string('new_password');
 
     if ($uid <= 0) {
         $_SESSION['flash']    = t('admin.common.invalid_request');

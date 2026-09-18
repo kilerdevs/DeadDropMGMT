@@ -395,7 +395,8 @@ set_setting('analytics_enabled', '1');
 $_SERVER['HTTP_USER_AGENT'] = 'LoggerTest/1.0';
 log_event('t_enabled_event', null, 'EVTTOKEN00000001');
 $ev = $db->query("SELECT * FROM order_events WHERE event_type = 't_enabled_event' ORDER BY id DESC LIMIT 1")->fetch();
-T::ok('event row carries token and UA', $ev !== false && $ev['order_token'] === 'EVTTOKEN00000001');
+T::ok('event row carries the token index and UA', $ev !== false && $ev['token_hmac'] === token_index('EVTTOKEN00000001'));
+T::ok('event row never carries the token itself', $ev !== false && !in_array('EVTTOKEN00000001', array_map('strval', $ev), true));
 T::ok('event UA recorded', ($ev['user_agent'] ?? '') === 'LoggerTest/1.0');
 
 with_table_hidden_lg('order_events', function (): void {

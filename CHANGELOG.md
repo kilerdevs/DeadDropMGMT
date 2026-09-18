@@ -9,6 +9,48 @@ All notable changes to DeadDropMGMT are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- **Upgrade step required for existing installs:** after loading the new
+  `setup.sql`, run `php tools/migrate_order_tokens.php` (dry-run first, back
+  up the database — it drops the plaintext token columns). Until it has run,
+  orders created before the upgrade cannot be found; new orders work. The
+  hourly cleanup logs a `legacy_order_tokens` warning while any remain.
+  Details in the README and the troubleshooting guide.
+- The per-session failure bucket on the public unlock form now has its own
+  fixed threshold (5 failures per window) instead of borrowing the IP
+  limiter's attempt count, so retuning the IP budget (for example raising it
+  for a busy NAT exit) no longer moves the per-cookie budget; the bucket
+  still follows the limiter's window.
+- `X-Forwarded-Proto` multi-hop lists now use the last entry, the same rule
+  `X-Forwarded-For` already followed. A warning is logged when a list is seen.
+- Documentation: the requirement to serve the app from the root of its own
+  host (no sub-path) is documented, and the README, troubleshooting guide and
+  ADR-006/016/019 describe the changes above.
+
+### Fixed
+- A crafted array-shaped field (`order_token[]=x`) with a valid CSRF token made
+  `index.php` throw an uncaught `TypeError` while re-rendering the form. The
+  public and admin pages now read form and query fields through
+  `post_string()` / `get_string()` everywhere, so such input is an ordinary
+  validation error.
+- `receive.php` parsed `step` with an `(int)` cast, so `step[]=x` or `1abc`
+  counted as step 1. Only the literal `1` and `2` are steps now.
+
+### Security
+- Order tokens are no longer stored in the clear (ADR-019). Lookups go through
+  `orders.token_hmac`, an HMAC-SHA256 of the lower-cased token under its own
+  HKDF subkey; the admin panel reads an AES-GCM copy (`token_enc` /
+  `token_iv`) under a second subkey. `order_events` and `audit_log` keep only
+  the index, so a database dump holds no usable token and cannot be used to
+  test candidate tokens offline. `tools/migrate_order_tokens.php` migrates
+  existing data, and `tools/rotate_aes_key.php` now re-encrypts and re-indexes
+  tokens (event and audit rows of already-deleted orders lose their index).
+  Token matching stays case-insensitive, as before.
+- Sensitive flash messages (generated pickup passwords, enrollment secrets)
+  are sealed under their own HKDF subkey (`deaddrop:flash-v1`) instead of the
+  TOTP subkey, completing the purpose separation of ADR-016. Sessions are
+  transient, so nothing needs migrating.
+
 ## [1.5.0] - 2026-09-18
 
 ### Added

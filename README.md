@@ -28,7 +28,7 @@ all without the underlying data ever leaving the server in readable form.
 ![Log integrity](https://img.shields.io/badge/audit%20log-HMAC%20chained-blue?style=flat)
 
 ![PHPStan](https://img.shields.io/badge/PHPStan-level%205-4F5D95?style=flat)
-![Test suites](https://img.shields.io/badge/PHP%20test%20suites-30-success?style=flat)
+![Test suites](https://img.shields.io/badge/PHP%20test%20suites-31-success?style=flat)
 ![E2E](https://img.shields.io/badge/E2E-Playwright-45ba4b?style=flat&logo=playwright&logoColor=white)
 ![Coverage floor](https://img.shields.io/badge/coverage%20floor-%E2%89%A585%25-success?style=flat)
 ![Mutation probe](https://img.shields.io/badge/mutation%20probe-16%20mutants-success?style=flat)
@@ -180,7 +180,7 @@ Prefer nginx or Caddy? Bare-metal? See [Docker](#docker) and [Setup](#setup).
 
 ### Operations
 
-- IP-based rate limiting with independent budgets per surface (pickup guessing, admin login, 2FA codes), per-account budgets on login and 2FA, and a per-session failure bucket for pickup. One global switch, attempt count (3–10, default 5) and window (5–60 min, default 15) in Settings
+- IP-based rate limiting with independent budgets per surface (pickup guessing, admin login, 2FA codes), per-account budgets on login and 2FA, and a per-session failure bucket for pickup (fixed at 5 failures per window, independent of the IP attempt count). One global switch, attempt count (3–10, default 5) and window (5–60 min, default 15) in Settings
 - Pseudo-cron cleanup on page visits: each request checks an hourly stamp, so at most one sweep per hour runs in-request (a cached settings lookup otherwise)
 - Real cron endpoint (`cron/cleanup.php`) for server-side scheduling — the Docker image runs it every 15 minutes on its own
 - Retention: order events for tokens that never matched an order are dropped after 30 days; the audit log after 365 days
@@ -263,6 +263,14 @@ One file, one command — works for a fresh install *and* for upgrading an exist
 mysql -u root -p < setup.sql
 ```
 
+> [!IMPORTANT]
+> **Upgrading from a version that stored order tokens in the clear** (anything before ADR-019): after loading the new
+> `setup.sql`, run `php tools/migrate_order_tokens.php --dry-run` and then without `--dry-run` (back up the database
+> first — it drops the plaintext columns). Until then, orders created before the upgrade cannot be found; new orders
+> work normally. On Docker the schema file is only auto-loaded on a database's first boot, so pipe it in yourself:
+> `docker compose exec -T db sh -c 'mariadb -uroot -p"$MARIADB_ROOT_PASSWORD" deaddrops' < setup.sql`, then
+> `docker compose exec app php tools/migrate_order_tokens.php`.
+
 ### 2. config.php and the AES-256 key
 
 ```bash
@@ -298,7 +306,7 @@ DB credentials work the same way via `DDMGMT_DB_HOST` / `DDMGMT_DB_PORT` / `DDMG
 </VirtualHost>
 ```
 
-Enable `mod_rewrite` and `mod_headers`, and set `AllowOverride All`.
+Enable `mod_rewrite` and `mod_headers`, and set `AllowOverride All`. Give the app its own virtual host: it cannot be served from a sub-path such as `/drop/` (see [Requirements](#requirements)).
 
 > [!IMPORTANT]
 > **nginx / Caddy installs — read this.** The shipped `.htaccess` files are an Apache-only mechanism: nginx and Caddy
@@ -357,7 +365,8 @@ If your proxy connects from public addresses, list them explicitly. A request wh
 proxy headers ignored (and logs one warning) even with the flag set — so a stale flag on an app that is directly
 reachable cannot be turned into free IP rotation by whoever finds it. The same peer gate covers `X-Forwarded-Proto`
 (HTTPS detection for the session cookie `secure` flag and HSTS): a forged proto from an untrusted peer cannot plant a
-`secure` cookie over plain HTTP.
+`secure` cookie over plain HTTP. Both headers follow one rule for multi-hop lists — the **last** entry, the one the trusted
+proxy itself wrote, is used, and a warning is logged when a list shows up (a sign the proxy appends instead of overwriting).
 
 <details>
 <summary><b>Rotating the AES key</b> — when, why and the exact procedure</summary>
@@ -371,8 +380,9 @@ the people whose locations you hold — yearly is a reasonable default. The bund
 # rehearse first: verifies every row decrypts with the old key, writes nothing
 php tools/rotate_aes_key.php --old=<OLD_64HEX> --new=<NEW_64HEX> --dry-run
 
-# apply: re-encrypts orders.locations, pickup passwords and TOTP secrets,
-# verifies each row read-back under the new key, single transaction —
+# apply: re-encrypts orders.locations, pickup passwords and TOTP secrets, re-encrypts
+# and re-indexes every order token (event and audit rows of deleted orders lose their
+# token index), verifies each row read-back under the new key, single transaction —
 # any undecryptable row aborts and rolls everything back
 php tools/rotate_aes_key.php --old=<OLD_64HEX> --new=<NEW_64HEX>
 ```
@@ -429,6 +439,7 @@ page, not in files.
 - **MySQL 5.7+ or MariaDB 10.3+** (CI-tested: MariaDB 11 and MySQL 8.0)
 - **Apache 2.4+** with `mod_rewrite`, `mod_headers` — or nginx / Caddy (Docker stacks; manual installs must replicate every
   deny block, see [Setup §3](#3-web-server))
+- **Served from the root of its own host** — a virtual host or subdomain (`https://drop.example.org/`), not a sub-path like `example.org/drop/`. Links, redirects and asset URLs are root-relative (`/admin/…`, `/uploads/…`, `Location: /`), so a sub-directory install or a reverse proxy that strips or adds a path prefix will break them
 - **Self-hosted maps only:** process execution (`proc_open`) for the `pmtiles` CLI, Linux x86_64 or arm64, and free disk
   for the zones you draw
 
@@ -477,7 +488,7 @@ The model assumes adversaries ranging from opportunistic to well-resourced:
 |---|---|---|
 | S1 | Drop locations (encrypted at rest) | Core secret — physical safety of the recipient depends on it |
 | S2 | Pickup passwords | Gate location reveal |
-| S3 | Order tokens (16-char lookup codes) | Capability URLs — possession grants lookup access |
+| S3 | Order tokens (16-char lookup codes) | Capability URLs — possession grants lookup access (status and the password prompt), **not** the location: that still needs the pickup password. Never stored in the clear: a keyed HMAC index plus an encrypted copy (ADR-019) |
 | S4 | TOTP secrets | 2FA enrollment for owner/courier accounts |
 | S5 | Admin sessions & credentials | Full panel control |
 | S6 | Audit trail & application log integrity | Evidence — must survive tampering attempts (A5) |
@@ -500,7 +511,7 @@ Server-local files (`config.php`, `includes/`, `logs/`, `uploads/`) are never se
 
 - **Public ↔ PHP**: no accounts — but sessions exist: the unlock form carries a single-use CSRF token (verified before any limiter budget is spent), and the reveal lives server-side sealed. Only token entropy + rate limiting protect S3 itself
 - **Admin ↔ PHP**: session cookie + CSRF token + TOTP; owner vs courier role split
-- **PHP ↔ MySQL**: prepared statements; the DB is *never* trusted to hold secrets in readable form (S1–S4 encrypted/hashed before insert)
+- **PHP ↔ MySQL**: prepared statements; the DB is *never* trusted to hold secrets in readable form (S1–S5 are encrypted, hashed or keyed before insert — order tokens included: a lookup index plus an encrypted copy, see ADR-019)
 - **PHP ↔ filesystem**: `.htaccess` denies direct web access to `includes/`, `logs/`, `cache/`, `cron/`, `tools/`, `tests/`, `data/`, `config.php` and friends (nginx/Caddy replicate the same denies — see the [setup warning](#3-web-server))
 - **PHP ↔ OSM**: server-side proxies so admin IPs never leave the server; fail-closed proxy pool optional
 
@@ -511,8 +522,9 @@ Server-local files (`config.php`, `includes/`, `logs/`, `uploads/`) are never se
 | SQL injection | PDO prepared statements throughout — zero string interpolation in SQL | S1–S5 | A1–A2 |
 | Password storage | bcrypt cost=12 via `password_hash()` / `password_verify()` | S5 | A4 |
 | Account takeover | TOTP 2FA (RFC 6238) — self-service per account, secret GCM-encrypted at rest. Passwordless accounts are claimed only with a single-use enrollment secret, never by username alone. Per-account attempt budgets on login and 2FA; password / 2FA resets end all of the account's sessions; hard 12-hour session ceiling | S5 | A1, A2 |
-| Location data at rest | AES-256-GCM (authenticated), random nonce per record; keys are HKDF purpose-subkeys of the master key — locations, TOTP secrets, reveal payloads and the log chain each use their own (ADR-016). Legacy CBC rows and raw-master rows are rejected at runtime — migrate with `tools/migrate_cbc_to_gcm.php` then `tools/separate_keys.php`. Master key lives only in `config.php`, env (`DDMGMT_AES_KEY_HEX`) or the `/config/aes_key_hex` file — never in the DB | S1, S4 | A4 |
-| Pickup password guessing | Dual budget enforced together: IP-based limiter (**fail-closed**: if the limiter DB is down, pickup and login are denied, not waved through) **and** a per-session failure bucket — whoever trips either is blocked; ≥64-bit generated passphrases (6 words + 4-digit + symbol), hash-only at rest, equalized-cost responses for unknown tokens | S2 | A1 |
+| Location data at rest | AES-256-GCM (authenticated), random nonce per record; keys are HKDF purpose-subkeys of the master key — locations, TOTP secrets, reveal payloads, one-time session messages, the order-token index and copy, and the log chain each use their own (ADR-016). Legacy CBC rows and raw-master rows are rejected at runtime — migrate with `tools/migrate_cbc_to_gcm.php` then `tools/separate_keys.php`. Master key lives only in `config.php`, env (`DDMGMT_AES_KEY_HEX`) or the `/config/aes_key_hex` file — never in the DB | S1, S4 | A4 |
+| Order tokens at rest | Lookups go through `orders.token_hmac`: HMAC-SHA256 of the (lower-cased) token under its own HKDF subkey, unique-indexed. Events and the audit trail keep only that index. The admin panel's display copy is AES-256-GCM under a second subkey. A database dump therefore contains no usable token and cannot be used to test candidate tokens offline. Existing installs upgrade with `tools/migrate_order_tokens.php` (ADR-019) | S3 | A4 |
+| Pickup password guessing | Dual budget enforced together: IP-based limiter (**fail-closed**: if the limiter DB is down, pickup and login are denied, not waved through) **and** a per-session failure bucket (5 failures per window, its own constant — not tied to the IP attempt count) — whoever trips either is blocked; ≥64-bit generated passphrases (6 words + 4-digit + symbol), hash-only at rest, equalized-cost responses for unknown tokens | S2 | A1 |
 | Rate-limit bypass via spoofed `X-Forwarded-For` | Proxy headers are honored only when `DDMGMT_TRUST_PROXY=1` (opt-in for reverse-proxy/CDN installs) **and** the direct peer matches `DDMGMT_TRUSTED_PROXIES` (default: loopback + RFC1918); header values are validated as literal IPs and `REMOTE_ADDR` is the default source of truth | S2 | A1 |
 | Token enumeration | 16-char alphanumeric random tokens (~95 bits); unknown-token answers burn the same bcrypt cost and return the same body as wrong passwords when a credential was submitted; receipt requires the delivered state atomically; expired-but-not-yet-swept orders are treated as gone | S3 | A1 |
 | Session fixation / theft | `session_regenerate_id(true)` on login; `httponly`, `samesite=Strict`, `secure` when HTTPS | S5 | A1, A2 |
@@ -532,11 +544,12 @@ What remains after mitigations — stated plainly:
 - **A6 wins by definition.** An attacker with code execution reads the AES key, the DB, and the log-HMAC key from the same host; the log chain detects tampering but cannot prevent it. The design goal is: everything short of full host compromise stays defensible.
 - **TLS and WAF are external.** The app terminates neither; without HTTPS in front, A3 sees everything including pickup passwords. Deploy behind TLS (certbot, hosting certs, load balancer) and ideally a WAF/edge layer.
 - **OSM embed iframe** sends the *recipient's* IP to OpenStreetMap when viewing a delivered order's location — browser-side, outside app control. Zero third-party contact needs the [self-hosted map provider](#self-hosted-maps-opt-in-zero-third-party-tile-contact).
-- **Legacy rows are rejected at runtime — both kinds.** Pre-GCM AES-CBC rows and rows encrypted under the raw master key (pre-HKDF, ADR-016) are both refused. Run `php tools/migrate_cbc_to_gcm.php` (only if pre-GCM rows may exist) and then `php tools/separate_keys.php` after upgrading, dry-run first; until both complete, old orders and TOTP secrets are unreadable by the app — loudly, not silently.
+- **Legacy rows are rejected at runtime — three kinds.** Pre-GCM AES-CBC rows, rows encrypted under the raw master key (pre-HKDF, ADR-016) and orders whose token is still stored in the clear (pre-ADR-019) are all refused. After upgrading run `php tools/migrate_cbc_to_gcm.php` (only if pre-GCM rows may exist), `php tools/separate_keys.php` and `php tools/migrate_order_tokens.php`, dry-run first; until they complete, old orders and TOTP secrets are unreadable by the app — loudly, not silently (the hourly cleanup logs a `legacy_order_tokens` warning).
+- **A DB dump still shows structure, not secrets.** Order tokens are HMAC-indexed (ADR-019), but a reader still learns how many orders exist, their status and timestamps, and the IP and user agent of every logged event. Recovering a token needs the master key, which lives outside the database. Token lookups are case-insensitive (the index covers the lower-cased token, as the old column did), so two tokens that differ only in case would collide — the unique index refuses the second.
 - **Pickup passwords are hash-only.** Generated credentials appear exactly once (creation flash message) and can be replaced in the order editor, but never displayed again. `php tools/purge_pickup_password_recovery.php` clears the encrypted copies older versions stored.
 - **Panic mode destroys everything, evidence included** — orders, photos, event log, audit log, tile cache and on-disk logs; only accounts and settings survive. Partial filesystem failures are reported honestly and the wipe is re-runnable (ADR-015).
 - **File wipe is best-effort.** Overwriting with null bytes before `unlink()` raises the bar for casual recovery; copy-on-write filesystems, SSD wear-leveling and journaling may retain the original blocks. Full-disk encryption is the only real answer.
-- **Rate limiting is IP-based *plus* a per-session failure bucket**, which fixes both classic blind spots: strangers behind one NAT/VPN exit no longer lock each other out (separate session buckets), and an attacker must rotate IP *and* cookie per attempt. Still tunable in Settings; still no defense against truly industrial distributed guessing — the ≥64-bit passphrase and auto-expiry carry that.
+- **Rate limiting is IP-based *plus* a per-session failure bucket**, which fixes both classic blind spots: strangers behind one NAT/VPN exit no longer lock each other out (separate session buckets), and an attacker must rotate IP *and* cookie per attempt. The IP budget and window are tunable in Settings (the session bucket follows the window, keeps its own threshold); still no defense against truly industrial distributed guessing — the ≥64-bit passphrase and auto-expiry carry that.
 - **Availability is best-effort**: pseudo-cron cleanup runs on page hits unless a real cron calls `cron/cleanup.php` (the Docker image does so every 15 minutes); nothing protects against DDoS.
 
 ---
@@ -611,7 +624,7 @@ A zero-dependency PHP suite (no PHPUnit — each file is a standalone script), a
 
 | Layer | What it proves | Run it |
 |---|---|---|
-| **PHP suites** — 30 | Crypto, auth, limits, state machine, maps, i18n, fail-closed branches, live-HTTP flows | `php tests/schema_loader.php && php tests/run_all.php` |
+| **PHP suites** — 31 | Crypto, auth, limits, state machine, maps, i18n, fail-closed branches, live-HTTP flows | `php tests/schema_loader.php && php tests/run_all.php` |
 | **Browser E2E** — 7 specs | What raw HTTP cannot see: no-JS paths, CSP-clean DOM, offline maps, mid-reveal UI | `npm ci && npx playwright install chromium && npm run e2e` |
 | **Coverage gate** | Line coverage floors over `includes/` under `pcov` | `composer install && php tests/coverage_runner.php` |
 | **Mutation probe** — 16 mutants | A tested guard versus a dead one | `php tools/mutation_probe.php` |
@@ -621,13 +634,13 @@ A zero-dependency PHP suite (no PHPUnit — each file is a standalone script), a
 The suite never touches your real database: `tests/bootstrap.php` forces `DDMGMT_DB_NAME=deaddrops_test` and points the app at TCP loopback unless you say otherwise.
 
 <details>
-<summary><b>The 30 PHP suites</b>, by area</summary>
+<summary><b>The 31 PHP suites</b>, by area</summary>
 
 <br>
 
 | Area | Suites |
 |---|---|
-| Crypto & keys | `CryptoTest` — AES-256-GCM roundtrip, tamper rejection, CBC/raw-key rejection, HKDF key separation |
+| Crypto & keys | `CryptoTest` — AES-256-GCM roundtrip, tamper rejection, CBC/raw-key rejection, HKDF key separation · `TokenIndexTest` — HMAC-indexed order tokens, no plaintext in any table, migration from the old schema, key rotation re-indexing |
 | Authentication | `AuthTest` (login / 2FA / session fixation / logout), `AuthorizationTest`, `AuthorizationHttpTest` (owner vs courier, IDOR and destructive-IDOR probes over live HTTP), `Verify2faTest`, `SetupPasswordTest`, `TotpTest` (RFC 4648 base32 + RFC 6238 vectors), `TotpReplayTest`, `CsrfTest` |
 | Rate limiting | `RateLimitTest` (budgets, scopes, window expiry, kill-switch), `RateLimitConcurrencyTest`, `RateLimitTzTest` |
 | Order lifecycle | `StateTransitionTest`, `StateRaceTest` (atomic transitions under contention), `CleanupTest` (expiry + photo shredding + limiter purging), `PanicTest`, `PublicFlowTest` (token lookup, unlock, PRG reveal, receipt, per-session bucket) |
@@ -777,7 +790,7 @@ DeadDropMGMT/
 ├── tests/                    Zero-dependency suite (see Tests above)
 ├── e2e/                      Playwright specs, seed script, offline map fixture
 ├── tools/                    CLI maintenance: key rotation/separation,
-│                             CBC→GCM migration, recovery purge, mutation probe
+│                             CBC→GCM and order-token migrations, recovery purge, mutation probe
 ├── docker/                   Apache/nginx/Caddy front configs, entrypoint,
 │                             php.ini overrides, e2e journey
 ├── docs/                     ADRs + troubleshooting guide

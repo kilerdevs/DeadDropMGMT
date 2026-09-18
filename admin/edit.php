@@ -18,7 +18,12 @@ function fetch_order(int $id) {
         $db   = get_db();
         $stmt = $db->prepare('SELECT * FROM orders WHERE id = ? LIMIT 1');
         $stmt->execute([$id]);
-        return $stmt->fetch();
+        $row = $stmt->fetch();
+        if (is_array($row)) {
+            // Stored encrypted (ADR-019): open the display copy once here.
+            $row['order_token'] = token_label(order_token_plain($row), $row['token_hmac'] ?? null);
+        }
+        return $row;
     } catch (Exception $e) {
         log_err('Edit fetch: ' . $e->getMessage());
         return false;
@@ -54,10 +59,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } else {
         $new_status       = in_array($_POST['status'] ?? '', ['preparing', 'delivered'], true)
                             ? $_POST['status'] : $order['status'];
-        $new_notes        = trim($_POST['notes']        ?? '');
-        $new_location     = trim($_POST['location']     ?? '');
-        $new_instructions = trim($_POST['instructions'] ?? '');
-        $new_password     = (string)($_POST['new_password'] ?? '');
+        $new_notes        = trim(post_string('notes'));
+        $new_location     = trim(post_string('location'));
+        $new_instructions = trim(post_string('instructions'));
+        $new_password     = post_string('new_password');
         $lat_raw          = $_POST['lat'] ?? '';
         $lng_raw          = $_POST['lng'] ?? '';
 

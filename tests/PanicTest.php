@@ -21,10 +21,10 @@ foreach (glob_list($up . '/*', GLOB_ONLYDIR) as $d) { @rmdir($d); }
 $mkOrder = static function (string $token, string $status) use ($db): int {
     $delivered = $status === 'delivered' ? 'NOW()' : 'NULL';
     $db->prepare(
-        "INSERT INTO orders (order_token, pickup_password_hash, location_encrypted, location_iv,
+        "INSERT INTO orders (token_hmac, token_enc, token_iv, pickup_password_hash, location_encrypted, location_iv,
                              status, delivered_at, expires_at)
-         VALUES (?, 'x', 'ZQ==', 'abababababababababababab', '$status', $delivered, NOW() + INTERVAL 24 HOUR)"
-    )->execute([$token]);
+         VALUES (?, ?, ?, 'x', 'ZQ==', 'abababababababababababab', '$status', $delivered, NOW() + INTERVAL 24 HOUR)"
+    )->execute(tk($token));
     return (int)$db->lastInsertId();
 };
 

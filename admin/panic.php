@@ -6,7 +6,7 @@ start_secure_session();
 require_owner();
 $csp_nonce = set_security_headers(true);
 
-$step    = (int)($_POST['step'] ?? 0);
+$step    = (int)post_string('step');
 $done    = false;
 $counts  = [];
 $error   = '';

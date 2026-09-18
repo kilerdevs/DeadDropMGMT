@@ -70,6 +70,12 @@ if ($httpsKept === null) {
 $_SERVER['REMOTE_ADDR'] = '127.0.0.1';
 $_SERVER['HTTP_X_FORWARDED_PROTO'] = 'http';
 T::ok('trusted proxy XFP http NOT https', !request_is_https());
+// Multi-hop lists follow the X-Forwarded-For rule: the LAST entry is the one
+// the trusted peer wrote. A client-supplied leading "https" must not win.
+$_SERVER['HTTP_X_FORWARDED_PROTO'] = 'https, http';
+T::ok('multi-hop XFP: forged leading https does not win', !request_is_https());
+$_SERVER['HTTP_X_FORWARDED_PROTO'] = 'http, https';
+T::ok('multi-hop XFP: peer-written trailing https counts', request_is_https());
 putenv('DDMGMT_TRUST_PROXY=0');
 unset($_SERVER['HTTP_X_FORWARDED_PROTO']);
 

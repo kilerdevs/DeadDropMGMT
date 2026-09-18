@@ -109,7 +109,7 @@ set_setting('max_photos_per_order', '10');
 
 $db = get_db();
 $db->prepare("DELETE FROM users WHERE username = 't_pc_owner'")->execute();
-$db->prepare("DELETE FROM orders WHERE order_token LIKE 'pctoken%'")->execute();
+purge_orders_like($db, 'pctoken');
 $hash = password_hash('PcPass123!', PASSWORD_BCRYPT);
 $db->prepare("INSERT INTO users (username, password_hash, role) VALUES ('t_pc_owner', ?, 'owner')")->execute([$hash]);
 $ownerId = (int)$db->lastInsertId();
@@ -173,7 +173,7 @@ foreach ($shots as $path) {
 }
 @rmdir($tmpdir);
 $db->prepare("DELETE FROM users WHERE username = 't_pc_owner'")->execute();
-$db->prepare("DELETE FROM orders WHERE order_token LIKE 'pctoken%'")->execute();
+purge_orders_like($db, 'pctoken');
 if ($prevCap === '') {
     $db->prepare("DELETE FROM settings WHERE key_name = 'max_photos_per_order'")->execute();
 } else {

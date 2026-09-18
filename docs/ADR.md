@@ -1,6 +1,6 @@
 # Architecture Decision Records
 
-[![ADRs](https://img.shields.io/badge/ADRs-18-blue?style=flat)](#index)
+[![ADRs](https://img.shields.io/badge/ADRs-19-blue?style=flat)](#index)
 
 The threat model documents *what* protects what. These records capture *why*
 each security-relevant choice was made the way it was — including the
@@ -32,6 +32,7 @@ number and a row in the index.
 | 016 | HKDF key separation: the master key never encrypts directly | Accepted |
 | 017 | Self-hosted maps as an opt-in provider | Accepted |
 | 018 | Single-use CSRF tokens with a live-token endpoint | Accepted |
+| 019 | Order tokens: HMAC-indexed lookup, encrypted display copy | Accepted |
 
 ---
 
@@ -139,7 +140,9 @@ of each other's way, while attackers rotate cheap IPv6 addresses.
 **Decision.** Enforce whichever trips first: the DB-backed per-IP counter
 *or* a server-side per-session failure bucket (the session cookie is the
 bucket; clearing it yields a fresh zero-history session which the IP budget
-still sees).
+still sees). The bucket shares the IP limiter's window but has its own fixed
+threshold (`SESSION_BUCKET_MAX`), so retuning one layer never silently retunes
+the other.
 
 **Consequences.** NAT users keep independent buckets (+). Attacker cost per
 attempt rises from "new IP" to "new IP + new cookie jar" (+). Server-side
@@ -327,7 +330,9 @@ payloads and the log-integrity chain alike. A weakness or leak in any one use
 32-byte subkey with HKDF-SHA256, a fixed public salt (RFC 5869 — all secret
 material flows from the master alone) and a purpose-bound info string:
 `deaddrop:location-v1`, `deaddrop:totp-v1`, `deaddrop:reveal-v1`,
-`deaddrop:log-hmac-v1`. Rows encrypted under the raw master key are refused at
+`deaddrop:flash-v1` (one-time session messages: generated passwords, enrollment
+secrets), `deaddrop:token-index-v1` and `deaddrop:token-v1` (order tokens, ADR-019)
+and `deaddrop:log-hmac-v1`. Rows encrypted under the raw master key are refused at
 runtime; `tools/separate_keys.php` migrates them (dry-run first), and
 `tools/rotate_aes_key.php` re-encrypts under the *new* master's subkeys.
 
@@ -387,3 +392,47 @@ submit hook in `admin.js` that fetches it just before any admin POST form is sen
 long-lived pages are gone (+). One tiny extra GET per admin form submit (−).
 Public unlock forms remain plain single-use tokens; reloading the form is the
 recovery there (documented in TROUBLESHOOTING).
+
+## ADR-019 · Order tokens: HMAC-indexed lookup, encrypted display copy
+
+**Context.** The order token is the public capability URL. It was stored in the
+clear in `orders`, and again in every `order_events` and `audit_log` row that
+referred to it — the latter outliving the order. A database reader (A4: dump,
+backup, SQL injection elsewhere) therefore held every live token. Alone that
+does not reveal a location — unlocking still needs the bcrypt-hashed pickup
+password — but it removed one factor, allowed targeted online guessing, and
+contradicted the claim that the database never holds secrets in readable form.
+The username lookup already avoids the pattern (`rl_account_subject()`).
+
+**Decision.**
+- Lookups use `orders.token_hmac`: HMAC-SHA256 over the **lower-cased** token
+  under the subkey `deaddrop:token-index-v1`, with a unique index. Lower-casing
+  keeps the case-insensitive matching the old column had (`utf8mb4_unicode_ci`):
+  a recipient typing a code from a note must not fail on caps lock.
+- The admin panel still has to show tokens, so `orders` also carries
+  `token_enc` / `token_iv`, AES-256-GCM under `deaddrop:token-v1`.
+- `order_events` and `audit_log` keep **only** the index. Screens resolve it by
+  joining the order; a row whose order is gone shows `#` plus the first eight
+  hex characters, enough to tell rows apart and nothing more.
+- `setup.sql` adds the columns idempotently and relaxes the old `NOT NULL`;
+  `tools/migrate_order_tokens.php` (dry-run first, one transaction) moves every
+  existing token across and drops the plaintext columns. Until it has run, old
+  orders are unreachable and the hourly cleanup logs a warning.
+  `tools/rotate_aes_key.php` re-encrypts the copies and re-indexes.
+
+**Alternatives considered.** *Hash-only, no display copy:* owners could never
+re-share a link. *Random-nonce encryption with no index:* no way to look a token
+up. *Deterministic encryption:* would need another primitive for no gain over an
+HMAC. *Unkeyed SHA-256:* with ~95-bit tokens even that resists offline search;
+the keyed form costs nothing, matches `rl_account_subject()` and stops a dump
+from being used to confirm tokens leaked elsewhere.
+
+**Consequences.** A dump holds no usable token and cannot be used to test
+candidates offline (+). Deleting an order still takes its events with it, by
+index (+). The master key now also indexes tokens: rotating it re-indexes every
+order, and event or audit rows of already-deleted orders lose their index (−,
+by design — the order is gone). Losing the key already meant losing every
+location, and now also means no token can be looked up (−, nothing new in
+practice). Existing installs need one migration step (−, documented; enforced
+loudly, not silently). Owners and couriers can still read tokens in the panel —
+they hand them out, so that is the point.

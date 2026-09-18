@@ -58,7 +58,7 @@ $csrf = generate_csrf();
 // Analytics stats for the warning label
 try {
     $analytics_events = (int)get_db()->query("SELECT COUNT(*) FROM order_events WHERE event_type NOT LIKE 'admin_%'")->fetchColumn();
-    $analytics_orders = (int)get_db()->query('SELECT COUNT(DISTINCT order_token) FROM order_events WHERE order_token IS NOT NULL')->fetchColumn();
+    $analytics_orders = (int)get_db()->query('SELECT COUNT(DISTINCT token_hmac) FROM order_events WHERE token_hmac IS NOT NULL')->fetchColumn();
 } catch (Exception $e) {
     $analytics_events = 0;
     $analytics_orders = 0;

@@ -12,10 +12,10 @@ if (!is_dir($up)) { mkdir($up, 0770, true); }
 // Delivered rows carry delivered_at — the schema's state-machine CHECK
 // requires it, exactly like production code sets it.
 $mk = static function (string $token, ?string $expires) use ($db): int {
-    $db->prepare('DELETE FROM orders WHERE order_token = ?')->execute([$token]);
-    $db->prepare('INSERT INTO orders (order_token, pickup_password_hash, location_encrypted, location_iv, status, delivered_at, expires_at)
-                  VALUES (?, "x", "e", "abab", "delivered", NOW(), ' . ($expires ?? 'NULL') . ')')
-       ->execute([$token]);
+    purge_orders($db, [$token]);
+    $db->prepare('INSERT INTO orders (token_hmac, token_enc, token_iv, pickup_password_hash, location_encrypted, location_iv, status, delivered_at, expires_at)
+                  VALUES (?, ?, ?, "x", "e", "abab", "delivered", NOW(), ' . ($expires ?? 'NULL') . ')')
+       ->execute(tk($token));
     return (int)$db->lastInsertId();
 };
 $expiredId = $mk('clstoken00000001', 'NOW() - INTERVAL 2 HOUR');
@@ -23,9 +23,9 @@ $activeId  = $mk('clstoken00000002', 'NOW() + INTERVAL 2 HOUR');
 $noExpiry  = $mk('clstoken00000003', null);
 // A preparing row with a leaked expires_at must survive: only delivered
 // orders expire (defense in depth for the extend.php status guard).
-$db->prepare('DELETE FROM orders WHERE order_token = ?')->execute(['clstoken00000004']);
-$db->prepare('INSERT INTO orders (order_token, pickup_password_hash, location_encrypted, location_iv, status, delivered_at, expires_at)
-              VALUES ("clstoken00000004", "x", "e", "abab", "preparing", NULL, NOW() - INTERVAL 2 HOUR)')->execute();
+purge_orders($db, ['clstoken00000004']);
+$db->prepare('INSERT INTO orders (token_hmac, token_enc, token_iv, pickup_password_hash, location_encrypted, location_iv, status, delivered_at, expires_at)
+              VALUES (?, ?, ?, "x", "e", "abab", "preparing", NULL, NOW() - INTERVAL 2 HOUR)')->execute(tk('clstoken00000004'));
 $preparingLeak = (int)$db->lastInsertId();
 
 $hex = bin2hex(random_bytes(14));
@@ -108,17 +108,18 @@ T::eq('direct pass respects the hourly throttle', $after, $stampOf());
 $b1 = $mk('clstoken000011', 'NOW() - INTERVAL 3 HOUR');
 $b2 = $mk('clstoken000012', 'NOW() - INTERVAL 3 HOUR');
 $b3 = $mk('clstoken000013', 'NOW() - INTERVAL 3 HOUR');
-$db->prepare("INSERT INTO order_events (order_id, order_token, event_type, ip_address) VALUES (?, 'clstoken000011', 'unlock_success', '198.51.100.8')")->execute([$b1]);
-$db->prepare("INSERT INTO order_events (order_id, order_token, event_type, ip_address) VALUES (NULL, 'clstoken000012', 'lookup', '198.51.100.8')")->execute();
+$db->prepare("INSERT INTO order_events (order_id, token_hmac, event_type, ip_address) VALUES (?, ?, 'unlock_success', '198.51.100.8')")->execute([$b1, token_index('clstoken000011')]);
+$db->prepare("INSERT INTO order_events (order_id, token_hmac, event_type, ip_address) VALUES (NULL, ?, 'lookup', '198.51.100.8')")->execute([token_index('clstoken000012')]);
 // An untracked file keeps the directory alive: the sweep must not rmdir it
 $strayDir = "$up/$b1/";
 if (!is_dir($strayDir)) { mkdir($strayDir, 0770, true); }
 file_put_contents($strayDir . 'stray.bin', 'not-in-db');
 T::eq('three expired orders swept across batches of two', 3, cleanup_expired_orders(2));
 T::ok('swept orders are gone',
-    !$db->query("SELECT 1 FROM orders WHERE order_token LIKE 'clstoken00001%'")->fetch());
+    !order_row_exists($db, 'clstoken000011') && !order_row_exists($db, 'clstoken000012') && !order_row_exists($db, 'clstoken000013'));
 T::ok('swept orders take their events with them',
-    (int)$db->query("SELECT COUNT(*) FROM order_events WHERE order_token LIKE 'clstoken00001%' OR order_id IN ($b1, $b2, $b3)")->fetchColumn() === 0);
+    event_count_for($db, 'clstoken000011') + event_count_for($db, 'clstoken000012') === 0
+    && (int)$db->query("SELECT COUNT(*) FROM order_events WHERE order_id IN ($b1, $b2, $b3)")->fetchColumn() === 0);
 T::ok('non-empty directory survives the sweep', is_file($strayDir . 'stray.bin') && is_dir($strayDir));
 @unlink($strayDir . 'stray.bin');
 @rmdir($strayDir);
@@ -151,27 +152,27 @@ T::ok('rate_limits table survived purge probe',
 $db->prepare("DELETE FROM rate_limits WHERE scope = 'purge_test'")->execute();
 
 // ── Record retention: nothing else ever trims these tables ─────────────────
-$db->prepare("DELETE FROM orders WHERE order_token = 'clstokenRETAIN01'")->execute();
-$db->prepare("INSERT INTO orders (order_token, pickup_password_hash, location_encrypted, location_iv) VALUES ('clstokenRETAIN01', 'x', 'x', 'x')")->execute();
+purge_orders($db, ['clstokenRETAIN01']);
+$db->prepare("INSERT INTO orders (token_hmac, token_enc, token_iv, pickup_password_hash, location_encrypted, location_iv) VALUES (?, ?, ?, 'x', 'x', 'x')")->execute(tk('clstokenRETAIN01'));
 $liveId = (int)$db->lastInsertId();
 $db->exec("DELETE FROM order_events WHERE event_type = 'ret_probe'");
-$evIns = $db->prepare('INSERT INTO order_events (order_id, order_token, event_type, ip_address, created_at) VALUES (?, ?, "ret_probe", "203.0.113.9", NOW() - INTERVAL ? DAY)');
-$evIns->execute([null, 'UNKNOWNTOKEN0001', 90]);      // orphan, old  → purged
-$evIns->execute([null, 'UNKNOWNTOKEN0002', 2]);       // orphan, fresh → kept
-$evIns->execute([$liveId, 'clstokenRETAIN01', 90]);   // belongs to a live order → kept
+$evIns = $db->prepare('INSERT INTO order_events (order_id, token_hmac, event_type, ip_address, created_at) VALUES (?, ?, "ret_probe", "203.0.113.9", NOW() - INTERVAL ? DAY)');
+$evIns->execute([null, token_index('UNKNOWNTOKEN0001'), 90]);      // orphan, old  → purged
+$evIns->execute([null, token_index('UNKNOWNTOKEN0002'), 2]);       // orphan, fresh → kept
+$evIns->execute([$liveId, token_index('clstokenRETAIN01'), 90]);   // belongs to a live order → kept
 $db->exec("DELETE FROM audit_log WHERE action = 'ret_probe'");
 $auIns = $db->prepare('INSERT INTO audit_log (username, action, ip_address, created_at) VALUES ("t", "ret_probe", "203.0.113.9", NOW() - INTERVAL ? DAY)');
 $auIns->execute([AUDIT_RETENTION_DAYS + 5]);
 $auIns->execute([10]);
 _purge_stale_records();
-T::eq('old orphan events purged', 0, (int)$db->query("SELECT COUNT(*) FROM order_events WHERE order_token = 'UNKNOWNTOKEN0001'")->fetchColumn());
-T::eq('fresh orphan events kept', 1, (int)$db->query("SELECT COUNT(*) FROM order_events WHERE order_token = 'UNKNOWNTOKEN0002'")->fetchColumn());
-T::eq("live order's events kept whatever their age", 1, (int)$db->query("SELECT COUNT(*) FROM order_events WHERE order_token = 'clstokenRETAIN01'")->fetchColumn());
+T::eq('old orphan events purged', 0, event_count_for($db, 'UNKNOWNTOKEN0001'));
+T::eq('fresh orphan events kept', 1, event_count_for($db, 'UNKNOWNTOKEN0002'));
+T::eq("live order's events kept whatever their age", 1, event_count_for($db, 'clstokenRETAIN01'));
 T::eq('audit rows past retention purged, recent kept', 1, (int)$db->query("SELECT COUNT(*) FROM audit_log WHERE action = 'ret_probe'")->fetchColumn());
 $db->exec("DELETE FROM order_events WHERE event_type = 'ret_probe'");
 $db->exec("DELETE FROM audit_log WHERE action = 'ret_probe'");
 
 // Cleanup
-$db->prepare('DELETE FROM orders WHERE order_token LIKE "clstoken%"')->execute();
+purge_orders_like($db, 'clstoken');
 
 exit(T::done());

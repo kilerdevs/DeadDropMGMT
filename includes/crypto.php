@@ -10,6 +10,9 @@ require_once dirname(__DIR__) . '/config.php';
 //   master ─┬─ location-v1    orders.location_encrypted
 //           ├─ totp-v1        users.totp_secret_enc
 //           ├─ reveal-v1      sealed session payloads
+//           ├─ flash-v1       one-time messages parked in the session
+//           ├─ token-index-v1 HMAC lookup index of order tokens (orders/events/audit)
+//           ├─ token-v1       orders.token_enc (display copy of the order token)
 //           └─ log-hmac-v1    app.log integrity chain
 //
 // Compromise or rotation of one subsystem's key no longer couples the others.
@@ -55,6 +58,9 @@ function _derived_key(string $info): string {
 function _location_key(): string    { return _derived_key('deaddrop:location-v1'); }
 function _totp_key(): string        { return _derived_key('deaddrop:totp-v1'); }
 function _reveal_key(): string      { return _derived_key('deaddrop:reveal-v1'); }
+function _flash_key(): string       { return _derived_key('deaddrop:flash-v1'); }
+function _token_index_key(): string { return _derived_key('deaddrop:token-index-v1'); }
+function _token_key(): string       { return _derived_key('deaddrop:token-v1'); }
 
 // ── Raw encrypt / decrypt ─────────────────────────────────────────────────────
 // AES-256-GCM only (authenticated). Storage format: ciphertext column holds
@@ -99,25 +105,113 @@ function decrypt_location(string $ciphertext_b64, string $iv_hex): string|false 
 
 // ── TOTP secrets (own subkey — a 2FA secret leak must not expose locations) ───
 
-function encrypt_secret(string $plaintext): array {
+function _seal_gcm(string $key, string $plaintext): array {
     $nonce = random_bytes(12);
     $tag   = '';
-    $ct    = openssl_encrypt($plaintext, 'aes-256-gcm', _totp_key(), OPENSSL_RAW_DATA, $nonce, $tag);
+    $ct    = openssl_encrypt($plaintext, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $nonce, $tag);
     if ($ct === false) {
         throw new RuntimeException('Encryption failed.');
     }
     return ['ciphertext' => base64_encode($ct . $tag), 'iv' => bin2hex($nonce)];
 }
 
-function decrypt_secret(string $ciphertext_b64, string $iv_hex): string|false {
+function _open_gcm(string $key, string $ciphertext_b64, string $iv_hex): string|false {
     $raw = base64_decode($ciphertext_b64, true);
     if ($raw === false || strlen($iv_hex) !== 24 || !ctype_xdigit($iv_hex) || strlen($raw) < 16) {
         return false;
     }
     return openssl_decrypt(
-        substr($raw, 0, -16), 'aes-256-gcm', _totp_key(),
+        substr($raw, 0, -16), 'aes-256-gcm', $key,
         OPENSSL_RAW_DATA, hex2bin($iv_hex), substr($raw, -16)
     );
+}
+
+function encrypt_secret(string $plaintext): array {
+    return _seal_gcm(_totp_key(), $plaintext);
+}
+
+function decrypt_secret(string $ciphertext_b64, string $iv_hex): string|false {
+    return _open_gcm(_totp_key(), $ciphertext_b64, $iv_hex);
+}
+
+// ── One-time session messages (own subkey — a flash is not a TOTP secret) ─────
+// Generated passwords and enrollment secrets cross a redirect inside the
+// session. They are sealed under flash-v1, not the TOTP subkey, so the two
+// purposes stay cryptographically separate (ADR-016). Sessions are transient:
+// a blob sealed by an earlier build simply fails to open and the message is
+// lost once — nothing to migrate.
+
+function encrypt_flash(string $plaintext): array {
+    return _seal_gcm(_flash_key(), $plaintext);
+}
+
+function decrypt_flash(string $ciphertext_b64, string $iv_hex): string|false {
+    return _open_gcm(_flash_key(), $ciphertext_b64, $iv_hex);
+}
+
+// ── Order tokens (HMAC-indexed lookup, ADR-019) ───────────────────────────────
+// The database never holds an order token in the clear. Lookups go through a
+// keyed index — HMAC-SHA256 under its own subkey — so a DB reader holding a
+// dump cannot enumerate live capability URLs, and the token still finds its
+// row with one indexed equality match. The admin panel needs to DISPLAY the
+// token again later, so orders also carry an AES-GCM copy under a second
+// subkey; events and the audit trail keep only the index.
+//
+// The index is computed over the LOWER-CASED token: the column this replaces
+// compared case-insensitively (utf8mb4_unicode_ci), and a recipient typing a
+// code from a note must not fail on caps lock.
+
+function token_index(string $token): string {
+    return hash_hmac('sha256', strtolower($token), _token_index_key());
+}
+
+function encrypt_token(string $token): array {
+    return _seal_gcm(_token_key(), $token);
+}
+
+function decrypt_token(string $ciphertext_b64, string $iv_hex): string|false {
+    return _open_gcm(_token_key(), $ciphertext_b64, $iv_hex);
+}
+
+/**
+ * The three orders columns that stand in for the token.
+ * @return array{token_hmac:string, token_enc:string, token_iv:string}
+ */
+function token_columns(string $token): array {
+    $e = encrypt_token($token);
+    return ['token_hmac' => token_index($token), 'token_enc' => $e['ciphertext'], 'token_iv' => $e['iv']];
+}
+
+/** Index for an optional token: null and '' mean "no token" and stay NULL. */
+function token_index_or_null(?string $token): ?string {
+    return ($token === null || $token === '') ? null : token_index($token);
+}
+
+/** Display copy of a row's token, or null when it cannot be opened. */
+function order_token_plain(array $row): ?string {
+    $ct = $row['token_enc'] ?? null;
+    $iv = $row['token_iv'] ?? null;
+    if (!is_string($ct) || !is_string($iv) || $ct === '' || $iv === '') {
+        return null;
+    }
+    try {
+        $plain = decrypt_token($ct, $iv);
+    } catch (Throwable $e) {
+        return null; // unusable key: the caller shows a placeholder
+    }
+    return is_string($plain) ? $plain : null;
+}
+
+/**
+ * What the admin panel shows for a token: the readable copy when there is one,
+ * otherwise "#" plus the first 8 hex of the index — enough to tell two rows of
+ * the same (deleted, or unreadable) order apart without revealing anything.
+ */
+function token_label(?string $plain, ?string $index): string {
+    if ($plain !== null && $plain !== '') {
+        return $plain;
+    }
+    return ($index !== null && $index !== '') ? '#' . substr($index, 0, 8) : '—';
 }
 
 // ── Structured location data (JSON inside AES) ────────────────────────────────

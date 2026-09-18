@@ -9,16 +9,16 @@ require_once __DIR__ . '/bootstrap.php';
 // function under fight runs against get_db()).
 
 $db = get_db();
-$db->exec("DELETE FROM orders WHERE order_token LIKE 'stt%'");
+purge_orders_like($db, 'stt');
 
 $mk = static function (string $token, string $status, ?string $expires = null) use ($db): int {
     $delivered = $status === 'delivered' ? 'NOW()' : 'NULL';
     $exp       = $expires ?? 'NULL';
     $db->prepare(
-        "INSERT INTO orders (order_token, pickup_password_hash, location_encrypted, location_iv,
+        "INSERT INTO orders (token_hmac, token_enc, token_iv, pickup_password_hash, location_encrypted, location_iv,
                              status, delivered_at, expires_at)
-         VALUES (?, 'x', 'ZQ==', 'abababababababababababab', '$status', $delivered, $exp)"
-    )->execute([$token]);
+         VALUES (?, ?, ?, 'x', 'ZQ==', 'abababababababababababab', '$status', $delivered, $exp)"
+    )->execute(tk($token));
     return (int)$db->lastInsertId();
 };
 
@@ -55,12 +55,13 @@ T::ok('refused receive leaves the order intact',
 
 // 3 ── receive AFTER delivery: exactly once
 $idDel = $mk('sttreceive0003', 'delivered');
-$db->prepare("INSERT INTO order_events (order_id, order_token, event_type, ip_address) VALUES (?, 'sttreceive0003', 'unlock_success', '198.51.100.7')")->execute([$idDel]);
-$db->prepare("INSERT INTO order_events (order_id, order_token, event_type, ip_address) VALUES (NULL, 'sttreceive0003', 'lookup', '198.51.100.7')")->execute();
+$db->prepare("INSERT INTO order_events (order_id, token_hmac, event_type, ip_address) VALUES (?, ?, 'unlock_success', '198.51.100.7')")->execute([$idDel, token_index('sttreceive0003')]);
+$db->prepare("INSERT INTO order_events (order_id, token_hmac, event_type, ip_address) VALUES (NULL, ?, 'lookup', '198.51.100.7')")->execute([token_index('sttreceive0003')]);
 T::ok('receive accepts a delivered order', order_receive_atomic('sttreceive0003'));
 T::ok('received order is gone', !$db->query('SELECT 1 FROM orders WHERE id = ' . $idDel)->fetch());
 T::ok('receive takes the order events with it',
-    (int)$db->query("SELECT COUNT(*) FROM order_events WHERE order_token = 'sttreceive0003' OR order_id = $idDel")->fetchColumn() === 0);
+    event_count_for($db, 'sttreceive0003') === 0
+    && (int)$db->query("SELECT COUNT(*) FROM order_events WHERE order_id = $idDel")->fetchColumn() === 0);
 T::ok('repeated receive fails harmlessly', !order_receive_atomic('sttreceive0003'));
 T::ok('unknown token receives nothing', !order_receive_atomic('sttnope00000000'));
 
@@ -103,8 +104,8 @@ T::ok('state-machine CHECK constraint present', $schemaHasCheck);
 if ($schemaHasCheck) {
     $threw = false;
     try {
-        $db->exec("INSERT INTO orders (order_token, pickup_password_hash, location_encrypted, location_iv, status)
-                   VALUES ('sttcheck00008', 'x', 'e', 'abab', 'delivered')");
+        $db->prepare("INSERT INTO orders (token_hmac, token_enc, token_iv, pickup_password_hash, location_encrypted, location_iv, status)
+                      VALUES (?, ?, ?, 'x', 'e', 'abab', 'delivered')")->execute(tk('sttcheck00008'));
     } catch (Throwable) {
         $threw = true;
     }
@@ -114,8 +115,8 @@ if ($schemaHasCheck) {
 // 9 ── migration from a representative pre-migration state: drop the guard,
 // plant an anomalous row, re-run setup.sql, expect normalization + constraint back.
 $db->exec('ALTER TABLE orders DROP CONSTRAINT chk_orders_state');
-$db->exec("INSERT INTO orders (order_token, pickup_password_hash, location_encrypted, location_iv, status, expires_at)
-           VALUES ('sttmigrate09', 'x', 'e', 'abab', 'delivered', NOW() + INTERVAL 24 HOUR)");
+$db->prepare("INSERT INTO orders (token_hmac, token_enc, token_iv, pickup_password_hash, location_encrypted, location_iv, status, expires_at)
+              VALUES (?, ?, ?, 'x', 'e', 'abab', 'delivered', NOW() + INTERVAL 24 HOUR)")->execute(tk('sttmigrate09'));
 $anomalyId = (int)$db->lastInsertId();
 
 $cmd = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(__DIR__ . '/schema_loader.php') . ' 2>&1';
@@ -132,7 +133,7 @@ T::ok('CHECK constraint restored after migration', (bool)$db->query(
 )->fetchColumn());
 
 // Cleanup
-$db->exec("DELETE FROM orders WHERE order_token LIKE 'stt%'");
+purge_orders_like($db, 'stt');
 unset($lockConn);
 
 exit(T::done());

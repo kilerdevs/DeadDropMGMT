@@ -22,7 +22,7 @@ switch ($action) {
 
     // ── Add one proxy manually ────────────────────────────────────────────────
     case 'add': {
-        $url = osm_proxy_normalize((string)($_POST['url'] ?? ''));
+        $url = osm_proxy_normalize(post_string('url'));
         if ($url === null) {
             json_out(['error' => t('admin.proxies.flash.invalid_url')], 422);
         }

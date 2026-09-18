@@ -95,7 +95,7 @@ $others = array_merge(
 foreach ($others as $f) {
     $checked += _kernel_guarded('entry ' . basename($f), (string)file_get_contents($f));
 }
-T::ok('non-admin entry points scanned', count($others) === 10);
+T::ok('non-admin entry points scanned', count($others) === 11);
 
 // ── CLI-only scripts refuse every non-CLI SAPI, and the web server config
 // keeps developer/ops material off the wire (Apache .htaccess, nginx, Caddy).

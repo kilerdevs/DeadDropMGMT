@@ -19,8 +19,13 @@ try {
     $page   = min($page, $pages);
     $offset = ($page - 1) * $per_page;
     $stmt  = $db->prepare(
-        'SELECT username, action, order_id, order_token, detail, ip_address, created_at
-         FROM audit_log ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?'
+        // Joined on id AND index: an id that was ever reused must not surface
+        // another order's token. Deleted orders fall back to "#id".
+        'SELECT a.username, a.action, a.order_id, a.token_hmac, o.token_enc, o.token_iv,
+                a.detail, a.ip_address, a.created_at
+         FROM audit_log a
+         LEFT JOIN orders o ON o.id = a.order_id AND o.token_hmac = a.token_hmac
+         ORDER BY a.created_at DESC, a.id DESC LIMIT ? OFFSET ?'
     );
     $stmt->bindValue(1, $per_page, PDO::PARAM_INT);
     $stmt->bindValue(2, $offset, PDO::PARAM_INT);
@@ -64,7 +69,7 @@ $pages = max(1, (int)ceil($total / $per_page));
                         <td class="meta td-muted"><?= htmlspecialchars($r['created_at'], ENT_QUOTES, 'UTF-8') ?></td>
                         <td><?= htmlspecialchars($r['username'], ENT_QUOTES, 'UTF-8') ?></td>
                         <td><span class="token"><?= htmlspecialchars($r['action'], ENT_QUOTES, 'UTF-8') ?></span></td>
-                        <td class="td-muted"><?= htmlspecialchars($r['order_token'] ?? ($r['order_id'] !== null ? '#' . $r['order_id'] : '—'), ENT_QUOTES, 'UTF-8') ?></td>
+                        <td class="td-muted"><?= htmlspecialchars(order_token_plain($r) ?? ($r['order_id'] !== null ? '#' . $r['order_id'] : '—'), ENT_QUOTES, 'UTF-8') ?></td>
                         <td class="td-muted"><?= htmlspecialchars($r['detail'] ?? '', ENT_QUOTES, 'UTF-8') ?></td>
                         <td class="meta td-muted"><?= htmlspecialchars($r['ip_address'], ENT_QUOTES, 'UTF-8') ?></td>
                     </tr>

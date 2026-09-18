@@ -3,6 +3,7 @@ declare(strict_types=1);
 require_once dirname(__DIR__) . '/config.php';
 require_once dirname(__DIR__) . '/includes/db.php';
 require_once dirname(__DIR__) . '/includes/settings.php';
+require_once dirname(__DIR__) . '/includes/crypto.php';
 
 function log_event(
     string  $event_type,
@@ -15,11 +16,11 @@ function log_event(
     try {
         get_db()->prepare(
             'INSERT INTO order_events
-             (order_id, order_token, event_type, ip_address, user_agent)
+             (order_id, token_hmac, event_type, ip_address, user_agent)
              VALUES (?, ?, ?, ?, ?)'
         )->execute([
             $order_id,
-            $token,
+            token_index_or_null($token),
             $event_type,
             get_client_ip(),
             substr($_SERVER['HTTP_USER_AGENT'] ?? '', 0, 500),
