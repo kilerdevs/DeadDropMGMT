@@ -12,7 +12,7 @@ foreach (['NO_PROXY', 'no_proxy', 'HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'ht
 }
 unset($_SERVER['NO_PROXY'], $_SERVER['no_proxy']);
 
-$port = 8937 + (int)(getmypid() % 200);
+$port = 0; // chosen by the probe loop below
 $stubDir = sys_get_temp_dir() . '/ddmgmt_maps_stub_' . getmypid();
 if (!is_dir($stubDir)) {
     mkdir($stubDir, 0700, true);
@@ -47,11 +47,53 @@ return true;
 PHP);
 file_put_contents($stubDir . '/cli.tgz', $fixture);
 $null = DIRECTORY_SEPARATOR === '\\' ? 'NUL' : '/dev/null';
-$cmd = escapeshellarg(PHP_BINARY)
-    . ' -d session.save_path=' . escapeshellarg(ini_get('session.save_path'))
-    . " -S 127.0.0.1:$port " . escapeshellarg($router);
-$proc = proc_open($cmd, [['pipe', 'r'], ['file', $null, 'w'], ['file', $null, 'w']], $pipes);
-if (!is_resource($proc)) {
+// CI runners share loopback with unrelated processes: probe a few pid-based
+// ports and take the first one that is both free and actually serves (a
+// taken port makes php -S exit, which the boot loop below detects).
+$proc = null;
+for ($t = 0; $t < 10 && $port === 0; $t++) {
+    $cand = 8937 + ((getmypid() + $t * 131) % 200);
+    $probe = @fsockopen('127.0.0.1', $cand, $errno, $errstr, 0.2);
+    if (is_resource($probe)) {
+        fclose($probe);
+        continue; // occupied — try the next candidate
+    }
+    $cmd = escapeshellarg(PHP_BINARY)
+        . ' -d session.save_path=' . escapeshellarg(ini_get('session.save_path'))
+        . " -S 127.0.0.1:$cand " . escapeshellarg($router);
+    $try = proc_open($cmd, [['pipe', 'r'], ['file', $null, 'w'], ['file', $null, 'w']], $pipes);
+    if (!is_resource($try)) {
+        continue;
+    }
+    $ready = false;
+    for ($i = 0; $i < 15; $i++) {
+        $ch = curl_init("http://127.0.0.1:$cand/file");
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 2);
+        $body = curl_exec($ch);
+        $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        unset($ch); // PHP 8.5 deprecates curl_close(); the handle frees on scope exit
+        if ($code === 200 && $body === str_repeat('F', 65536)) {
+            $ready = true;
+            break;
+        }
+        usleep(200000);
+    }
+    if ($ready) {
+        $port = $cand;
+        $proc = $try;
+    } else {
+        if (!empty(proc_get_status($try)['running'])) {
+            if (DIRECTORY_SEPARATOR === '\\') {
+                exec('taskkill /F /T /PID ' . (int)proc_get_status($try)['pid'] . ' >NUL 2>&1');
+            } else {
+                proc_terminate($try);
+            }
+        }
+        proc_close($try);
+    }
+}
+if (!is_resource($proc) || $port === 0) {
     fwrite(STDERR, "cannot spawn stub server\n");
     exit(1);
 }
@@ -71,20 +113,7 @@ register_shutdown_function(static function () use ($proc, $router, $stubDir): vo
     @unlink($stubDir . '/cli.tgz');
     @rmdir($stubDir);
 });
-$up = false;
-for ($i = 0; $i < 30; $i++) {
-    $ch = curl_init("http://127.0.0.1:$port/file");
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 2);
-    $body = curl_exec($ch);
-    $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    unset($ch); // PHP 8.5 deprecates curl_close(); the handle frees on scope exit
-    if ($code === 200 && $body === str_repeat('F', 65536)) {
-        $up = true;
-        break;
-    }
-    usleep(200000);
-}
+$up = $port !== 0;
 T::ok('stub server booted', $up);
 
 $db = get_db();
