@@ -84,3 +84,37 @@ The complete license text ships alongside the font itself — see
 [`fonts/ibm-plex-mono/LICENSE.txt`](fonts/ibm-plex-mono/LICENSE.txt). The SIL
 Open Font License requires that the font (with its license) stay together when
 redistributed, which this layout preserves.
+
+---
+
+## MapLibre GL JS 5.13.0
+
+- **Path:** `maplibre/maplibre-gl.js`, `maplibre/maplibre-gl.css`
+- **Homepage:** https://maplibre.org/
+- **License:** BSD-3-Clause (incorporates BSD-3-Clause Mapbox code ≤ v1.13
+  and MIT d3-color — full text in `maplibre/LICENSE-maplibre.txt`)
+
+Vector map renderer for the self-hosted map provider. Served from your own
+domain; fetches tiles only from your own `/tiles/` directory.
+
+---
+
+## PMTiles JS client 4.5.0
+
+- **Path:** `maplibre/pmtiles.js`
+- **Homepage:** https://github.com/protomaps/pmtiles
+- **License:** BSD-3-Clause, Protomaps LLC (the PMTiles spec itself is
+  public domain/CC0 — full text in `maplibre/LICENSE-pmtiles.txt`)
+
+Single-file tile-archive reader: issues HTTP Range requests against local
+`.pmtiles` zone files, no tile server involved.
+
+---
+
+## E2E map fixture (Protomaps basemap extract)
+
+- **Path:** `e2e/fixtures/micro.pmtiles` (test-only, never served in prod)
+- **Source:** Protomaps daily planet build (see `e2e/fixtures/README.md`
+  for the exact build, bbox, and SHA256)
+- **License:** Open Database License (ODbL) Produced Work —
+  © OpenStreetMap contributors (attribution rendered on every map).

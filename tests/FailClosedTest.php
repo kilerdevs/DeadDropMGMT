@@ -41,6 +41,9 @@ foreach (['public' => $pub_list, 'admin' => $adm_list] as $prof => $list) {
     T::ok("$prof CSP carries the request nonce", str_contains($csp, "'nonce-testnonce'"));
     T::ok("$prof CSP keeps frame-ancestors none", str_contains($csp, "frame-ancestors 'none'"));
     T::ok("$prof CSP keeps object-src none", str_contains($csp, "object-src 'none'"));
+    // MapLibre renders in WebGL workers built from Blob URLs — without this
+    // the self-hosted map path is a black rectangle under an airtight CSP.
+    T::ok("$prof CSP allows maplibre blob workers", str_contains($csp, "worker-src 'self' blob:"));
 }
 T::ok('public CSP keeps OSM frame-src',
     str_contains(implode("\n", $pub_list), 'frame-src https://www.openstreetmap.org'));

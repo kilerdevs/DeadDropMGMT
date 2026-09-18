@@ -1529,6 +1529,22 @@ h1 {
     height:     380px;
     border:     1px solid var(--border);
     background: var(--surface);
+    position:   relative;
+}
+
+/* Self-hosted path with zero downloaded zones: the map chrome renders over
+   the shared background while the overlay points at Settings → Maps. */
+.map-empty-overlay {
+    position:         absolute;
+    inset:            auto 12px 12px 12px;
+    padding:          10px 14px;
+    background:       rgba(17, 20, 24, 0.88);
+    border:           1px solid var(--border);
+    color:            var(--text-muted);
+    font-family:      'IBM Plex Mono', monospace;
+    font-size:        11px;
+    letter-spacing:   0.06em;
+    pointer-events:   none;
 }
 
 .map-coords {

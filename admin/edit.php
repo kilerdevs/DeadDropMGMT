@@ -241,7 +241,12 @@ $init_zoom = $has_pin ? 17 : 12;
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <meta name="darkreader-lock">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Admin — <?= t('admin.edit.title_prefix') ?> <?= htmlspecialchars($order['order_token'], ENT_QUOTES, 'UTF-8') ?></title><link rel="stylesheet" href="/admin/vendor/leaflet/leaflet.css">
+<title>Admin — <?= t('admin.edit.title_prefix') ?> <?= htmlspecialchars($order['order_token'], ENT_QUOTES, 'UTF-8') ?></title>
+<?php if (map_provider() === MAP_PROVIDER_SELFHOSTED): ?>
+<link rel="stylesheet" href="/maplibre/maplibre-gl.css">
+<?php else: ?>
+<link rel="stylesheet" href="/admin/vendor/leaflet/leaflet.css">
+<?php endif; ?>
 <link rel="stylesheet" href="/admin/style.css">
 <meta name="csrf-token" content="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
 </head>
@@ -336,7 +341,16 @@ $init_zoom = $has_pin ? 17 : 12;
                                placeholder="<?= htmlspecialchars(t('admin.new_order.addr_search_placeholder'), ENT_QUOTES, 'UTF-8') ?>" autocomplete="off">
                         <button type="button" class="btn btn-sm" id="addr-btn"><?= t('admin.new_order.search_button') ?></button>
                     </div>
-                    <div id="map-picker"></div>
+                    <div id="map-picker"
+                         data-init-lat="<?= htmlspecialchars(json_encode($init_lat), ENT_QUOTES, 'UTF-8') ?>"
+                         data-init-lng="<?= htmlspecialchars(json_encode($init_lng), ENT_QUOTES, 'UTF-8') ?>"
+                         data-init-zoom="<?= htmlspecialchars(json_encode($init_zoom), ENT_QUOTES, 'UTF-8') ?>"
+                         data-has-pin="<?= $has_pin ? '1' : '0' ?>" data-geolocate="0"
+                         data-i18n-pin="<?= htmlspecialchars(t('admin.new_order.pin_prefix'), ENT_QUOTES, 'UTF-8') ?>"
+                         data-i18n-not-found="<?= htmlspecialchars(t('admin.new_order.geocode_not_found'), ENT_QUOTES, 'UTF-8') ?>"
+                         data-i18n-error="<?= htmlspecialchars(t('admin.new_order.geocode_error'), ENT_QUOTES, 'UTF-8') ?>"
+                         data-i18n-load-error="<?= htmlspecialchars(t('admin.maps.load_error'), ENT_QUOTES, 'UTF-8') ?>"
+                         data-i18n-no-zones="<?= htmlspecialchars(t('admin.maps.no_zones'), ENT_QUOTES, 'UTF-8') ?>"></div>
                     <div class="map-coords" id="coords-display">
                         <?= htmlspecialchars(
                             $has_pin
@@ -476,7 +490,13 @@ $init_zoom = $has_pin ? 17 : 12;
     </main>
 </div>
 
+<?php if (map_provider() === MAP_PROVIDER_SELFHOSTED): ?>
+<script src="/maplibre/maplibre-gl.js"></script>
+<script src="/maplibre/pmtiles.js"></script>
+<script src="/admin/maplibre-picker.js"></script>
+<?php else: ?>
 <script src="/admin/vendor/leaflet/leaflet.js"></script>
+<?php endif; ?>
 <script src="/admin/admin.js"></script>
 <script nonce="<?= htmlspecialchars($csp_nonce, ENT_QUOTES, 'UTF-8') ?>">
 (function () {
@@ -550,6 +570,15 @@ $init_zoom = $has_pin ? 17 : 12;
         }
     });
 
+    // ── Map picker ──────────────────────────────────────────────────────────
+    // OSM path renders Leaflet inline; the self-hosted path lives in the
+    // static /admin/maplibre-picker.js (configured via #map-picker data-*)
+    // and only reports back through the 'map-pin' event for autosave.
+    <?php if (map_provider() === MAP_PROVIDER_SELFHOSTED): ?>
+    document.getElementById('map-picker').addEventListener('map-pin', function () {
+        scheduleSave(500);
+    });
+    <?php else: ?>
     // ── Leaflet map ───────────────────────────────────────────────────────────
     delete L.Icon.Default.prototype._getIconUrl;
     L.Icon.Default.mergeOptions({
@@ -622,6 +651,7 @@ $init_zoom = $has_pin ? 17 : 12;
     document.getElementById('addr-search').addEventListener('keydown', function (e) {
         if (e.key === 'Enter') { e.preventDefault(); document.getElementById('addr-btn').click(); }
     });
+    <?php endif; ?>
 
     // ── Photo gallery / lightbox ──────────────────────────────────────────────
     var links = Array.from(document.querySelectorAll('.gallery-link'));

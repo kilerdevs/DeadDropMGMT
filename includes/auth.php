@@ -364,6 +364,7 @@ function _security_headers_list(bool $admin, string $nonce): array {
             "style-src 'self'; " .
             "font-src 'self'; " .
             "script-src 'self' 'nonce-{$nonce}'; " .
+            "worker-src 'self' blob:; " .
             "img-src 'self' data: blob:; " .
             "connect-src 'self'; " .
             "object-src 'none'; base-uri 'self'; frame-ancestors 'none';";
@@ -375,6 +376,7 @@ function _security_headers_list(bool $admin, string $nonce): array {
         "style-src 'self'; " .
         "font-src 'self'; " .
         "script-src 'self' 'nonce-{$nonce}'; " .
+        "worker-src 'self' blob:; " .
         "img-src 'self'; " .
         'frame-src https://www.openstreetmap.org; ' .
         "object-src 'none'; base-uri 'self'; frame-ancestors 'none';";

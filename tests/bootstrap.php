@@ -109,4 +109,5 @@ require_once dirname(__DIR__) . '/includes/audit.php';
 require_once dirname(__DIR__) . '/includes/order_state.php';
 require_once dirname(__DIR__) . '/includes/wipe.php';
 require_once dirname(__DIR__) . '/includes/proxy.php';
+require_once dirname(__DIR__) . '/includes/maps.php';
 require_once dirname(__DIR__) . '/includes/cleanup.php';

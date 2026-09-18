@@ -1,0 +1,5 @@
+# Self-hosted map zones (*.pmtiles) are public OSM-derived data, served
+# directly so browsers can issue HTTP Range requests against them.
+# (Location secrecy lives in the token gate, not tile secrecy.)
+# Listing off; style.php itself enforces the admin gate in code.
+Options -Indexes

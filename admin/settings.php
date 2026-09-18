@@ -95,6 +95,12 @@ $groups = [
     'diagnostics' => [
         'show_error_log' => ['type' => 'toggle'],
     ],
+    'maps' => [
+        'map_provider' => ['type' => 'select', 'options' => [
+            MAP_PROVIDER_OSM        => t('admin.maps.provider.osm'),
+            MAP_PROVIDER_SELFHOSTED => t('admin.maps.provider.selfhosted'),
+        ]],
+    ],
 ];
 
 function s_val(array $s, string $key): string {

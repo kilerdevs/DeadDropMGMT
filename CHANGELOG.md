@@ -5,6 +5,15 @@ All notable changes to DeadDropMGMT are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Self-hosted maps, Phase 1 (opt-in, OSM stays default): `map_provider`
+  setting (`osm` | `selfhosted`, Settings → Maps), vendored MapLibre GL JS
+  + PMTiles client, server-built dark style at `/tiles/style.php`
+  (admin-gated), and a MapLibre picker on the new-order/edit pages with the
+  same click-to-pin contract as Leaflet. With no zones downloaded yet the
+  map chrome renders an empty-state overlay pointing at Settings → Maps.
+  CSP gains `worker-src 'self' blob:` (both profiles) for MapLibre's WebGL
+  workers. Pinned by `MapsTest` + a `maps-selfhosted` Playwright spec that
+  renders a committed Warsaw fixture with zero third-party requests.
 - Single active session per account: a login elsewhere supersedes the old
   one (`users.active_session_id`, set at every full login). The superseded
   browser is logged out to the login page with an explanatory notice

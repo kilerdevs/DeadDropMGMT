@@ -39,6 +39,7 @@ foreach ([
     'analytics',
     'order_state',
     'proxy',
+    'maps',
     'cleanup',
     'wipe',
 ] as $service) {
