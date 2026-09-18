@@ -337,7 +337,7 @@ function maps_fetch_file(string $url, string $dest, ?string $proxy): array {
     // @: an unwritable path warns — the false branch below owns the error.
     $fh = @fopen($dest, $have > 0 ? 'ab' : 'wb');
     if ($fh === false) {
-        curl_close($ch);
+        unset($ch); // PHP 8.5 deprecates curl_close(); the handle frees on scope exit
         return [false, 'cannot write download file'];
     }
     curl_setopt($ch, CURLOPT_FILE, $fh);
@@ -354,7 +354,7 @@ function maps_fetch_file(string $url, string $dest, ?string $proxy): array {
     $ok = curl_exec($ch);
     $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $err = curl_error($ch);
-    curl_close($ch);
+    unset($ch); // PHP 8.5 deprecates curl_close(); the handle frees on scope exit
     fclose($fh);
     if ($ok && ($code === 200 || ($have > 0 && $code === 206))) {
         return [true, ''];

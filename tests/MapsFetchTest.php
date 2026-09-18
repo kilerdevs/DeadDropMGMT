@@ -78,7 +78,7 @@ for ($i = 0; $i < 30; $i++) {
     curl_setopt($ch, CURLOPT_TIMEOUT, 2);
     $body = curl_exec($ch);
     $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
+    unset($ch); // PHP 8.5 deprecates curl_close(); the handle frees on scope exit
     if ($code === 200 && $body === str_repeat('F', 65536)) {
         $up = true;
         break;
