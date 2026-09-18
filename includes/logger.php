@@ -29,7 +29,17 @@ const APP_LOG_GENESIS     = '000000000000000000000000000000000000000000000000000
 // before key separation used HMAC keyed with the raw hex string; verification
 // still accepts them until the log rotates out (see verify_log_chain).
 function _log_key(): string {
-    return hash_hkdf('sha256', hex2bin(AES_KEY_HEX), 32, 'deaddrop:log-hmac-v1', 'deaddrop-mgmt-hkdf-salt-v1');
+    static $key = null;
+    if ($key === null) {
+        // (self-contained on purpose: config.php loads this file before crypto.php)
+        $hex = defined('AES_KEY_HEX') ? (string)AES_KEY_HEX : '';
+        $master = preg_match('/^[0-9a-fA-F]{64}$/', $hex) === 1 ? hex2bin($hex) : false;
+        if ($master === false) {
+            throw new RuntimeException('Log integrity key unavailable: AES_KEY_HEX is not a valid 64-hex-char key.');
+        }
+        $key = hash_hkdf('sha256', $master, 32, 'deaddrop:log-hmac-v1', 'deaddrop-mgmt-hkdf-salt-v1');
+    }
+    return $key;
 }
 
 function _log_key_legacy(): string {
@@ -154,6 +164,19 @@ function _log_rotate_if_needed(string $path): void {
 }
 
 function app_log(string $level, string $event, array $ctx = []): bool {
+    // No usable key, no chain: refuse BEFORE touching the file (an empty
+    // app.log used to appear, and hex2bin() warnings flooded error.log on
+    // every call). Say so once per process — it is a configuration fault.
+    try {
+        _log_key();
+    } catch (Throwable $e) {
+        static $keyWarned = false;
+        if (!$keyWarned) {
+            $keyWarned = true;
+            error_log('Structured log disabled: ' . $e->getMessage());
+        }
+        return false;
+    }
     $path = APP_LOG_PATH;
     $dir  = dirname($path);
     if (!is_dir($dir)) {
@@ -295,6 +318,11 @@ function verify_log_chain(?string $path = null): array {
     $path = $path ?? APP_LOG_PATH;
     if (!is_file($path)) {
         return [true, 0, null, null];
+    }
+    try {
+        _log_key();
+    } catch (Throwable) {
+        return [false, 0, null, 'log key unavailable (AES_KEY_HEX invalid)'];
     }
     $fh = fopen($path, 'r');
     if ($fh === false) {

@@ -488,6 +488,7 @@ return [
     'admin.settings.verify_log_button'   => 'Vérifier l\'intégrité',
     'admin.settings.download_jsonl_button' => 'Télécharger le journal structuré',
     'admin.settings.log_verify_ok'       => 'Chaîne intacte — {n} entrées vérifiées',
+    'admin.settings.log_verify_empty' => 'Rien à vérifier pour l\'instant : le journal structuré est vide. (La vérification d\'intégrité ne couvre que le journal structuré, pas le journal d\'erreurs ci-dessus.)',
     'admin.settings.log_verify_fail'     => 'RUPTURE D\'INTÉGRITÉ à l\'entrée #{n} : {r}',
     'admin.settings.log_empty' => 'Le journal est vide.',
     'admin.settings.js.empty_field'        => 'Ce champ ne peut pas être vide.',

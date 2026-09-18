@@ -202,6 +202,28 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   failed its check and all zone downloads died as `code:version_mismatch`.
   The probe now runs `pmtiles version` (whose `pmtiles 1.31.2, commit …`
   line still contains the pinned version); the test doubles mirror it.
+- Settings → Diagnostics: **Verify integrity** answered "Chain intact — 0
+  entries verified" while the page listed 40 lines, because the check covers
+  the structured (hash-chained) log, which was empty, not the PHP error log
+  shown above it. An empty structured log now says so — "Nothing to verify
+  yet … covers the structured log only, not the error log above" (eight
+  languages) — instead of reading as a pass.
+- CLI processes that never saw the container entrypoint's environment
+  (`docker exec` shells, cron, `tools/*`) had no `DDMGMT_AES_KEY_HEX`, ran on
+  the placeholder key and filled `error.log` with `hex2bin()` warnings.
+  `config.php` now falls back to the key the entrypoint persisted at
+  `/config/aes_key_hex` (the environment variable still wins). The
+  structured logger refuses quietly when the key is unusable — one message per
+  process, no empty `app.log`, no per-call warnings — and log verification
+  names the cause; `aes_key_valid()` / `aes_key_problem()` let
+  `separate_keys.php` and `migrate_cbc_to_gcm.php` check the key before any
+  `hex2bin()` (`strlen(false)` was a TypeError). Pinned by a child-process
+  probe in `LoggerTest` that fails on the old logger.
+- `tools/mutation_probe.php` exits early with an explanation when it cannot
+  write the source files (root-owned image, read-only checkout) instead of
+  emitting a wall of `file_put_contents` warnings with meaningless verdicts;
+  `docker/e2e_journey.php` refuses to run against a database that already holds
+  users or orders and no longer reads columns from a row that was never created.
 - **The AES key vanished on every container restart**: the entrypoint exported
   `DDMGMT_AES_KEY_HEX` only on first boot, so after `docker restart` or a host
   reboot (container filesystem — `config.php` — survives, shell exports do not)

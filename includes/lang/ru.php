@@ -490,6 +490,7 @@ return [
     'admin.settings.verify_log_button'   => 'Проверить целостность',
     'admin.settings.download_jsonl_button' => 'Скачать структурный журнал',
     'admin.settings.log_verify_ok'       => 'Цепочка не нарушена — проверено записей: {n}',
+    'admin.settings.log_verify_empty' => 'Пока нечего проверять — структурный журнал пуст. (Проверка целостности охватывает только структурный журнал, а не журнал ошибок выше.)',
     'admin.settings.log_verify_fail'     => 'НАРУШЕНИЕ ЦЕЛОСТНОСТИ в записи #{n}: {r}',
     'admin.settings.log_empty' => 'Журнал пуст.',
     'admin.settings.js.empty_field'        => 'Поле не может быть пустым.',

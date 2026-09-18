@@ -404,6 +404,14 @@ with_table_hidden_lg('order_events', function (): void {
 T::ok('failed event leaves no phantom row',
       $db->query("SELECT 1 FROM order_events WHERE event_type = 't_event_fail'")->fetch() === false);
 
+// ── Unusable AES key: the structured log refuses quietly and says why ───────
+// (`docker exec` shells and cron never inherited the key: app_log() used to
+// create an empty app.log and spray hex2bin() warnings into error.log.)
+$child = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(__DIR__ . '/_log_badkey.php') . ' 2>&1';
+$out = (string)shell_exec('DDMGMT_AES_KEY_HEX=not-a-real-key ' . $child);
+T::eq('bad key: no write, log untouched, verify names the cause',
+    '0|untouched|log key unavailable (AES_KEY_HEX invalid)', trim($out));
+
 exit(T::done());
 
 // Local helper (suites are separate files; a shared helper file would be

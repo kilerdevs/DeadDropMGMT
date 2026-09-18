@@ -439,6 +439,7 @@ function s_label(array $s, string $key): string {
         'px_none_working'   => t('admin.proxies.js.none_working'),
         'log_verify_ok'     => t('admin.settings.log_verify_ok'),
         'log_verify_fail'   => t('admin.settings.log_verify_fail'),
+        'log_verify_empty'  => t('admin.settings.log_verify_empty'),
         'mz_queued_kicked'  => t('admin.maps.queued_kicked'),
         'mz_queued_cron'    => t('admin.maps.queued_cron'),
         'mz_confirm_delete' => t('admin.maps.confirm_delete'),
@@ -1121,7 +1122,11 @@ function s_label(array $s, string $key): string {
                 .then(function (r) { return r.json(); })
                 .then(function (j) {
                     if (j.csrf) csrf = j.csrf;
-                    if (j.valid) {
+                    if (j.valid && !j.checked) {
+                        // Nothing chained yet: "intact — 0 verified" read as a pass
+                        // on the error log above, which this check never covers.
+                        vResult.textContent = I.log_verify_empty;
+                    } else if (j.valid) {
                         vResult.textContent = I.log_verify_ok.replace('{n}', j.checked);
                     } else {
                         vResult.textContent = (I.log_verify_fail

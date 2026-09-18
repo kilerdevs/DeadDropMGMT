@@ -80,6 +80,15 @@ function jok(bool $cond, string $what): void {
 
 echo "=== DeadDropMGMT container journey ===\n";
 
+// This journey is a lifecycle TEST: it creates the first owner, an order and
+// deletes them again. It only makes sense on a fresh, empty install, and must
+// never run against real data — refuse before touching anything.
+$existing = (int)get_db()->query('SELECT (SELECT COUNT(*) FROM users) + (SELECT COUNT(*) FROM orders)')->fetchColumn();
+if ($existing > 0) {
+    fwrite(STDERR, "Refusing to run: this database already holds users or orders. The journey needs a fresh, empty install (scratch stack / CI).\n");
+    exit(2);
+}
+
 // ── 0. boot: the public page must render ─────────────────────────────────────
 [$st, $html] = _j_get("$base/");
 jok($st === 200 && str_contains($html, '<!DOCTYPE'), 'container serves the public page');
@@ -131,6 +140,12 @@ $orderPass = 'Recipient9!';
     'pickup_password' => $orderPass,
 ], $ck);
 $row = get_db()->query('SELECT id, order_token, status FROM orders ORDER BY id DESC LIMIT 1')->fetch();
+if (!is_array($row)) {
+    // Nothing was created: every later step would only cascade into noise.
+    jok(false, 'order created through the admin UI');
+    echo "\nJourney FAILED: $fail assertion(s).\n";
+    exit(1);
+}
 $token   = (string)$row['order_token'];
 $orderId = (int)$row['id'];
 jok(strlen($token) === 16, "order created with token $token");
@@ -152,7 +167,7 @@ $csrf = _j_csrf($html);
 $st = get_db()->prepare('SELECT status FROM orders WHERE order_token = ?');
 $st->execute([$token]);
 $row = $st->fetch();
-jok($row !== null && $row['status'] === 'delivered', 'order delivered through the admin UI');
+jok(is_array($row) && $row['status'] === 'delivered', 'order delivered through the admin UI');
 
 // ── 6. public lookup (no password) ───────────────────────────────────────────
 [$st, $html, $pubCookie] = _j_unlock($base, ['order_token' => $token], '');

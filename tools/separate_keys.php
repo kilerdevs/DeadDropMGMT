@@ -27,11 +27,11 @@ $dry     = isset($options['dry-run']);
 
 require_once dirname(__DIR__) . '/includes/kernel.php';
 
-$master = hex2bin(AES_KEY_HEX);
-if (strlen($master) !== 32) {
-    fwrite(STDERR, "AES_KEY_HEX must be 32 bytes (64 hex chars)\n");
+if (!aes_key_valid()) {
+    fwrite(STDERR, aes_key_problem() . "\n");
     exit(1);
 }
+$master = (string)hex2bin(AES_KEY_HEX);
 
 // Legacy decryption: GCM keyed with the RAW master — exists only here,
 // unreachable from any HTTP path (same policy as legacy CBC).

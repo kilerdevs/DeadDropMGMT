@@ -52,11 +52,11 @@ function gcm_encrypt_with(string $key, string $plaintext, ?string $info = null):
     return ['ciphertext' => base64_encode($ct . $tag), 'iv' => bin2hex($nonce)];
 }
 
-$key = hex2bin(AES_KEY_HEX);
-if (strlen($key) !== 32) {
-    fwrite(STDERR, "AES_KEY_HEX must be 32 bytes (64 hex chars)\n");
+if (!aes_key_valid()) {
+    fwrite(STDERR, aes_key_problem() . "\n");
     exit(1);
 }
+$key = (string)hex2bin(AES_KEY_HEX);
 
 $db      = get_db();
 $db->beginTransaction();

@@ -192,6 +192,22 @@ $mutants = [
     ],
 ];
 
+// The probe edits the real source files in place (and restores them). If the
+// current user cannot write them — root-owned files in the Docker image, a
+// read-only checkout — every mutant would fail with a wall of file_put_contents
+// warnings and the "kill" verdicts would be meaningless. Say so up front.
+$unwritable = [];
+foreach (array_unique(array_map(static fn(array $m): string => (string)$m['file'], $mutants)) as $rel) {
+    if (!is_writable($root . '/' . $rel)) {
+        $unwritable[] = $rel;
+    }
+}
+if ($unwritable !== []) {
+    fwrite(STDERR, 'Cannot run: this user may not write ' . implode(', ', $unwritable) . ".\n"
+        . "The mutation probe rewrites source files temporarily; run it from a writable checkout (CI / a development clone), not the deployed container.\n");
+    exit(2);
+}
+
 /** @var array<string,string> $backups path => original content, restored on shutdown */
 $backups = [];
 register_shutdown_function(static function () use (&$backups): void {

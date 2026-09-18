@@ -31,7 +31,19 @@ define('DB_SSL_VERIFY', _secret('DDMGMT_DB_SSL_VERIFY_CERT', '1') === '1');
 
 // ── AES-256-GCM key (32 bytes stored as 64-char hex) ─────────────────────────
 // Generate:  php -r "echo bin2hex(random_bytes(32)) . PHP_EOL;"
-define('AES_KEY_HEX', _secret('DDMGMT_AES_KEY_HEX', 'REPLACE_WITH_64_HEX_CHARS_FROM_PHP_R_ABOVE__________'));
+// Docker: the entrypoint persists the generated key on the config volume. A
+// process that never saw the entrypoint's environment (`docker exec` shells,
+// cron, CLI tools) has no DDMGMT_AES_KEY_HEX, so it falls back to that file —
+// without it those processes ran on the placeholder and failed with hex2bin()
+// warnings. The environment variable still wins when set.
+function _key_from_file(string $path): string {
+    $v = is_file($path) && is_readable($path) ? trim((string)@file_get_contents($path)) : '';
+    return preg_match('/^[0-9a-fA-F]{64}$/', $v) === 1 ? $v : '';
+}
+define('AES_KEY_HEX', _secret(
+    'DDMGMT_AES_KEY_HEX',
+    _key_from_file('/config/aes_key_hex') ?: 'REPLACE_WITH_64_HEX_CHARS_FROM_PHP_R_ABOVE__________'
+));
 
 // ── Site identity ────────────────────────────────────────────────────────────
 // Fallback used only if the DB settings table is empty or unreachable.

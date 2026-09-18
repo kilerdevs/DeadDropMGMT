@@ -490,6 +490,7 @@ return [
     'admin.settings.verify_log_button'   => 'Перевірити цілісність',
     'admin.settings.download_jsonl_button' => 'Завантажити структурний журнал',
     'admin.settings.log_verify_ok'       => 'Ланцюжок не порушено — перевірено записів: {n}',
+    'admin.settings.log_verify_empty' => 'Поки що нічого перевіряти — структурований журнал порожній. (Перевірка цілісності стосується лише структурованого журналу, а не журналу помилок вище.)',
     'admin.settings.log_verify_fail'     => 'ПОРУШЕННЯ ЦІЛІСНОСТІ в записі #{n}: {r}',
     'admin.settings.log_empty' => 'Журнал порожній.',
     'admin.settings.js.empty_field'        => 'Поле не може бути порожнім.',

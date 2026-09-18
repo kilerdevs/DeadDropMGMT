@@ -18,6 +18,22 @@ require_once dirname(__DIR__) . '/config.php';
 
 const HKDF_SALT = 'deaddrop-mgmt-hkdf-salt-v1';
 
+// True when AES_KEY_HEX is a usable 64-hex-char master key. The placeholder in
+// config.php.example, an empty string or a truncated value all answer false —
+// callers (logger, CLI tools) can then say so instead of tripping over
+// hex2bin() warnings or a TypeError on `false`.
+function aes_key_valid(): bool {
+    return defined('AES_KEY_HEX') && preg_match('/^[0-9a-fA-F]{64}$/', (string)AES_KEY_HEX) === 1;
+}
+
+// Operator-facing explanation for a missing/invalid key, with the fix that
+// applies to the usual cause (a process that never saw the key).
+function aes_key_problem(): string {
+    return 'AES_KEY_HEX is not a valid 64-hex-char key. Set DDMGMT_AES_KEY_HEX in the environment '
+        . '(a `docker exec` shell does not inherit it from the container entrypoint; on Docker installs '
+        . 'the key is also read from /config/aes_key_hex when the variable is absent).';
+}
+
 function _master_key(): string {
     $key = hex2bin(AES_KEY_HEX);
     // hex2bin() answers false (not short garbage) on non-hex input — strlen
