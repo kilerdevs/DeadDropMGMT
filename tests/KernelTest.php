@@ -115,7 +115,7 @@ foreach ($cliOnly as $f) {
 $htaccess = (string)file_get_contents($root . '/.htaccess');
 $nginx    = (string)file_get_contents($root . '/docker/nginx.conf');
 $caddy    = (string)file_get_contents($root . '/docker/Caddyfile');
-foreach (['tools', 'tests', 'docker', 'e2e', 'backups', 'data'] as $blocked) {
+foreach (['cron', 'tools', 'tests', 'docker', 'e2e', 'backups', 'data'] as $blocked) {
     T::ok("Apache blocks /$blocked/", str_contains($htaccess, $blocked . '|') || str_contains($htaccess, '|' . $blocked));
     T::ok("nginx blocks /$blocked/", (bool)preg_match('#\^/\([^)]*\b' . $blocked . '\b[^)]*\)/#', $nginx));
     T::ok("Caddy blocks /$blocked/", str_contains($caddy, "/$blocked/*"));

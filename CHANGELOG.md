@@ -299,6 +299,23 @@ All notable changes to DeadDropMGMT are documented here. The format follows
 - `receive.php` checks CSRF before spending limiter budget (same ordering
   as `index.php`): forged floods no longer burn the victim's IP budget.
   Covered by a no-spend probe in `PublicFlowTest`.
+- Public language switcher did nothing while the same browser held an admin
+  session: `current_lang()` let the admin account's saved language outrank the
+  public `?lang=` choice, so every public switch was overridden on the next
+  render. Public pages now honour the public choice (the admin area still uses
+  the account language). Pinned by an HTTP scenario in `PublicLangTest` that
+  logs in as a Polish-language admin and switches the public page to German.
+- Docker stacks: `DDMGMT_AES_KEY_HEX` and the new optional `DDMGMT_SETUP_TOKEN`
+  in `.env` now actually reach the container (all three compose files pass them
+  through; `.env.example` documents them). Previously `.env.example` promised a
+  key override that compose never forwarded.
+- `.htaccess` now denies `cron/` like the nginx and Caddy configs always did
+  (Apache answered 404 through the scripts' own CLI guard; it is 403 now, and
+  `KernelTest` pins it for all three servers).
+- `tools/rotate_aes_key.php` no longer claims the log chain stays verifiable
+  across a rotation: entries written under the old key do not verify under the
+  new one, so it now tells the operator to verify and archive `logs/app.log`
+  first. README, tool and ADR-016 agree.
 
 ### Changed
 - The duplicate `order_remove` admin endpoint (route, handler and legacy shim)
@@ -326,6 +343,21 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   button remains the path. Switches spend from a dedicated IP budget
   (30 / 10 min, same-language requests free) — past it the switch is ignored
   and the page renders in the current language, never an error.
+
+- README rewritten and audited against the code: centered header with status,
+  stack, security and quality badges; overview with sequence, lifecycle and
+  trust-boundary diagrams (Mermaid); quick start; configuration reference;
+  Docker volume table (map zone files in `data/` / `tiles/` are not volumes and
+  are lost on rebuild — now stated); test, coverage and mutation-probe sections
+  brought up to date (30 suites, 7 browser specs, 16 mutants). Corrected: the
+  manual `config.php` instructions (the old snippet lacked helpers the app
+  calls, e.g. `overwrite_and_unlink()`; it now says to copy
+  `config.php.example` whole), pseudo-cron behaviour, the public CSP claim,
+  `.htaccess` coverage, per-surface rate-limit wording, the self-hosted maps
+  file naming and `pmtiles` CLI pinning, requirements (`mbstring`, `curl`,
+  WebP), permissions and cron lines, and the project tree. Stale wording
+  fixed in `CONTRIBUTING.md`, `docs/TROUBLESHOOTING.md` and
+  `e2e/fixtures/README.md`.
 
 ## [1.4.0] - 2026-09-17
 

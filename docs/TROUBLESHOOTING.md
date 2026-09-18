@@ -107,9 +107,9 @@ log, rate limits, and logs, then logs you out.
 ## Fresh `config.php` fatals on first login
 
 The `DUMMY_AUTH_HASH` / `DUMMY_TOTP_SECRET` constants are required — a
-`config.php` copied from the `README.md` snippet alone (without them) will
-fatal. Copy `config.php.example` whole instead; the dummy values are fixed
-by design, not secrets.
+`config.php` written by hand (without them) will fatal. Copy
+`config.php.example` whole instead — it also carries helpers such as
+`overwrite_and_unlink()`; the dummy values are fixed by design, not secrets.
 
 ## Manual nginx/Caddy install serves sensitive paths
 

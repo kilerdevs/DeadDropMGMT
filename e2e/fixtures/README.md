@@ -16,4 +16,4 @@ for tiles.
 - **Verified:** `pmtiles verify` passes.
 
 Regenerate with the pinned `pmtiles` CLI (see `includes/maps.php`
-`PMTILES_CLI_VERSION` once Phase 2 lands) if the spec needs a fresher build.
+`PMTILES_CLI_VERSION`) if the spec needs a fresher build.

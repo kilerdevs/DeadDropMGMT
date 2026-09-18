@@ -35,6 +35,8 @@ services:
       DDMGMT_DB_NAME: deaddrops
       DDMGMT_DB_USER: deaddrop
       DDMGMT_DB_PASS: ${DB_PASS:-deaddrop-db}
+      DDMGMT_AES_KEY_HEX: ${DDMGMT_AES_KEY_HEX:-}
+      DDMGMT_SETUP_TOKEN: ${DDMGMT_SETUP_TOKEN:-}
     volumes:
       - app-src:/var/www/html        # populated from the image on first use…
       - app-uploads:/var/www/html/uploads

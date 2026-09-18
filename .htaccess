@@ -45,12 +45,12 @@ ErrorDocument 503 /error/503.php
     # admin/tile_proxy.php (authenticated), never by direct URL.
     RewriteRule ^cache/ - [F,L]
 
-    # Developer/ops material never ships as web content: CLI tools, the
+    # Developer/ops material never ships as web content: cron workers, CLI tools, the
     # container journey, browser-test seeds, the PHP test suites, CI config
     # and local backups. The CLI scripts also refuse non-CLI SAPIs themselves
     # (PHP_SAPI guard), so a server that ignores this file still cannot be
     # made to run them.
-    RewriteRule ^(tools|docker|e2e|tests|backups|data|\.semgrep|\.github)/ - [F,L]
+    RewriteRule ^(cron|tools|docker|e2e|tests|backups|data|\.semgrep|\.github)/ - [F,L]
     RewriteRule ^(setup\.sql|composer\.(json|lock)|package(-lock)?\.json|playwright\.config\.js|phpstan\.neon|\.php-cs-fixer\.php|auto-update\.(sh|log)|config\.php\.example|Dockerfile[^/]*|docker-compose[^/]*\.yml)$ - [F,L]
 </IfModule>
 
