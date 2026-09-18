@@ -62,4 +62,34 @@ T::ok('tn param injection is escaped',
 T::eq('unlisted language loads nothing', [], i18n_load('../config'));
 T::eq('empty language loads nothing', [], i18n_load(''));
 
+// Dictionary parity: a key missing from a language silently renders English,
+// and a key left behind after a removal is dead weight. pl/ru/uk pluralise
+// with .few/.many instead of .other (see plural_category()), so those replace
+// the English .other of a .one/.other pair.
+foreach (i18n_supported_langs() as $lang) {
+    if ($lang === 'en') {
+        continue;
+    }
+    $dict = i18n_load($lang);
+    $slavic = in_array($lang, ['pl', 'ru', 'uk'], true);
+    $missing = [];
+    foreach (array_keys($en) as $key) {
+        if (isset($dict[$key])) {
+            continue;
+        }
+        $base = substr($key, 0, -6);
+        if ($slavic && str_ends_with($key, '.other') && isset($en[$base . '.one'])
+            && isset($dict[$base . '.few'], $dict[$base . '.many'])) {
+            continue;
+        }
+        $missing[] = $key;
+    }
+    $stale = array_values(array_filter(
+        array_diff(array_keys($dict), array_keys($en)),
+        static fn (string $key): bool => !($slavic && preg_match('/\.(few|many)$/', $key) === 1),
+    ));
+    T::eq("{$lang} has every en key", [], $missing);
+    T::eq("{$lang} has no keys absent from en", [], $stale);
+}
+
 exit(T::done());
