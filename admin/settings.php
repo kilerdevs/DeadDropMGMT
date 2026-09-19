@@ -129,6 +129,7 @@ function s_label(array $s, string $key): string {
 
     <main class="main">
     <?php require __DIR__ . '/totp_banner.php'; ?>
+    <?php if (osm_proxy_enabled()) { require __DIR__ . '/osm_monit.php'; } ?>
         <div class="page-heading"><?= t('admin.settings.title') ?></div>
 
         <?php if ($error):   ?><div class="flash"><?= $error ?></div><?php endif; ?>
@@ -758,6 +759,7 @@ function s_label(array $s, string $key): string {
         // (Function declaration, hoisted: safe while the editor block below
         // has not executed yet — it no-ops on an empty draft.)
         if (typeof mzRefreshOverlap === 'function') mzRefreshOverlap();
+        if (typeof mzSyncZoneLayers === 'function') mzSyncZoneLayers();
         return active;
     }
 
@@ -839,7 +841,7 @@ function s_label(array $s, string $key): string {
             });
         });
     }
-    // ── Zone rectangle editor (OSM canvas, same-origin tiles only) ────────────
+    // ── Zone rectangle editor (OSM canvas, tiles via tile_proxy.php only) ────────────
     // Leaflet core has no editable rectangles, so this is hand-rolled: a
     // draft rectangle with four draggable corner handles. Dragging the body
     // moves it, corners resize against the opposite corner. Every change
@@ -878,6 +880,7 @@ function s_label(array $s, string $key): string {
                 var b = {
                     min_lon: mzNum(tr.dataset.minLon), min_lat: mzNum(tr.dataset.minLat),
                     max_lon: mzNum(tr.dataset.maxLon), max_lat: mzNum(tr.dataset.maxLat),
+                    name: tr.children[0] ? tr.children[0].textContent.trim() : '',
                 };
                 if (b.min_lon !== null && b.min_lat !== null && b.max_lon !== null && b.max_lat !== null) {
                     out.push(b);
@@ -893,11 +896,28 @@ function s_label(array $s, string $key): string {
             if (area <= 0) return 0;
             return Math.min(1, (w * h) / area);
         }
-        // Existing zones as red context rectangles (read-only).
-        mzExistingZones().forEach(function (b) {
-            L.rectangle([[b.min_lat, b.min_lon], [b.max_lat, b.max_lon]],
-                { color: '#c0392b', weight: 2, fillOpacity: 0.08, interactive: false }).addTo(mzMap);
-        });
+        // Existing zones as red context rectangles (read-only), each carrying
+        // its name as a permanent centred label. The status poll re-renders
+        // the table rows, so the layers follow: they are rebuilt whenever the
+        // set of zones (id, name, box) changes and left alone otherwise.
+        var mzZoneLayers = [];
+        var mzZoneSig = null;
+        function mzSyncZoneLayers() {
+            var zones = mzExistingZones();
+            var sig = JSON.stringify(zones);
+            if (sig === mzZoneSig) return;
+            mzZoneSig = sig;
+            mzZoneLayers.forEach(function (l) { mzMap.removeLayer(l); });
+            mzZoneLayers = zones.map(function (b) {
+                var r = L.rectangle([[b.min_lat, b.min_lon], [b.max_lat, b.max_lon]],
+                    { color: '#c0392b', weight: 2, fillOpacity: 0.08, interactive: false }).addTo(mzMap);
+                if (b.name) {
+                    r.bindTooltip(b.name, { permanent: true, direction: 'center', className: 'mz-zone-label' });
+                }
+                return r;
+            });
+        }
+        mzSyncZoneLayers();
 
         function mzReadDraft() {
             if (!mzDraft) return null;
@@ -964,67 +984,101 @@ function s_label(array $s, string $key): string {
             if (mzOverlap) mzOverlap.hidden = true;
             if (mzPlaceLabel) mzPlaceLabel.hidden = true;
         }
+        // Pointer tracking shared by drawing, corner resize and body move.
+        // Pointer Events cover mouse, touch and pen with one code path —
+        // Leaflet only synthesises mouse events for taps, so a finger drag
+        // never reached the old mousemove handlers and nothing could be drawn
+        // on a phone. Listeners sit on the document so the gesture survives
+        // the finger leaving the (small) map, and map panning is suspended
+        // for its duration.
+        function mzTrack(ev, onMove, onEnd) {
+            var id = ev.pointerId;
+            mzMap.dragging.disable();
+            function finish(e, cancelled) {
+                document.removeEventListener('pointermove', move);
+                document.removeEventListener('pointerup', up);
+                document.removeEventListener('pointercancel', cancel);
+                onEnd(mzMap.mouseEventToLatLng(e), cancelled);
+                if (!mzDrawing) mzMap.dragging.enable();
+            }
+            function move(e) { if (e.pointerId === id) onMove(mzMap.mouseEventToLatLng(e)); }
+            function up(e) { if (e.pointerId === id) finish(e, false); }
+            function cancel(e) { if (e.pointerId === id) finish(e, true); }
+            document.addEventListener('pointermove', move);
+            document.addEventListener('pointerup', up);
+            document.addEventListener('pointercancel', cancel);
+        }
+        function mzPrimary(e) {
+            return e.isPrimary && !(e.pointerType === 'mouse' && e.button !== 0);
+        }
+        // The four corner circles always sit on the four corners of the
+        // draft, whichever one the finger is dragging (they are identical).
+        function mzPlaceHandles() {
+            if (!mzDraft) return;
+            var b = mzDraft.getBounds();
+            var pos = { sw: b.getSouthWest(), nw: b.getNorthWest(),
+                        ne: b.getNorthEast(), se: b.getSouthEast() };
+            mzHandles.forEach(function (h) { h.setLatLng(pos[h.mzCorner]); });
+        }
         function mzAddHandles() {
             mzClearHandles();
             if (!mzDraft) return;
             var b = mzDraft.getBounds();
+            // Fingertip-sized on touch screens, precise on a mouse.
+            var radius = window.matchMedia && window.matchMedia('(pointer: coarse)').matches ? 14 : 8;
             [['sw', b.getSouthWest()], ['nw', b.getNorthWest()],
              ['ne', b.getNorthEast()], ['se', b.getSouthEast()]].forEach(function (pair) {
                 var h = L.circleMarker(pair[1], {
-                    radius: 8, color: '#1a73e8', fillColor: '#fff',
+                    radius: radius, color: '#1a73e8', fillColor: '#fff',
                     fillOpacity: 1, weight: 3,
                 }).addTo(mzMap);
                 h.mzCorner = pair[0];
-                h.on('mousedown', function (e) {
-                    mzMap.dragging.disable();
-                    mzMap.on('mousemove', mzOnHandleDrag, h);
-                    mzMap.once('mouseup', function () {
-                        mzMap.off('mousemove', mzOnHandleDrag, h);
-                        mzMap.dragging.enable();
-                        mzSyncInputs();
+                var el = h.getElement();
+                if (el) {
+                    el.style.touchAction = 'none';
+                    el.addEventListener('pointerdown', function (e) {
+                        if (mzDrawing || !mzDraft || !mzPrimary(e)) return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        // Resize against the corner opposite the one grabbed;
+                        // fixed for the whole gesture so dragging past it flips
+                        // the rectangle instead of collapsing it.
+                        var bb = mzDraft.getBounds();
+                        var opp = { sw: bb.getNorthEast(), nw: bb.getSouthEast(),
+                                    ne: bb.getSouthWest(), se: bb.getNorthWest() }[h.mzCorner];
+                        mzTrack(e, function (ll) {
+                            mzDraft.setBounds([opp, ll]);
+                            mzPlaceHandles();
+                            mzSyncInputs();
+                        }, function () { mzSyncInputs(); });
                     });
-                    L.DomEvent.stopPropagation(e);
-                });
+                }
                 mzHandles.push(h);
             });
-        }
-        // `this` is the dragged handle: resize against the opposite corner.
-        function mzOnHandleDrag(e) {
-            if (!mzDraft) return;
-            var b = mzDraft.getBounds();
-            var opp = { sw: b.getNorthEast(), nw: b.getSouthEast(),
-                        ne: b.getSouthWest(), se: b.getNorthWest() }[this.mzCorner];
-            mzDraft.setBounds([opp, e.latlng]);
-            mzAddHandles();
-            mzSyncInputs();
         }
         function mzSetDraft(bounds) {
             mzClearDraft();
             mzDraft = L.rectangle(bounds, { color: '#1a73e8', weight: 2 }).addTo(mzMap);
             mzAddHandles();
-            mzDraft.on('mousedown', function (e) {
+            var body = mzDraft.getElement();
+            if (body) {
+                body.style.touchAction = 'none';
                 // Move the whole rectangle; corners have their own handlers.
-                mzMap.dragging.disable();
-                var start = e.latlng, orig = mzDraft.getBounds();
-                function move(ev) {
-                    var dLat = ev.latlng.lat - start.lat, dLng = ev.latlng.lng - start.lng;
-                    mzDraft.setBounds([
-                        [orig.getSouth() + dLat, orig.getWest() + dLng],
-                        [orig.getNorth() + dLat, orig.getEast() + dLng],
-                    ]);
-                    mzHandles.forEach(function (h) { h.setLatLng(h.getLatLng().add([dLat, dLng])); });
-                    start = ev.latlng;
-                    orig = mzDraft.getBounds();
-                }
-                mzMap.on('mousemove', move);
-                mzMap.once('mouseup', function () {
-                    mzMap.off('mousemove', move);
-                    mzMap.dragging.enable();
-                    mzAddHandles();
-                    mzSyncInputs();
+                body.addEventListener('pointerdown', function (e) {
+                    if (mzDrawing || !mzDraft || !mzPrimary(e)) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    var start = mzMap.mouseEventToLatLng(e), orig = mzDraft.getBounds();
+                    mzTrack(e, function (ll) {
+                        var dLat = ll.lat - start.lat, dLng = ll.lng - start.lng;
+                        mzDraft.setBounds([
+                            [orig.getSouth() + dLat, orig.getWest() + dLng],
+                            [orig.getNorth() + dLat, orig.getEast() + dLng],
+                        ]);
+                        mzPlaceHandles();
+                    }, function () { mzSyncInputs(); });
                 });
-                L.DomEvent.stopPropagation(e);
-            });
+            }
             mzSyncInputs();
         }
 
@@ -1035,6 +1089,10 @@ function s_label(array $s, string $key): string {
                 mzDrawBtn.classList.toggle('action-btn--active', on);
             }
             mzMapEl.style.cursor = on ? 'crosshair' : '';
+            // Draw mode owns the gesture: no panning, and touch-action off so
+            // the browser does not scroll the page under the finger.
+            mzMapEl.classList.toggle('mz-drawing', on);
+            if (on) mzMap.dragging.disable(); else mzMap.dragging.enable();
         }
         if (mzDrawBtn) {
             mzDrawBtn.addEventListener('click', function () { mzSetDrawing(!mzDrawing); });
@@ -1045,18 +1103,16 @@ function s_label(array $s, string $key): string {
                 mzClearDraft();
             });
         }
-        mzMap.on('mousedown', function (e) {
-            if (!mzDrawing) return;
-            mzMap.dragging.disable();
-            var start = e.latlng, temp = L.rectangle([start, start], { color: '#1a73e8', weight: 2, dashArray: '4 4' }).addTo(mzMap);
-            function draw(ev) { temp.setBounds([start, ev.latlng]); }
-            mzMap.on('mousemove', draw);
-            mzMap.once('mouseup', function (ev) {
-                mzMap.off('mousemove', draw);
+        mzMapEl.addEventListener('pointerdown', function (e) {
+            if (!mzDrawing || !mzPrimary(e)) return;
+            if (e.target.closest && e.target.closest('.leaflet-control')) return;
+            e.preventDefault();
+            var start = mzMap.mouseEventToLatLng(e);
+            var temp = L.rectangle([start, start], { color: '#1a73e8', weight: 2, dashArray: '4 4' }).addTo(mzMap);
+            mzTrack(e, function (ll) { temp.setBounds([start, ll]); }, function (end, cancelled) {
                 mzMap.removeLayer(temp);
-                mzMap.dragging.enable();
                 mzSetDrawing(false);
-                var end = (ev && ev.latlng) || start;
+                if (cancelled) return;
                 if (Math.abs(end.lat - start.lat) < 1e-7 || Math.abs(end.lng - start.lng) < 1e-7) return;
                 mzSetDraft([start, end]);
             });

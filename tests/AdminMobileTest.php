@@ -103,6 +103,16 @@ foreach (['/admin/new_order.php'] as $path) {
     }
 }
 
+// Settings: the zone editor's OSM tiles and searches always go through the
+// server (tile_proxy.php / geocode_proxy.php), so the badge that shows which
+// pool proxy served them must follow the proxy toggle alone.
+foreach (['0', '1'] as $px) {
+    $html = $page('osm', $px, '/admin/settings.php');
+    T::ok("settings proxy=$px renders", str_contains($html, '</html>'));
+    T::eq("settings proxy=$px OSM badge " . ($px === '1' ? 'rendered' : 'absent'),
+          $px === '1', str_contains($html, 'id="osm-monit"'));
+}
+
 // edit.php needs a real order id; reuse the same rule via the partial guard.
 $src = (string)file_get_contents($root . '/admin/edit.php');
 T::ok('edit.php guards the badge on provider and proxy toggle',
@@ -110,7 +120,22 @@ T::ok('edit.php guards the badge on provider and proxy toggle',
 $src = (string)file_get_contents($root . '/admin/new_order.php');
 T::eq('new_order.php includes admin.js exactly once', 1, substr_count($src, '/admin/admin.js'));
 
+// Zone editor gestures: mouse events never fire for a finger drag, so the
+// editor must ride Pointer Events (mouse, touch and pen alike) — and the
+// existing zone rectangles carry their name as a permanent label.
+$set = (string)file_get_contents($root . '/admin/settings.php');
+T::ok('zone editor draws with pointer events', str_contains($set, "addEventListener('pointerdown'"));
+T::ok('zone editor no longer relies on Leaflet mouse events',
+      !preg_match("/mzMap\.on\('mouse(down|move|up)'/", $set) && !str_contains($set, "h.on('mousedown'"));
+T::ok('existing zone rectangles get a permanent name label',
+      str_contains($set, "bindTooltip(b.name, { permanent: true") && str_contains($set, "className: 'mz-zone-label'"));
+T::ok('zone labels re-sync after the status poll re-renders rows',
+      str_contains($set, "typeof mzSyncZoneLayers === 'function'"));
+
 $css = (string)file_get_contents($root . '/admin/style.css');
+T::ok('style.css: draw mode blocks browser touch panning',
+      (bool)preg_match('/\.maps-editor-map\.mz-drawing\s*\{[^}]*touch-action:\s*none/', $css));
+T::ok('style.css: zone labels styled', str_contains($css, '.leaflet-tooltip.mz-zone-label'));
 T::ok('style.css: [hidden] overrides component display', (bool)preg_match('/\[hidden\]\s*\{\s*display:\s*none\s*!important/', $css));
 T::ok('style.css: proxy/zone lists drop the 580px table min-width on phones',
       (bool)preg_match('/@media \(max-width: 780px\).*?\.proxies-table\s*\{\s*min-width:\s*0/s', $css));

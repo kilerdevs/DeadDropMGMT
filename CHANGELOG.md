@@ -36,6 +36,13 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   (and sits beside the menu button on narrow screens); **Settings** no longer
   scrolls sideways — the proxy pool and map zones render as cards instead of a
   580px-minimum table. `[hidden]` now always wins over component display rules.
+- Settings → Maps zone editor now works on touch screens: drawing, corner
+  resize and move use Pointer Events (finger drags never produced the mouse
+  events it relied on), draw mode stops the page scrolling under the finger and
+  the corner handles are fingertip-sized. Existing zone rectangles show their
+  name as a permanent label and follow the live status poll. The OSM proxy
+  badge now also appears on Settings while proxy routing is on (the editor's
+  tiles and searches already went through the server-side proxy path).
 - A crafted array-shaped field (`order_token[]=x`) with a valid CSRF token made
   `index.php` throw an uncaught `TypeError` while re-rendering the form. The
   public and admin pages now read form and query fields through
