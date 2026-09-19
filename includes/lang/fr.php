@@ -458,7 +458,7 @@ return [
     'admin.maps.queued_cron'   => 'En file — traitée à la prochaine passe de cron/maps_sync.php (les visites ne téléchargent rien).',
     'admin.maps.confirm_delete' => 'Supprimer cette zone et ses tuiles téléchargées ?',
     'admin.maps.editor_title' => 'Dessiner sur la carte',
-    'admin.maps.editor_hint' => 'Tracez le rectangle sur la carte. Glissez le corps pour déplacer, les coins pour redimensionner. Les zones existantes sont en rouge.',
+    'admin.maps.editor_hint' => 'Tracez le rectangle sur la carte. Glissez le corps pour déplacer, les coins pour redimensionner. Les zones existantes ont chacune leur couleur, en pointillés tant qu\'elles se téléchargent.',
     'admin.maps.draw_button' => 'Dessiner',
     'admin.maps.drawing_button' => 'Dessin… cliquez pour arrêter',
     'admin.maps.clear_button' => 'Effacer',

@@ -21,6 +21,17 @@ const MAP_PROVIDER_SELFHOSTED = 'selfhosted';
 const MAPLIBRE_VERSION = '5.13.0';
 const PMTILES_JS_VERSION = '4.5.0';
 
+// Zone colours: every zone gets one from this palette, by id — stable for as
+// long as the zone exists — on the OSM zone map and as the swatch in the zone
+// list, so the two can be matched at a glance. admin/style.css carries the
+// same colours as .mz-c0 … (AdminMobileTest pins the two together). Blue is
+// left out on purpose: it is the colour of the rectangle being drawn.
+const MAPS_ZONE_COLORS = ['#e6194b', '#2e9e44', '#f58231', '#911eb4', '#008b8b', '#d81b9a', '#9a6324', '#8a8f00'];
+
+function maps_zone_color_index(int $id): int {
+    return $id % count(MAPS_ZONE_COLORS);
+}
+
 // MapLibre renders vector tiles with WebGL workers built from Blob URLs,
 // which the default CSP (script-src 'self' + nonce, no worker-src) blocks.
 // Both CSP profiles therefore carry worker-src 'self' blob: (see auth.php).

@@ -1278,51 +1278,41 @@ h1 {
 /* ── OSM proxy monit (map pages) ─────────────────────────────────────────── */
 
 .osm-monit {
-    /* In the page flow, never an overlay: a floating badge sat on top of the
-       heading and forms, and on failover (several lines) covered even more.
-       Content now moves down instead of being covered. */
+    /* A caption directly under the map it describes: in the page flow, never
+       an overlay (a floating badge covered the heading and forms, and on
+       failover — several lines — covered more). Small on purpose. */
     display:         flex;
     align-items:     flex-start;
-    gap:             10px;
+    gap:             8px;
     box-sizing:      border-box;
-    width:           fit-content;
-    max-width:       100%;
-    margin:          0 0 18px auto;
+    width:           100%;
+    margin:          6px 0 0;
     background:      var(--surface, #111);
     border:          1px solid var(--accent, #4caf50);
-    padding:         8px 14px;
+    padding:         4px 9px;
     font-family:     'IBM Plex Mono', monospace;
-    font-size:       12px;
-    letter-spacing:  0.05em;
+    font-size:       10px;
+    letter-spacing:  0.04em;
     line-height:     1.5;
     color:           var(--text, #ddd);
 }
 .osm-monit-body {
     display:         flex;
     flex-direction:  column;
-    gap:             2px;
+    gap:             1px;
     min-width:       0;
     overflow-wrap:   anywhere;
 }
 /* Failover detail: second, muted line — which pool proxies were skipped. */
 .osm-monit-detail {
-    font-size:       11px;
+    font-size:       9px;
     color:           var(--text-muted, #888);
-}
-/* Phones: a full-width strip under the menu button's row. */
-@media (max-width: 780px) {
-    .osm-monit {
-        width:      100%;
-        margin:     0 0 16px;
-        font-size:  11px;
-        padding:    8px 12px;
-    }
 }
 .osm-monit-dot {
     flex:            none;
-    margin-top:      5px;
-    width:           9px;
-    height:          9px;
+    margin-top:      4px;
+    width:           6px;
+    height:          6px;
     border-radius:   50%;
     background:      #4caf50;
     animation:       osm-monit-pulse 2s infinite;
@@ -1788,6 +1778,37 @@ h1 {
     margin:        8px 0 4px;
     background:    #0d1117;
 }
+/* Zone colours (see MAPS_ZONE_COLORS in includes/maps.php): the same colour marks
+   a zone on the map and in the list. Ready zones are solid, zones still on
+   their way (queued, sizing, downloading, failed) are hollow and dashed. */
+.mz-c0 { --zc: #e6194b; }
+.mz-c1 { --zc: #2e9e44; }
+.mz-c2 { --zc: #f58231; }
+.mz-c3 { --zc: #911eb4; }
+.mz-c4 { --zc: #008b8b; }
+.mz-c5 { --zc: #d81b9a; }
+.mz-c6 { --zc: #9a6324; }
+.mz-c7 { --zc: #8a8f00; }
+.mz-swatch {
+    display:        inline-block;
+    box-sizing:     border-box;
+    width:          10px;
+    height:         10px;
+    margin-right:   8px;
+    vertical-align: baseline;
+    background:     var(--zc, #888);
+    border:         2px solid var(--zc, #888);
+}
+tr[data-status]:not([data-status="ready"]) .mz-swatch {
+    background:     transparent;
+    border-style:   dashed;
+}
+tr[data-status="ready"] .mz-status { color: #4caf50; }
+tr[data-status="queued"] .mz-status,
+tr[data-status="sizing"] .mz-status,
+tr[data-status="downloading"] .mz-status { color: #e0a100; }
+tr[data-status="failed"] .mz-status { color: #f44336; }
+
 /* Draw mode: the finger draws instead of panning or scrolling the page.
    Leaflet drops its own touch-action when dragging is switched off. */
 .maps-editor-map.mz-drawing {

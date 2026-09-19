@@ -32,7 +32,6 @@ $csrf = generate_csrf();
 
     <main class="main">
     <?php require __DIR__ . '/totp_banner.php'; ?>
-    <?php if (map_provider() === MAP_PROVIDER_OSM && osm_proxy_enabled()) { require __DIR__ . '/osm_monit.php'; } ?>
         <div class="page-heading"><?= t('admin.new_order.title') ?></div>
 
         <?php if ($flash): ?>
@@ -76,6 +75,7 @@ $csrf = generate_csrf();
                          data-i18n-error="<?= htmlspecialchars(t('admin.new_order.geocode_error'), ENT_QUOTES, 'UTF-8') ?>"
                          data-i18n-load-error="<?= htmlspecialchars(t('admin.maps.load_error'), ENT_QUOTES, 'UTF-8') ?>"
                          data-i18n-no-zones="<?= htmlspecialchars(t('admin.maps.no_zones'), ENT_QUOTES, 'UTF-8') ?>"></div>
+                    <?php if (map_provider() === MAP_PROVIDER_OSM && osm_proxy_enabled()) { require __DIR__ . '/osm_monit.php'; } ?>
                     <div class="map-coords" id="coords-display"><?= t('admin.new_order.no_pin') ?></div>
                     <div class="map-hint"><?= t('admin.new_order.drag_hint') ?></div>
                 </div>

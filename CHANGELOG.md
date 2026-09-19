@@ -10,6 +10,16 @@ All notable changes to DeadDropMGMT are documented here. The format follows
 ## [Unreleased]
 
 ### Changed
+- Settings → Maps: **every zone has its own colour**, on the OSM zone map and
+  as a swatch in the zone list, so a rectangle can be matched to its row at a
+  glance (stable per zone; eight-colour palette, blue left for the rectangle
+  being drawn). Ready zones are drawn solid; zones still queued, sizing,
+  downloading or failed are dashed and lighter, with a hollow swatch, and the
+  status text is coloured too (ready green, in progress amber, failed red).
+- The OSM proxy status is a small caption **directly under the map** it
+  describes (order pickers and the zone editor) instead of a fixed overlay at
+  the top: it no longer covers page content, and a failover shows the skipped
+  proxies on a second, muted, capped line.
 - **OSM proxy routing is on by default** (new installs; existing installs keep
   their setting) and the pool is **discovered automatically on the first run**:
   an empty pool fails closed, so the same background job that replaces failed

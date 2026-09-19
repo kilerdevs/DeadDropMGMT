@@ -362,4 +362,15 @@ if (!array_key_exists('map_provider', $prevSettings)) {
 $cache = &_settings_store();
 $cache = null;
 
+// ── Zone colours: one palette for the map layers and the list swatches ────────
+$palette = MAPS_ZONE_COLORS;
+T::ok('zone palette: eight valid, distinct colours',
+      count($palette) === 8 && count(array_unique($palette)) === 8
+      && count(array_filter($palette, static fn(string $c): bool => preg_match('/^#[0-9a-f]{6}$/', $c) === 1)) === 8);
+T::eq('zone colour is chosen by id', 3, maps_zone_color_index(3));
+T::eq('zone colour wraps around the palette', 1, maps_zone_color_index(9));
+T::ok('zone colour is stable per id', maps_zone_color_index(41) === maps_zone_color_index(41));
+T::ok('every zone id maps inside the palette',
+      count(array_filter(range(1, 200), static fn(int $i): bool => maps_zone_color_index($i) >= 0 && maps_zone_color_index($i) < count($palette))) === 200);
+
 exit(T::done());

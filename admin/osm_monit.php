@@ -1,10 +1,10 @@
 <?php
-// Small status strip for pages that load OSM resources through
+// Small status caption for pages that load OSM resources through
 // admin/tile_proxy.php / admin/geocode_proxy.php. Polls osm_status.php
 // and shows which pool proxy served the last request — visible only
-// while OSM proxy routing is enabled. It lives in the page flow (never an
-// overlay), so even a long failover message pushes content down instead of
-// covering it.
+// while OSM proxy routing is enabled. Include it DIRECTLY UNDER the map it
+// describes. It lives in the page flow (never an overlay), so even a long
+// failover message pushes content down instead of covering it.
 require_once dirname(__DIR__) . '/includes/i18n.php';
 ?>
 <div class="osm-monit" id="osm-monit" hidden>

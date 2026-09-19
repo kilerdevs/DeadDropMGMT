@@ -129,7 +129,6 @@ function s_label(array $s, string $key): string {
 
     <main class="main">
     <?php require __DIR__ . '/totp_banner.php'; ?>
-    <?php if (osm_proxy_enabled()) { require __DIR__ . '/osm_monit.php'; } ?>
         <div class="page-heading"><?= t('admin.settings.title') ?></div>
 
         <?php if ($error):   ?><div class="flash"><?= $error ?></div><?php endif; ?>
@@ -344,12 +343,14 @@ function s_label(array $s, string $key): string {
                         </thead>
                         <tbody id="maps-tbody">
                         <?php foreach ($map_zones as $mz): ?>
-                        <tr data-id="<?= (int)$mz['id'] ?>"
+                        <tr class="mz-c<?= maps_zone_color_index((int)$mz['id']) ?>"
+                            data-status="<?= htmlspecialchars((string)$mz['status'], ENT_QUOTES, 'UTF-8') ?>"
+                            data-id="<?= (int)$mz['id'] ?>"
                             data-min-lon="<?= htmlspecialchars((string)$mz['min_lon'], ENT_QUOTES, 'UTF-8') ?>"
                             data-min-lat="<?= htmlspecialchars((string)$mz['min_lat'], ENT_QUOTES, 'UTF-8') ?>"
                             data-max-lon="<?= htmlspecialchars((string)$mz['max_lon'], ENT_QUOTES, 'UTF-8') ?>"
                             data-max-lat="<?= htmlspecialchars((string)$mz['max_lat'], ENT_QUOTES, 'UTF-8') ?>">
-                            <td class="px-url" data-label="<?= htmlspecialchars(t('admin.maps.th.zone'), ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars((string)$mz['name'], ENT_QUOTES, 'UTF-8') ?></td>
+                            <td class="px-url" data-label="<?= htmlspecialchars(t('admin.maps.th.zone'), ENT_QUOTES, 'UTF-8') ?>"><span class="mz-swatch" aria-hidden="true"></span><?= htmlspecialchars((string)$mz['name'], ENT_QUOTES, 'UTF-8') ?></td>
                             <td data-label="<?= htmlspecialchars(t('admin.maps.th.detail'), ENT_QUOTES, 'UTF-8') ?>">z<?= (int)$mz['maxzoom'] ?></td>
                             <td class="mz-status" data-label="<?= htmlspecialchars(t('admin.maps.th.status'), ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars(t('admin.maps.status.' . $mz['status']), ENT_QUOTES, 'UTF-8') ?><?php if (maps_zone_is_stale($mz)): ?> — <?= htmlspecialchars(t('admin.maps.stale_badge'), ENT_QUOTES, 'UTF-8') ?><?php endif; ?></td>
                             <td class="mz-size" data-label="<?= htmlspecialchars(t('admin.maps.th.size'), ENT_QUOTES, 'UTF-8') ?>"></td>
@@ -388,6 +389,7 @@ function s_label(array $s, string $key): string {
                             <button type="button" id="mz-clear" class="action-btn"><?= t('admin.maps.clear_button') ?></button>
                         </div>
                         <div id="mz-map" class="maps-editor-map"></div>
+                        <?php if (osm_proxy_enabled()) { require __DIR__ . '/osm_monit.php'; } ?>
                         <div class="maps-overlap" id="mz-overlap" hidden></div>
                         <div class="maps-overlap" id="mz-placelabel" hidden></div>
                         <fieldset class="maps-route">
@@ -539,6 +541,9 @@ function s_label(array $s, string $key): string {
         'mz_via_proxy'  => t('admin.maps.via.proxy'),
         'mz_via_direct' => t('admin.maps.via.direct'),
     ]) ?>;
+
+    // Zone colours: one palette for the map layers here and the CSS swatches.
+    var MZ_PALETTE = <?= json_encode(MAPS_ZONE_COLORS) ?>;
 
     // Confirm destructive form submissions
     document.addEventListener('submit', function (e) {
@@ -784,6 +789,8 @@ function s_label(array $s, string $key): string {
         zones.forEach(function (z) {
             if (z.status === 'queued' || z.status === 'sizing' || z.status === 'downloading') active = true;
             var tr = document.createElement('tr');
+            tr.className = 'mz-c' + (z.id % MZ_PALETTE.length);
+            tr.dataset.status = z.status;
             tr.dataset.id = z.id;
             tr.dataset.minLon = z.min_lon;
             tr.dataset.minLat = z.min_lat;
@@ -820,7 +827,13 @@ function s_label(array $s, string $key): string {
             mzLabels.forEach(function (label, i) {
                 if (label && tr.children[i]) tr.children[i].dataset.label = label;
             });
-            tr.children[0].textContent = z.name;
+            // Zone name behind its colour swatch (same colour as on the map).
+            var sw = document.createElement('span');
+            sw.className = 'mz-swatch';
+            sw.setAttribute('aria-hidden', 'true');
+            tr.children[0].textContent = '';
+            tr.children[0].appendChild(sw);
+            tr.children[0].appendChild(document.createTextNode(z.name));
             tr.children[2].textContent = status;
             tr.children[3].textContent = size;
             tr.children[4].textContent = speed;
@@ -955,6 +968,8 @@ function s_label(array $s, string $key): string {
                     min_lon: mzNum(tr.dataset.minLon), min_lat: mzNum(tr.dataset.minLat),
                     max_lon: mzNum(tr.dataset.maxLon), max_lat: mzNum(tr.dataset.maxLat),
                     name: tr.children[0] ? tr.children[0].textContent.trim() : '',
+                    id: parseInt(tr.dataset.id || '0', 10),
+                    status: tr.dataset.status || '',
                 };
                 if (b.min_lon !== null && b.min_lat !== null && b.max_lon !== null && b.max_lat !== null) {
                     out.push(b);
@@ -970,10 +985,12 @@ function s_label(array $s, string $key): string {
             if (area <= 0) return 0;
             return Math.min(1, (w * h) / area);
         }
-        // Existing zones as red context rectangles (read-only), each carrying
-        // its name as a permanent centred label. The status poll re-renders
-        // the table rows, so the layers follow: they are rebuilt whenever the
-        // set of zones (id, name, box) changes and left alone otherwise.
+        // Existing zones as read-only context rectangles, each in its own colour
+        // (the swatch colour in the list) and carrying its name as a permanent
+        // centred label. Ready zones are solid; zones still downloading or
+        // failed are dashed and lighter. The status poll re-renders the table
+        // rows, so the layers follow: they are rebuilt whenever the set of
+        // zones (id, name, box, status) changes and left alone otherwise.
         var mzZoneLayers = [];
         var mzZoneSig = null;
         function mzSyncZoneLayers() {
@@ -983,9 +1000,19 @@ function s_label(array $s, string $key): string {
             mzZoneSig = sig;
             mzZoneLayers.forEach(function (l) { mzMap.removeLayer(l); });
             mzZoneLayers = zones.map(function (b) {
-                var r = L.rectangle([[b.min_lat, b.min_lon], [b.max_lat, b.max_lon]],
-                    { color: '#c0392b', weight: 2, fillOpacity: 0.08, interactive: false }).addTo(mzMap);
+                var color = MZ_PALETTE[b.id % MZ_PALETTE.length];
+                var ready = b.status === 'ready';
+                var r = L.rectangle([[b.min_lat, b.min_lon], [b.max_lat, b.max_lon]], {
+                    color: color, weight: 2, interactive: false,
+                    dashArray: ready ? null : '6 4',
+                    fillColor: color, fillOpacity: ready ? 0.16 : 0.05,
+                }).addTo(mzMap);
                 if (b.name) {
+                    // The label's frame takes the zone colour once it is on the map.
+                    r.on('tooltipopen', function (e) {
+                        var el = e.tooltip.getElement();
+                        if (el) el.style.borderColor = color;
+                    });
                     r.bindTooltip(b.name, { permanent: true, direction: 'center', className: 'mz-zone-label' });
                 }
                 return r;

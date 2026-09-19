@@ -138,11 +138,36 @@ $css = (string)file_get_contents($root . '/admin/style.css');
 T::ok('style.css: the OSM status strip is in the page flow, not fixed or layered',
       preg_match('/\.osm-monit\s*\{[^}]*\}/', $css, $mm) === 1
       && !preg_match('/position:\s*(fixed|absolute|sticky)|z-index/', $mm[0]));
-T::ok('style.css: ...and the phone override does not turn it back into an overlay',
-      preg_match('/@media \(max-width: 780px\)\s*\{\s*\.osm-monit\s*\{[^}]*\}/', $css, $mp) === 1
-      && !preg_match('/position:|z-index|top:|left:|right:/', $mp[0]));
+T::ok('style.css: ...and no phone override turns it back into an overlay',
+      !preg_match('/@media[^{]*\{\s*\.osm-monit\s*\{[^}]*(position:|z-index|top:|left:|right:)/', $css));
+// It is a caption for the map: included directly under it, never at the top.
+foreach ([
+    '/admin/new_order.php' => ['id="map-picker"', 'osm_monit.php', 'id="coords-display"'],
+    '/admin/edit.php'      => ['id="map-picker"', 'osm_monit.php', 'id="coords-display"'],
+    '/admin/settings.php'  => ['id="mz-map"', 'osm_monit.php', 'id="mz-overlap"'],
+] as $file => [$map, $inc, $next]) {
+    $src = (string)file_get_contents($root . $file);
+    $pm = strpos($src, $map); $pi = strpos($src, $inc); $pn = strpos($src, $next);
+    T::ok("$file: the OSM strip sits directly under the map", $pm !== false && $pi !== false && $pn !== false
+        && $pm < $pi && $pi < $pn && substr_count($src, 'osm_monit.php') === 1);
+}
 $mon = (string)file_get_contents($root . '/admin/osm_monit.php');
 T::ok('failover detail sits on its own capped line', str_contains($mon, 'osm-monit-detail') && str_contains($mon, 'sk.slice(0, 3)'));
+// Zone colours: the palette the PHP constant, the CSS swatch classes and the
+// map layers all use must agree, or a row and its rectangle would differ.
+foreach (MAPS_ZONE_COLORS as $i => $hex) {
+    T::ok("style.css: .mz-c$i carries the palette colour $hex",
+          preg_match('/\.mz-c' . $i . '\s*\{\s*--zc:\s*' . preg_quote($hex, '/') . '\s*;/', $css) === 1);
+}
+T::ok('style.css: swatches and status text are coloured from data attributes, not inline styles',
+      str_contains($css, '.mz-swatch') && str_contains($css, 'tr[data-status="ready"] .mz-status')
+      && str_contains($css, 'tr[data-status]:not([data-status="ready"]) .mz-swatch'));
+T::ok('settings: rows carry the colour class and a swatch (server-rendered and re-rendered by the poll)',
+      str_contains($set, 'class="mz-c<?= maps_zone_color_index(') && substr_count($set, 'mz-swatch') >= 2
+      && str_contains($set, "tr.className = 'mz-c' + (z.id % MZ_PALETTE.length)"));
+T::ok('settings: map layers take the zone colour and dash the zones that are not ready',
+      str_contains($set, 'var MZ_PALETTE = <?= json_encode(MAPS_ZONE_COLORS) ?>;')
+      && str_contains($set, "dashArray: ready ? null : '6 4'") && str_contains($set, 'MZ_PALETTE[b.id % MZ_PALETTE.length]'));
 T::ok('style.css: draw mode blocks browser touch panning',
       (bool)preg_match('/\.maps-editor-map\.mz-drawing\s*\{[^}]*touch-action:\s*none/', $css));
 T::ok('style.css: zone labels styled', str_contains($css, '.leaflet-tooltip.mz-zone-label'));
