@@ -26,6 +26,12 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   `DDMGMT_PSEUDO_CRON=0` turns it off for installs with real cron.
 
 ### Added
+- `ArrayInputTest`: a permanent guard for array-shaped input. Every entry
+  point is sent every parameter name the code reads as `name[]=x`, GET and
+  POST, as a logged-in owner, and the answer and the logs must stay clean —
+  the class of bug behind the old `htmlspecialchars(): Argument #1 must be of
+  type string, array given` error (fixed earlier via `post_string()` /
+  `get_string()`). It fails on the pre-fix `index.php`.
 - **Runs on free shared hosting** (no Docker, no cron, no exec, no CLI PHP, no
   way to set environment variables). A new capability layer
   (`includes/host.php`) is consulted by everything that used to assume them:

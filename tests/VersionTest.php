@@ -57,7 +57,8 @@ $cmd  = escapeshellarg(PHP_BINARY)
       . " -S 127.0.0.1:$port -t " . escapeshellarg($root);
 $null = DIRECTORY_SEPARATOR === '\\' ? 'NUL' : '/dev/null';
 $proc = proc_open($cmd, [['pipe', 'r'], ['file', $null, 'w'], ['file', $null, 'w']], $p);
-register_shutdown_function(function () use ($proc, $file): void {
+$teardown = t_teardown(function () use ($proc, $file): void {
+    putenv('DDMGMT_BUILD_INFO_FILE');
     @unlink($file);
     $st = proc_get_status($proc);
     if (!empty($st['running'])) {
@@ -101,7 +102,7 @@ for ($i = 0; $i < 50; $i++) {
     usleep(200000);
 }
 T::ok('server booted', $up);
-if (!$up) { exit(T::done()); }
+if (!$up) { $teardown(); exit(T::done()); }
 
 $db = get_db();
 $db->prepare("DELETE FROM users WHERE username = 't_ver_owner'")->execute();
@@ -149,4 +150,5 @@ foreach (['/', '/healthz.php', '/admin/index.php', '/receive.php'] as $path) {
 [$st, $body] = _vr('GET', "$B/admin/settings.php", null, '');
 T::ok('settings without a session redirects, discloses nothing', $st === 302 && !str_contains($body, '610eff7'));
 
+$teardown();
 exit(T::done());

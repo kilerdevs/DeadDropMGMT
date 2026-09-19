@@ -21,7 +21,7 @@ $cmd  = escapeshellarg(PHP_BINARY)
       . " -S 127.0.0.1:$port -t " . escapeshellarg($root);
 $null = DIRECTORY_SEPARATOR === '\\' ? 'NUL' : '/dev/null';
 $proc = proc_open($cmd, [['pipe', 'r'], ['file', $null, 'w'], ['file', $null, 'w']], $p);
-register_shutdown_function(function () use ($proc): void {
+$stopServer = t_teardown(function () use ($proc): void {
     $st = proc_get_status($proc);
     if (!empty($st['running'])) {
         if (DIRECTORY_SEPARATOR === '\\') {
@@ -63,7 +63,7 @@ for ($i = 0; $i < 50; $i++) {
     usleep(200000);
 }
 T::ok('server booted', $up);
-if (!$up) { exit(T::done()); }
+if (!$up) { $stopServer(); exit(T::done()); }
 
 $db = get_db();
 $db->prepare("DELETE FROM users WHERE username = 't_am_owner'")->execute();
@@ -74,7 +74,7 @@ $saved = [
     'map_provider'      => get_setting('map_provider', 'osm'),
     'osm_proxy_enabled' => get_setting('osm_proxy_enabled', '0'),
 ];
-register_shutdown_function(static function () use ($saved): void {
+$restoreSettings = t_teardown(static function () use ($saved): void {
     foreach ($saved as $k => $v) { set_setting($k, $v); }
 });
 
@@ -141,4 +141,6 @@ T::ok('style.css: proxy/zone lists drop the 580px table min-width on phones',
       (bool)preg_match('/@media \(max-width: 780px\).*?\.proxies-table\s*\{\s*min-width:\s*0/s', $css));
 
 $db->prepare("DELETE FROM users WHERE username = 't_am_owner'")->execute();
+$stopServer();
+$restoreSettings();
 exit(T::done());

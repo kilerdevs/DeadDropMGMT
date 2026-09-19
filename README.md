@@ -28,7 +28,7 @@ all without the underlying data ever leaving the server in readable form.
 ![Log integrity](https://img.shields.io/badge/audit%20log-HMAC%20chained-blue?style=flat)
 
 ![PHPStan](https://img.shields.io/badge/PHPStan-level%205-4F5D95?style=flat)
-![Test suites](https://img.shields.io/badge/PHP%20test%20suites-37-success?style=flat)
+![Test suites](https://img.shields.io/badge/PHP%20test%20suites-38-success?style=flat)
 ![E2E](https://img.shields.io/badge/E2E-Playwright-45ba4b?style=flat&logo=playwright&logoColor=white)
 ![Coverage floor](https://img.shields.io/badge/coverage%20floor-%E2%89%A585%25-success?style=flat)
 ![Mutation probe](https://img.shields.io/badge/mutation%20probe-16%20mutants-success?style=flat)
@@ -680,7 +680,7 @@ A zero-dependency PHP suite (no PHPUnit — each file is a standalone script), a
 
 | Layer | What it proves | Run it |
 |---|---|---|
-| **PHP suites** — 37 | Crypto, auth, limits, state machine, maps, i18n, fail-closed branches, live-HTTP flows | `php tests/schema_loader.php && php tests/run_all.php` |
+| **PHP suites** — 38 | Crypto, auth, limits, state machine, maps, i18n, fail-closed branches, live-HTTP flows | `php tests/schema_loader.php && php tests/run_all.php` |
 | **Browser E2E** — 7 specs | What raw HTTP cannot see: no-JS paths, CSP-clean DOM, offline maps, mid-reveal UI | `npm ci && npx playwright install chromium && npm run e2e` |
 | **Coverage gate** | Line coverage floors over `includes/` under `pcov` | `composer install && php tests/coverage_runner.php` |
 | **Mutation probe** — 16 mutants | A tested guard versus a dead one | `php tools/mutation_probe.php` |
@@ -690,7 +690,7 @@ A zero-dependency PHP suite (no PHPUnit — each file is a standalone script), a
 The suite never touches your real database: `tests/bootstrap.php` forces `DDMGMT_DB_NAME=deaddrops_test` and points the app at TCP loopback unless you say otherwise.
 
 <details>
-<summary><b>The 37 PHP suites</b>, by area</summary>
+<summary><b>The 38 PHP suites</b>, by area</summary>
 
 <br>
 
@@ -704,7 +704,7 @@ The suite never touches your real database: `tests/bootstrap.php` forces `DDMGMT
 | Uploads | `UploadHardeningTest`, `PhotoCapTest` |
 | Logging | `LoggerTest` — hash chain, continuity checkpoints, unusable-key behaviour |
 | Maps & proxy | `MapsTest`, `MapsFetchTest` (zone tokens, CLI pins, worker lock, orphan sweep), `ProxyTest` (anonymity gate, tile cache), `ProxyClientTest` (response size ceilings), `ProxyHealTest` (failed-proxy replacement: confirm, replace-never-just-delete, manual entries exempt, lock, cooldown) |
-| Structure & guards | `KernelTest` (service manifest, CLI-only guards, web-server denies), `AdminMobileTest` (phone layout contract: menu button, OSM badge rules, touch zone editor), `VersionTest` (release vs beta build line, owners only), `PseudoCronTest` (any page starts the hourly sweep, healthz doesn't, the env switch), `LogViewerTest` (Settings lists the structured log that Verify integrity checks), `HostTest` (shared-hosting degradations: config-constant switches, no exec / CLI / cURL, inline proxy upkeep, automatic routing switch-off, zone-download gating), `DispatchTest` (the thin admin dispatcher contract), `FailClosedTest` (every guard, limiter, wipe and decrypt path, plus the DB TLS option matrix) |
+| Structure & guards | `KernelTest` (service manifest, CLI-only guards, web-server denies), `AdminMobileTest` (phone layout contract: menu button, OSM badge rules, touch zone editor), `VersionTest` (release vs beta build line, owners only), `PseudoCronTest` (any page starts the hourly sweep, healthz doesn't, the env switch), `LogViewerTest` (Settings lists the structured log that Verify integrity checks), `ArrayInputTest` (every entry point is sent every parameter name as an array — no crash, no TypeError in the logs), `HostTest` (shared-hosting degradations: config-constant switches, no exec / CLI / cURL, inline proxy upkeep, automatic routing switch-off, zone-download gating), `DispatchTest` (the thin admin dispatcher contract), `FailClosedTest` (every guard, limiter, wipe and decrypt path, plus the DB TLS option matrix) |
 
 </details>
 

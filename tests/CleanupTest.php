@@ -175,4 +175,33 @@ $db->exec("DELETE FROM audit_log WHERE action = 'ret_probe'");
 // Cleanup
 purge_orders_like($db, 'clstoken');
 
+// ── Pseudo-cron entry point: any page, after the response ────────────────────
+// (The real thing runs inside web requests — PseudoCronTest drives it over
+// HTTP. Everything is reachable in-process through the seams, which is also
+// what the coverage floor measures.)
+T::ok('the CLI never runs the pseudo-cron on its own', pseudo_cron_enabled() === false);
+
+$calls = [];
+$fin = static function () use (&$calls): void { $calls[] = 'finish'; };
+$mk  = static function (string $n) use (&$calls): callable {
+    return static function () use (&$calls, $n): void { $calls[] = $n; };
+};
+pseudo_cron_run(false, $fin, [$mk('a')]);
+T::eq('disabled (CLI): nothing runs', [], $calls);
+pseudo_cron_run(true, $fin, [$mk('a'), $mk('b')]);
+T::eq('forced: the response is finished first, then every slot runs in order', ['finish', 'a', 'b'], $calls);
+
+$calls = [];
+pseudo_cron_run(true, $fin, [static function (): void { throw new RuntimeException('slot blew up'); }, $mk('after')]);
+T::eq('a slot that throws is contained and the later slots still run', ['finish', 'after'], $calls);
+
+$fc = 0;
+pseudo_cron_finish_response(0, static function () use (&$fc): void { $fc++; });
+T::eq('under FPM the response is finished with fastcgi_finish_request', 1, $fc);
+$base = ob_get_level();
+ob_start();
+ob_start();
+pseudo_cron_finish_response($base);
+T::eq('elsewhere it flushes the output buffers it owns, not the ones below', $base, ob_get_level());
+
 exit(T::done());

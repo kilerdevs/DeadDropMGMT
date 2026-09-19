@@ -11,7 +11,7 @@ require_once __DIR__ . '/bootstrap.php';
 
 $db = get_db();
 $restore = ['osm_proxy_enabled' => get_setting('osm_proxy_enabled', '1')];
-register_shutdown_function(static function () use ($restore): void {
+$teardown = t_teardown(static function () use ($restore): void {
     $db = get_db();
     $db->exec('DELETE FROM osm_proxies');
     $db->exec("DELETE FROM settings WHERE key_name IN ('proxy_heal_lock', 'proxy_heal_last', 'proxy_heal_checked', 'proxy_seed_failures', 'osm_proxy_auto_off')");
@@ -155,4 +155,5 @@ T::ok('re-enabling routing clears the auto-off notice', str_contains($sav, 'osm_
 $cfg = (string)file_get_contents($root . '/config.php.example');
 T::ok('config.php.example documents the constant alternatives to env vars',
       str_contains($cfg, 'DDMGMT_PSEUDO_CRON') && str_contains($cfg, 'DDMGMT_PROXY_HEAL'));
+$teardown();
 exit(T::done());

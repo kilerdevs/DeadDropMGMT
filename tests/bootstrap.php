@@ -132,6 +132,24 @@ putenv('DDMGMT_PSEUDO_CRON=0');
 // ProxyHealTest installs its own capturing stand-in.
 osm_proxy_heal_spawner(static fn(): bool => false);
 
+// Cleanup that runs at process exit AND can be run earlier through the returned
+// handle (once only). The coverage runner executes every suite in ONE process,
+// where a shutdown-only cleanup fires after the LAST suite — so state a suite
+// leaves behind (settings, proxies, forced host answers, env vars) leaks into
+// the next one. Call the handle just before `exit(T::done())`.
+function t_teardown(callable $fn): callable {
+    $done = false;
+    $once = static function () use (&$done, $fn): void {
+        if ($done) {
+            return;
+        }
+        $done = true;
+        $fn();
+    };
+    register_shutdown_function($once);
+    return $once;
+}
+
 // ── Order-token helpers (ADR-019) ─────────────────────────────────────────────
 // The database never holds a token in the clear, so tests cannot INSERT or
 // match one directly. These helpers keep the raw SQL in the suites readable.

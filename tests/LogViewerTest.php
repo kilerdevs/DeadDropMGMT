@@ -45,7 +45,7 @@ $cmd = escapeshellarg(PHP_BINARY)
 $null = DIRECTORY_SEPARATOR === '\\' ? 'NUL' : '/dev/null';
 $proc = proc_open($cmd, [['pipe', 'r'], ['file', $null, 'w'], ['file', $null, 'w']], $p);
 $prevShow = get_setting('show_error_log', '0');
-register_shutdown_function(function () use ($proc, $prevShow): void {
+$teardown = t_teardown(function () use ($proc, $prevShow): void {
     $st = proc_get_status($proc);
     if (!empty($st['running'])) {
         if (DIRECTORY_SEPARATOR === '\\') {
@@ -88,7 +88,7 @@ for ($i = 0; $i < 50; $i++) {
     usleep(200000);
 }
 T::ok('server booted', $up);
-if (!$up) { exit(T::done()); }
+if (!$up) { $teardown(); exit(T::done()); }
 
 $db = get_db();
 $db->prepare("DELETE FROM users WHERE username = 't_lv_owner'")->execute();
@@ -120,4 +120,5 @@ T::ok('the structured log can be downloaded', str_contains($html, 'download_log.
 set_setting('show_error_log', '0');
 [, $html] = _lv('GET', "$B/admin/settings.php", null, $ck);
 T::ok('viewer is hidden when the setting is off', !str_contains($html, 'app-log-view') && !str_contains($html, 'id="verify-log-btn"'));
+$teardown();
 exit(T::done());

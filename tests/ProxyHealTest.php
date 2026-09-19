@@ -14,7 +14,7 @@ $db = get_db();
 $restore = [
     'osm_proxy_enabled' => get_setting('osm_proxy_enabled', '0'),
 ];
-register_shutdown_function(static function () use ($restore): void {
+$teardown = t_teardown(static function () use ($restore): void {
     $db = get_db();
     $db->exec('DELETE FROM osm_proxies');
     $db->exec("DELETE FROM settings WHERE key_name IN ('proxy_heal_lock', 'proxy_heal_last')");
@@ -231,4 +231,5 @@ T::eq('the failed member was marked failed', 'fail',
 
 osm_proxy_heal_spawner(null, true);
 osm_proxy_heal_spawner(static fn(): bool => false);
+$teardown();
 exit(T::done());

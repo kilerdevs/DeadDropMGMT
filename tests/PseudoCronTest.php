@@ -21,8 +21,10 @@ $age   = static function () use ($db): int {
     return $old;
 };
 $prev = $stamp();
-register_shutdown_function(static function () use ($prev): void {
+$teardown = t_teardown(static function () use ($prev): void {
     get_db()->prepare("UPDATE settings SET value = ? WHERE key_name = 'last_cleanup'")->execute([(string)$prev]);
+    putenv('DDMGMT_PROXY_HEAL');
+    putenv('DDMGMT_PSEUDO_CRON=0'); // the bootstrap default
 });
 
 function _pc_get(string $url): int {
@@ -32,7 +34,7 @@ function _pc_get(string $url): int {
     return preg_match('#^HTTP/\S+\s+(\d{3})#', (string)($h[0] ?? ''), $m) ? (int)$m[1] : 0;
 }
 
-/** Start a php -S on a free port with the current environment; returns [proc, base-url]. */
+/** Start a php -S on a free port with the current environment; returns [proc, base-url, stop-handle]. */
 function _pc_server(): array {
     $probe = stream_socket_server('tcp://127.0.0.1:0');
     $port = (int)explode(':', (string)stream_socket_get_name($probe, false))[1];
@@ -42,7 +44,7 @@ function _pc_server(): array {
         . " -S 127.0.0.1:$port -t " . escapeshellarg(dirname(__DIR__));
     $null = DIRECTORY_SEPARATOR === '\\' ? 'NUL' : '/dev/null';
     $proc = proc_open($cmd, [['pipe', 'r'], ['file', $null, 'w'], ['file', $null, 'w']], $p);
-    register_shutdown_function(static function () use ($proc): void {
+    $stop = t_teardown(static function () use ($proc): void {
         $st = proc_get_status($proc);
         if (!empty($st['running'])) {
             if (DIRECTORY_SEPARATOR === '\\') {
@@ -55,10 +57,10 @@ function _pc_server(): array {
     });
     $base = "http://127.0.0.1:$port";
     for ($i = 0; $i < 50; $i++) {
-        if (_pc_get("$base/healthz.php") === 200) { return [$proc, $base]; }
+        if (_pc_get("$base/healthz.php") === 200) { return [$proc, $base, $stop]; }
         usleep(200000);
     }
-    return [$proc, ''];
+    return [$proc, '', $stop];
 }
 
 $waitFor = static function (callable $cond, int $ms = 6000): bool {
@@ -71,7 +73,7 @@ $waitFor = static function (callable $cond, int $ms = 6000): bool {
 
 // ── ON: every kind of kernel page starts it ──────────────────────────────────
 putenv('DDMGMT_PSEUDO_CRON=1');
-[, $on] = _pc_server();
+[, $on, $stopOn] = _pc_server();
 T::ok('server (pseudo-cron on) booted', $on !== '');
 
 foreach ([
@@ -101,7 +103,7 @@ T::eq('a stamp younger than an hour is left alone', $fresh, $stamp());
 
 // ── OFF: DDMGMT_PSEUDO_CRON=0 ────────────────────────────────────────────────
 putenv('DDMGMT_PSEUDO_CRON=0');
-[, $off] = _pc_server();
+[, $off, $stopOff] = _pc_server();
 T::ok('server (pseudo-cron off) booted', $off !== '');
 $old = $age();
 _pc_get($off . '/index.php');
@@ -110,4 +112,7 @@ usleep(1500000);
 T::eq('DDMGMT_PSEUDO_CRON=0 disables it', $old, $stamp());
 
 T::ok('the switch is read from the environment', pseudo_cron_enabled() === false); // CLI never runs it either
+$stopOn();
+$stopOff();
+$teardown();
 exit(T::done());

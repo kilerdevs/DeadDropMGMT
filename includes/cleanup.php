@@ -168,8 +168,43 @@ function pseudo_cron_enabled(): bool {
     return PHP_SAPI !== 'cli' && host_flag('DDMGMT_PSEUDO_CRON', true);
 }
 
-function pseudo_cron_run(): void {
-    if (!pseudo_cron_enabled()) {
+// Hand the response to the client before any maintenance starts. Under FPM
+// fastcgi_finish_request frees the worker's client at once; elsewhere every
+// output buffer above $keepLevels is flushed. $keepLevels and $fcgi are test
+// seams: a suite that owns an outer buffer (the coverage runner) must not have
+// it flushed, and a CLI has no fastcgi_finish_request.
+function pseudo_cron_finish_response(int $keepLevels = 0, ?callable $fcgi = null): void {
+    $fcgi ??= function_exists('fastcgi_finish_request') ? 'fastcgi_finish_request' : null;
+    if ($fcgi !== null) {
+        @$fcgi();
+        return;
+    }
+    while (ob_get_level() > $keepLevels) {
+        @ob_end_flush();
+    }
+    @flush();
+}
+
+// The maintenance slots, each isolated: one that throws is logged and the
+// rest still run. Defaults: the hourly sweep, the stalled-zone steward (never
+// downloads here), and the proxy pool upkeep — a detached job where the host
+// allows one, a time-budgeted inline pass where it does not (no exec, no CLI).
+/** @param list<callable>|null $slots */
+function pseudo_cron_work(?array $slots = null): void {
+    $slots ??= ['run_cleanup_if_due', 'maps_steward_if_due', 'osm_proxy_heal_pseudo_cron'];
+    foreach ($slots as $slot) {
+        try {
+            $slot();
+        } catch (Throwable $e) {
+            log_err('Pseudo-cron: ' . $e->getMessage());
+        }
+    }
+}
+
+// $force / $finish / $slots: test seams (the CLI never runs it for real).
+/** @param list<callable>|null $slots */
+function pseudo_cron_run(bool $force = false, ?callable $finish = null, ?array $slots = null): void {
+    if (!$force && !pseudo_cron_enabled()) {
         return;
     }
     ignore_user_abort(true);
@@ -178,21 +213,6 @@ function pseudo_cron_run(): void {
     if (session_status() === PHP_SESSION_ACTIVE) {
         session_write_close();
     }
-    if (function_exists('fastcgi_finish_request')) {
-        @fastcgi_finish_request();
-    } else {
-        while (ob_get_level() > 0) {
-            @ob_end_flush();
-        }
-        @flush();
-    }
-    try {
-        run_cleanup_if_due();
-        maps_steward_if_due(); // stalled zone downloads only — never downloads here
-        // Proxy pool upkeep: a detached job where the host allows one, a
-        // time-budgeted inline pass where it does not (no exec, no CLI).
-        osm_proxy_heal_pseudo_cron();
-    } catch (Throwable $e) {
-        log_err('Pseudo-cron: ' . $e->getMessage());
-    }
+    ($finish ?? 'pseudo_cron_finish_response')();
+    pseudo_cron_work($slots);
 }
