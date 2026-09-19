@@ -448,6 +448,14 @@ button.sidebar-logout {
 .host-row--unavailable .host-status { color: #f44336; }
 .host-hint   { flex-basis: 100%; color: var(--text-muted); font-size: 11px; line-height: 1.6; }
 
+.mz-field-error {
+    color:          var(--error);
+    font-size:      11px;
+    letter-spacing: 0.04em;
+    line-height:    1.4;
+}
+input.mz-invalid { border-bottom-color: var(--error) !important; }
+
 .log-ts   { flex-shrink: 0; color: #444; white-space: nowrap; }
 .log-lvl  { flex-shrink: 0; min-width: 44px; font-size: 10px; letter-spacing: 0.08em; color: #666; }
 .log-text { flex: 1 1 auto; min-width: 0; }
@@ -960,17 +968,29 @@ input[type="file"]::file-selector-button:hover { background: var(--accent); colo
     left:            50%;
     transform:       translate(-50%, -50%);
     z-index:         9999;
+    /* Any message must fit any screen: it wraps (never one long line), is
+       capped to the viewport width with a gutter on each side, and scrolls
+       rather than growing past the viewport height. */
+    box-sizing:      border-box;
+    width:           max-content;
+    max-width:       92vw;
+    max-width:       min(92vw, 520px);
+    max-height:      80vh;
+    overflow-y:      auto;
     background:      var(--surface);
     border:          1px solid #4caf50;
-    padding:         18px 40px;
+    padding:         14px 24px;
     font-family:     'IBM Plex Mono', monospace;
     font-size:       13px;
-    letter-spacing:  0.06em;
+    letter-spacing:  0.04em;
+    line-height:     1.5;
+    text-align:      center;
+    white-space:     normal;
+    overflow-wrap:   anywhere;
     color:           #4caf50;
     pointer-events:  none;
     opacity:         0;
     transition:      opacity 200ms ease;
-    white-space:     nowrap;
 }
 .save-popup.visible { opacity: 1; }
 .save-popup.error   { border-color: var(--error); color: var(--error); }

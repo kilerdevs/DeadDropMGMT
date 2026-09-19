@@ -367,7 +367,8 @@ function s_label(array $s, string $key): string {
                         <div class="field-label"><?= t('admin.maps.add_title') ?></div>
                         <div class="maps-add-grid">
                             <label><?= htmlspecialchars(t('admin.maps.name_label'), ENT_QUOTES, 'UTF-8') ?>
-                                <input type="text" id="mz-name" maxlength="64" autocomplete="off"></label>
+                                <input type="text" id="mz-name" maxlength="64" autocomplete="off">
+                                <span class="mz-field-error" id="mz-name-error" role="alert" hidden></span></label>
                             <label><?= htmlspecialchars(t('admin.maps.maxzoom_label'), ENT_QUOTES, 'UTF-8') ?>
                                 <select id="mz-maxzoom">
                                     <option value="14"><?= t('admin.maps.z14') ?></option>
@@ -532,6 +533,7 @@ function s_label(array $s, string $key): string {
         'mz_geo_error'      => t('admin.maps.js.geocode_error'),
         'mz_draw'           => t('admin.maps.draw_button'),
         'mz_draw_first'     => t('admin.maps.editor_title'),
+        'mz_name_required'  => t('admin.maps.err.bad_name'),
         'mz_drawing'        => t('admin.maps.drawing_button'),
         'mz_s_queued'      => t('admin.maps.status.queued'),
         'mz_s_sizing'      => t('admin.maps.status.sizing'),
@@ -574,9 +576,43 @@ function s_label(array $s, string $key): string {
         popup.textContent = msg;
         popup.className = 'save-popup' + (isError ? ' error' : '') + ' visible';
         clearTimeout(popupTimer);
+        // Long messages stay up long enough to be read (about 55 ms a character).
+        var ms = Math.min(9000, Math.max(isError ? 3000 : 1400, String(msg).length * 55));
         popupTimer = setTimeout(function () {
             popup.classList.remove('visible');
-        }, isError ? 3000 : 1400);
+        }, ms);
+    }
+
+    // ── Token-safe POSTs ──────────────────────────────────────────────────────
+    // The server rotates the CSRF token on every verified request, and this
+    // page fires several kinds (autosaves, the zone status poll, proxy and zone
+    // actions). Two in flight at once means one is rejected — and a late reply
+    // can even put a stale token back. So every POST goes through ONE queue
+    // (a single token-consuming request at a time), takes the token from the
+    // reply, and if the server still refuses it (403), fetches the live token
+    // and tries once more.
+    var postQueue = Promise.resolve();
+    function postForm(url, fd) {
+        function send(token) {
+            fd.set('csrf_token', token);
+            return fetch(url, { method: 'POST', body: fd }).then(function (r) {
+                return r.json().then(function (j) {
+                    if (j && j.csrf) csrf = j.csrf;
+                    return { r: r, j: j };
+                });
+            });
+        }
+        function run() {
+            return send(csrf).then(function (res) {
+                if (res.r.status === 403 && window.ddmgmtFreshCsrf) {
+                    return window.ddmgmtFreshCsrf().then(send);
+                }
+                return res;
+            });
+        }
+        var p = postQueue.then(run, run);
+        postQueue = p.catch(function () {});
+        return p;
     }
 
     // ── Slider value formatter ────────────────────────────────────────────────
@@ -626,13 +662,11 @@ function s_label(array $s, string $key): string {
         if (err) { showPopup(err, true); return; }
 
         var fd = new FormData();
-        fd.append('csrf_token', csrf);
         fd.append('key', key);
         fd.append('value', value);
-        fetch('/admin/save_setting.php', { method: 'POST', body: fd })
-            .then(function (r) { return r.json(); })
+        postForm('/admin/save_setting.php', fd)
+            .then(function (res) { return res.j; })
             .then(function (d) {
-                if (d.csrf) csrf = d.csrf; // token rotated server-side on each save
                 if (d.ok) {
                     showPopup('✓ ' + I.saved, false);
                     setTimeout(function () { location.reload(); }, 600);
@@ -685,11 +719,10 @@ function s_label(array $s, string $key): string {
 
     function pxPost(action, extra) {
         var fd = new FormData();
-        fd.append('csrf_token', csrf);
         fd.append('action', action);
         if (extra) Object.keys(extra).forEach(function (k) { fd.append(k, extra[k]); });
-        return fetch('/admin/proxy_action.php', { method: 'POST', body: fd })
-            .then(function (r) { return r.json().then(function (j) { if (j.csrf) csrf = j.csrf; return { ok: r.ok, j: j }; }); })
+        return postForm('/admin/proxy_action.php', fd)
+            .then(function (res) { return { ok: res.r.ok, j: res.j }; })
             .catch(function () { return { ok: false, j: { error: I.connection_error } }; });
     }
 
@@ -744,11 +777,10 @@ function s_label(array $s, string $key): string {
 
     function mzPost(action, extra) {
         var fd = new FormData();
-        fd.append('csrf_token', csrf);
         fd.append('action', action);
         if (extra) Object.keys(extra).forEach(function (k) { fd.append(k, extra[k]); });
-        return fetch('/admin/maps_action.php', { method: 'POST', body: fd })
-            .then(function (r) { return r.json().then(function (j) { if (j.csrf) csrf = j.csrf; return { ok: r.ok, j: j }; }); })
+        return postForm('/admin/maps_action.php', fd)
+            .then(function (res) { return { ok: res.r.ok, j: res.j }; })
             .catch(function () { return { ok: false, j: { error: I.mz_request_failed } }; });
     }
 
@@ -908,9 +940,20 @@ function s_label(array $s, string $key): string {
                 showPopup(I.mz_draw_first, true);
                 return;
             }
+            // The name field sits far above the map and this button. Check it HERE
+            // and take the admin to it — scrolled into view, focused, marked, with
+            // the reason written next to it — instead of a toast that names a field
+            // nobody can see and vanishes in seconds.
+            var mzNameEl = document.getElementById('mz-name');
+            var zoneName = mzNameEl.value.trim();
+            if (zoneName === '' || zoneName.length > 64) {
+                mzNameProblem(I.mz_name_required);
+                return;
+            }
+            mzNameProblem('');
             mzAdd.disabled = true;
             mzPost('add', {
-                name: document.getElementById('mz-name').value,
+                name: zoneName,
                 min_lon: bbox.min_lon,
                 min_lat: bbox.min_lat,
                 max_lon: bbox.max_lon,
@@ -927,6 +970,22 @@ function s_label(array $s, string $key): string {
                 }
             });
         });
+        document.getElementById('mz-name').addEventListener('input', function () { mzNameProblem(''); });
+    }
+    // Mark / unmark the zone-name field. With a message it also scrolls the field
+    // into view and focuses it (so typing starts right there).
+    function mzNameProblem(msg) {
+        var el = document.getElementById('mz-name');
+        var out = document.getElementById('mz-name-error');
+        if (!el || !out) return;
+        out.textContent = msg;
+        out.hidden = msg === '';
+        el.classList.toggle('mz-invalid', msg !== '');
+        el.setAttribute('aria-invalid', msg !== '' ? 'true' : 'false');
+        if (msg !== '') {
+            el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            el.focus({ preventScroll: true });
+        }
     }
     // ── Zone rectangle editor (OSM canvas, tiles via tile_proxy.php only) ────────────
     // Leaflet core has no editable rectangles, so this is hand-rolled: a

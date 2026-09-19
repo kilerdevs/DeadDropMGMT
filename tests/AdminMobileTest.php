@@ -168,6 +168,30 @@ T::ok('settings: rows carry the colour class and a swatch (server-rendered and r
 T::ok('settings: map layers take the zone colour and dash the zones that are not ready',
       str_contains($set, 'var MZ_PALETTE = <?= json_encode(MAPS_ZONE_COLORS) ?>;')
       && str_contains($set, "dashArray: ready ? null : '6 4'") && str_contains($set, 'MZ_PALETTE[b.id % MZ_PALETTE.length]'));
+// Notifications must fit any screen: they wrap and are capped to the viewport
+// (a one-line, nowrap toast ran off a phone's edge), and long ones stay up
+// long enough to read.
+T::ok('style.css: .save-popup wraps and is capped to the viewport',
+      preg_match('/\.save-popup\s*\{[^}]*\}/', $css, $sp) === 1
+      && !str_contains($sp[0], 'nowrap') && preg_match('/white-space:\s*normal/', $sp[0]) === 1
+      && preg_match('/max-width:\s*92vw/', $sp[0]) === 1 && preg_match('/max-height:\s*80vh/', $sp[0]) === 1
+      && preg_match('/overflow-wrap:\s*anywhere/', $sp[0]) === 1);
+foreach (['/admin/settings.php', '/admin/edit.php'] as $f) {
+    T::ok("$f: popup time scales with message length",
+          str_contains((string)file_get_contents($root . $f), 'msg.length * 55')
+          || str_contains((string)file_get_contents($root . $f), 'String(msg).length * 55'));
+}
+// Settings POSTs: ONE queue, token-safe. Direct fetches would let two requests
+// race the rotating CSRF token (one rejected, a late reply restoring a stale one).
+T::eq('settings: no page request bypasses the shared POST queue', 0,
+      preg_match_all("#fetch\\('/admin/(save_setting|proxy_action|maps_action)\\.php'#", $set));
+T::ok('settings: save, proxy and zone actions all go through postForm()',
+      substr_count($set, "postForm('/admin/") === 3 && str_contains($set, 'window.ddmgmtFreshCsrf().then(send)'));
+T::ok('settings: an empty zone name is caught in the browser and points at the field',
+      str_contains($set, 'mzNameProblem(I.mz_name_required)') && str_contains($set, 'id="mz-name-error"')
+      && str_contains($set, "el.scrollIntoView({ block: 'center'"));
+T::ok('style.css: the marked field and its message are styled',
+      str_contains($css, '.mz-field-error') && str_contains($css, 'input.mz-invalid'));
 T::ok('style.css: draw mode blocks browser touch panning',
       (bool)preg_match('/\.maps-editor-map\.mz-drawing\s*\{[^}]*touch-action:\s*none/', $css));
 T::ok('style.css: zone labels styled', str_contains($css, '.leaflet-tooltip.mz-zone-label'));

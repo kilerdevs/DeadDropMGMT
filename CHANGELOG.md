@@ -95,6 +95,18 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   ADR-006/016/019 describe the changes above.
 
 ### Fixed
+- Settings → Maps: queueing a zone without a name (or with the name not
+  reaching the server) gave a toast naming a field that sits far above the
+  button and vanished in seconds. The name is now checked in the browser: the
+  field is scrolled into view, focused and marked, with the reason written next
+  to it until you type. Every Settings POST (autosave, proxy and zone actions,
+  the status poll) also goes through one queue that takes the rotated CSRF
+  token from each reply and retries once with the live token on a 403, so two
+  overlapping requests can no longer reject each other or restore a stale token.
+- Notifications (the toasts on Settings and the order editor) no longer run off
+  the screen: they wrap, are capped to the viewport width and height, and stay
+  up longer the longer the message is. The "queued" message was one 100+
+  character line that did not fit a phone.
 - Settings → log viewer: **Verify integrity** checks the structured,
   hash-chained log, but the panel listed only PHP's raw error file — so "2
   entries verified" sat under "The log is empty". The viewer now shows the

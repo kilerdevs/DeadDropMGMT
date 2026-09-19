@@ -531,7 +531,9 @@ $init_zoom = $has_pin ? 17 : 12;
         popup.textContent = msg;
         popup.className = 'save-popup' + (isError ? ' error' : '') + ' visible';
         clearTimeout(popupTimer);
-        popupTimer = setTimeout(function () { popup.classList.remove('visible'); }, isError ? 3000 : 1400);
+        // Long messages stay up long enough to be read (about 55 ms a character).
+        var ms = Math.min(9000, Math.max(isError ? 3000 : 1400, msg.length * 55));
+        popupTimer = setTimeout(function () { popup.classList.remove('visible'); }, ms);
     }
 
     function saveNow() {
