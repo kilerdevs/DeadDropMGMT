@@ -116,7 +116,7 @@ foreach (['0', '1'] as $px) {
 // edit.php needs a real order id; reuse the same rule via the partial guard.
 $src = (string)file_get_contents($root . '/admin/edit.php');
 T::ok('edit.php guards the badge on provider and proxy toggle',
-      str_contains($src, "map_provider() === MAP_PROVIDER_OSM && osm_proxy_enabled()"));
+      str_contains($src, 'map_provider() === MAP_PROVIDER_OSM && osm_proxy_enabled()'));
 $src = (string)file_get_contents($root . '/admin/new_order.php');
 T::eq('new_order.php includes admin.js exactly once', 1, substr_count($src, '/admin/admin.js'));
 
@@ -128,7 +128,7 @@ T::ok('zone editor draws with pointer events', str_contains($set, "addEventListe
 T::ok('zone editor no longer relies on Leaflet mouse events',
       !preg_match("/mzMap\.on\('mouse(down|move|up)'/", $set) && !str_contains($set, "h.on('mousedown'"));
 T::ok('existing zone rectangles get a permanent name label',
-      str_contains($set, "bindTooltip(b.name, { permanent: true") && str_contains($set, "className: 'mz-zone-label'"));
+      str_contains($set, 'bindTooltip(b.name, { permanent: true') && str_contains($set, "className: 'mz-zone-label'"));
 T::ok('zone labels re-sync after the status poll re-renders rows',
       str_contains($set, "typeof mzSyncZoneLayers === 'function'"));
 
