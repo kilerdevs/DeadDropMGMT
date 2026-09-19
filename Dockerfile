@@ -39,6 +39,15 @@ RUN chmod +x /usr/local/bin/entrypoint.sh \
  # runtime directories above need to be writable, never the docroot root
  && chmod 755 /var/www/html
 
+# Build provenance for Settings → Version (owners only). Produced on the
+# build host by tools/build_info.sh and passed through the compose files as
+# DDMGMT_BUILD_INFO; empty (a plain `docker build`) just shows "unknown build".
+# Kept outside the docroot: nothing here is ever served.
+ARG DDMGMT_BUILD_INFO=""
+RUN if [ -n "$DDMGMT_BUILD_INFO" ]; then \
+        printf '%s' "$DDMGMT_BUILD_INFO" | base64 -d > /usr/local/share/ddmgmt-build.json || rm -f /usr/local/share/ddmgmt-build.json; \
+    fi
+
 WORKDIR /var/www/html
 # Real health signal: Apache + PHP + config rendering all working — a plain
 # HTTP GET of the public page must return something HTML-shaped. curl/wget

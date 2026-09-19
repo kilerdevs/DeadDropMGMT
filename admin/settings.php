@@ -136,6 +136,28 @@ function s_label(array $s, string $key): string {
         <?php if ($success): ?><div class="flash ok"><?= $success ?></div><?php endif; ?>
         <!-- Flash mirrors t()-built session values; raw echo (see orders.php). -->
 
+        <?php $bi = build_info(); ?>
+        <!-- Build provenance: owners only (this page is require_owner()). -->
+        <div class="version-strip" id="version-strip">
+            <span class="version-label"><?= htmlspecialchars(t('admin.settings.version_label'), ENT_QUOTES, 'UTF-8') ?></span>
+            <?php if (!$bi['known']): ?>
+            <span class="version-muted"><?= htmlspecialchars(t('admin.settings.version_unknown'), ENT_QUOTES, 'UTF-8') ?></span>
+            <?php else: ?>
+            <span class="version-value"><?= $bi['version'] !== null
+                ? 'v' . htmlspecialchars($bi['version'], ENT_QUOTES, 'UTF-8') . ($bi['ahead'] > 0 ? '+' . (int)$bi['ahead'] : '')
+                : '&mdash;' ?></span>
+            <?php if ($bi['beta']): ?>
+            <span class="beta-badge" title="<?= htmlspecialchars(t('admin.settings.version_beta_hint'), ENT_QUOTES, 'UTF-8') ?>">BETA</span>
+            <span class="version-commit">
+                <?php if ($bi['commit'] !== null): ?><code><?= htmlspecialchars($bi['commit'], ENT_QUOTES, 'UTF-8') ?></code><?php endif; ?>
+                <?php if ($bi['subject'] !== null): ?> <?= htmlspecialchars($bi['subject'], ENT_QUOTES, 'UTF-8') ?><?php endif; ?>
+                <?php if ($bi['branch'] !== null): ?> <span class="version-muted">[<?= htmlspecialchars($bi['branch'], ENT_QUOTES, 'UTF-8') ?>]</span><?php endif; ?>
+                <?php if ($bi['dirty']): ?> <span class="version-muted">&middot; <?= htmlspecialchars(t('admin.settings.version_dirty'), ENT_QUOTES, 'UTF-8') ?></span><?php endif; ?>
+            </span>
+            <?php endif; ?>
+            <?php endif; ?>
+        </div>
+
         <div class="form-panel settings-panel">
             <div autocomplete="off">
 

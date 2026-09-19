@@ -42,6 +42,7 @@ foreach ([
     'maps',
     'cleanup',
     'wipe',
+    'version',
 ] as $service) {
     require_once __DIR__ . '/' . $service . '.php';
 }

@@ -28,7 +28,7 @@ all without the underlying data ever leaving the server in readable form.
 ![Log integrity](https://img.shields.io/badge/audit%20log-HMAC%20chained-blue?style=flat)
 
 ![PHPStan](https://img.shields.io/badge/PHPStan-level%205-4F5D95?style=flat)
-![Test suites](https://img.shields.io/badge/PHP%20test%20suites-31-success?style=flat)
+![Test suites](https://img.shields.io/badge/PHP%20test%20suites-34-success?style=flat)
 ![E2E](https://img.shields.io/badge/E2E-Playwright-45ba4b?style=flat&logo=playwright&logoColor=white)
 ![Coverage floor](https://img.shields.io/badge/coverage%20floor-%E2%89%A585%25-success?style=flat)
 ![Mutation probe](https://img.shields.io/badge/mutation%20probe-16%20mutants-success?style=flat)
@@ -225,6 +225,17 @@ is provided) generates a key and persists it on the `app-config` volume.
 The app is then on <http://localhost:2137> (`APP_PORT` in `.env` to change). Overrides live in `.env` (see `.env.example`) —
 DB password, port, AES key.
 
+**Version line in Settings.** Owners see the running build under Settings: `v1.5.0` for a tagged release, or `v1.5.0+8`
+with a **BETA** badge, the commit hash and its subject for anything past the last release tag (a build from `dev`).
+The image has no `.git`, so the build host supplies it — prefix the build with the helper (any compose file):
+
+```sh
+eval "$(tools/build_info.sh --export)" && docker compose up -d --build
+```
+
+A plain `docker compose up --build` still works; Settings then says "unknown build". Nothing outside the owner-only
+Settings page (not `/healthz.php`, not the public or login pages) discloses it.
+
 ### Volumes
 
 | Volume | Holds | Lost on rebuild? |
@@ -336,7 +347,7 @@ On anything with real traffic, install real cron — pseudo-cron only guarantees
 takes the page-hit path out of the latency budget entirely. CLI only (`cron/` is denied from the web on every stack):
 
 ```cron
-# expiry sweep, log checkpoint, proxy re-probe
+# expiry sweep, log checkpoint, proxy re-probe (+ replaces failed discovered proxies)
 0 * * * * php /var/www/deaddrops/cron/cleanup.php
 # only with self-hosted maps: advances queued zone downloads
 */15 * * * * php /var/www/deaddrops/cron/maps_sync.php
@@ -592,14 +603,14 @@ The public Content-Security-Policy allows exactly one external origin: `frame-sr
 | OSM tile hosts | Admin map tiles, cache misses only | This server's IP (or a pool proxy's) |
 | Protomaps (`build.protomaps.com`, `build-metadata.protomaps.dev`) | Self-hosted map zone downloads and freshness checks | This server's IP, or a pool proxy's — per the route you consent to per download |
 | GitHub releases (`github.com/protomaps/go-pmtiles`) | First use of the `pmtiles` CLI | This server's IP |
-| Public proxy lists (`raw.githubusercontent.com`), anonymity judges and public-IP lookup services | Only when the owner clicks **Auto-discover** | This server's IP — see below |
+| Public proxy lists (`raw.githubusercontent.com`), anonymity judges and public-IP lookup services | When the owner clicks **Auto-discover**, and — while routing is enabled — when a discovered pool proxy has failed and is being replaced (at most once per 10 minutes) | This server's IP — see below |
 
 <details>
 <summary><b>Proxy auto-discovery sources</b> — what each list contributes and how candidates are vetted</summary>
 
 <br>
 
-All fetched from GitHub raw by the server (never the browser) when the owner clicks **Auto-discover** in Settings → proxy pool. Candidates are probed against a real OSM tile; HTTP proxies from unrated sources must additionally pass a live anonymity check (below). Sources, and what each contributes (`includes/proxy.php` is the single place these are configured):
+All fetched from GitHub raw by the server (never the browser) when the owner clicks **Auto-discover** in Settings → proxy pool, and by the automatic replacement of failed proxies (below), which runs the very same discovery. Candidates are probed against a real OSM tile; HTTP proxies from unrated sources must additionally pass a live anonymity check (below). Sources, and what each contributes (`includes/proxy.php` is the single place these are configured):
 
 | Source | Repo | Provides | Anonymity metadata |
 |---|---|---|---|
@@ -610,7 +621,9 @@ All fetched from GitHub raw by the server (never the browser) when the owner cli
 
 **Anonymity judges.** HTTP proxies without a source-provided rating are verified live: the server fetches a header-echo page *through* the candidate proxy and rejects it if the echo contains the server's own IP in the origin or any forwarded header (`Via`, `X-Forwarded-For`, …). Judges used, in order: `httpbin.org/get`, `azenv.net/` (plain HTTP so the check also works through CONNECT-less proxies). The server's own public IP is looked up first, directly, from `api.ipify.org` with `httpbin.org/ip` as fallback; if it cannot be determined, all unrated HTTP candidates are dropped rather than trusted. SOCKS proxies are never header-injecting by protocol design and skip this check.
 
-**What this means for your server's exposure:** clicking Auto-discover makes your server's IP visible to GitHub (list fetch, direct — not proxied), to the public-IP lookup services, to every candidate proxy probed, and to the judge services. OSM itself is only contacted through accepted proxies while routing is enabled.
+**What this means for your server's exposure:** clicking Auto-discover (or an automatic replacement, below) makes your server's IP visible to GitHub (list fetch, direct — not proxied), to the public-IP lookup services, to every candidate proxy probed, and to the judge services. OSM itself is only contacted through accepted proxies while routing is enabled.
+
+**Failed proxies are replaced automatically.** While routing is enabled, a discovered pool entry that fails (seen by live traffic or by the stale re-probe below) is confirmed dead with a fresh probe, deleted, and replaced by a newly discovered proxy chosen by exactly the Auto-discover criteria (answers a real HTTPS OSM tile in under 3 s; anonymity check for unrated HTTP proxies). The work runs in a detached CLI job (`cron/proxy_heal.php`, also called from the cleanup cron), under a lock, at most once per 10 minutes — never inside a page request. Safeguards: **nothing is deleted until a replacement exists** (an outage where every proxy "fails" and discovery finds nothing leaves the pool untouched, and the pool never shrinks); a proxy that answers the confirmation probe is kept; entries you added by hand (`manual`) are never deleted automatically; with routing disabled nothing happens. Each swap is written to the audit log (`proxy_replace`). Because this reuses discovery, it makes the same outbound connections as the Auto-discover button — enabling proxy routing and running Auto-discover once is what opts a deployment into it.
 
 **Stale entries are re-probed automatically.** A manually added proxy is only format-checked at insert, so a typo'd-but-well-formed URL would sit at `new` forever. Every cleanup pass (hourly pseudo-cron, or real cron) re-probes the 3 stalest entries — never checked, or not checked in 7 days — against a real OSM tile and updates their status, so the pool display reflects reality even for proxies live traffic never exercises.
 
@@ -624,7 +637,7 @@ A zero-dependency PHP suite (no PHPUnit — each file is a standalone script), a
 
 | Layer | What it proves | Run it |
 |---|---|---|
-| **PHP suites** — 31 | Crypto, auth, limits, state machine, maps, i18n, fail-closed branches, live-HTTP flows | `php tests/schema_loader.php && php tests/run_all.php` |
+| **PHP suites** — 34 | Crypto, auth, limits, state machine, maps, i18n, fail-closed branches, live-HTTP flows | `php tests/schema_loader.php && php tests/run_all.php` |
 | **Browser E2E** — 7 specs | What raw HTTP cannot see: no-JS paths, CSP-clean DOM, offline maps, mid-reveal UI | `npm ci && npx playwright install chromium && npm run e2e` |
 | **Coverage gate** | Line coverage floors over `includes/` under `pcov` | `composer install && php tests/coverage_runner.php` |
 | **Mutation probe** — 16 mutants | A tested guard versus a dead one | `php tools/mutation_probe.php` |
@@ -634,7 +647,7 @@ A zero-dependency PHP suite (no PHPUnit — each file is a standalone script), a
 The suite never touches your real database: `tests/bootstrap.php` forces `DDMGMT_DB_NAME=deaddrops_test` and points the app at TCP loopback unless you say otherwise.
 
 <details>
-<summary><b>The 31 PHP suites</b>, by area</summary>
+<summary><b>The 34 PHP suites</b>, by area</summary>
 
 <br>
 
@@ -647,8 +660,8 @@ The suite never touches your real database: `tests/bootstrap.php` forces `DDMGMT
 | Public pages & settings | `I18nTest`, `PublicLangTest` (public language choice vs admin account language), `SettingsTest` |
 | Uploads | `UploadHardeningTest`, `PhotoCapTest` |
 | Logging | `LoggerTest` — hash chain, continuity checkpoints, unusable-key behaviour |
-| Maps & proxy | `MapsTest`, `MapsFetchTest` (zone tokens, CLI pins, worker lock, orphan sweep), `ProxyTest` (anonymity gate, tile cache), `ProxyClientTest` (response size ceilings) |
-| Structure & guards | `KernelTest` (service manifest, CLI-only guards, web-server denies), `DispatchTest` (the thin admin dispatcher contract), `FailClosedTest` (every guard, limiter, wipe and decrypt path, plus the DB TLS option matrix) |
+| Maps & proxy | `MapsTest`, `MapsFetchTest` (zone tokens, CLI pins, worker lock, orphan sweep), `ProxyTest` (anonymity gate, tile cache), `ProxyClientTest` (response size ceilings), `ProxyHealTest` (failed-proxy replacement: confirm, replace-never-just-delete, manual entries exempt, lock, cooldown) |
+| Structure & guards | `KernelTest` (service manifest, CLI-only guards, web-server denies), `AdminMobileTest` (phone layout contract: menu button, OSM badge rules, touch zone editor), `VersionTest` (release vs beta build line, owners only), `DispatchTest` (the thin admin dispatcher contract), `FailClosedTest` (every guard, limiter, wipe and decrypt path, plus the DB TLS option matrix) |
 
 </details>
 
@@ -767,7 +780,8 @@ DeadDropMGMT/
 │   ├── settings.php          Settings cache (one DB query per page load)
 │   ├── i18n.php              Translation engine (8 languages, CLDR plurals,
 │   │                         account preference + public ?lang= switcher)
-│   ├── proxy.php             OSM outbound proxy pool + free-proxy discovery + tile cache
+│   ├── proxy.php             OSM outbound proxy pool + free-proxy discovery + self-healing + tile cache
+│   ├── version.php           Build provenance: release vs beta (Settings → Version)
 │   ├── maps.php              Self-hosted maps: zones, pmtiles CLI, worker, map style
 │   ├── analytics.php         Event logger
 │   ├── logger.php            Structured JSONL log + tamper-evident hash chain
@@ -778,7 +792,8 @@ DeadDropMGMT/
 │
 ├── cron/
 │   ├── cleanup.php           Expiry sweep, checkpoints, proxy re-probe (CLI only)
-│   └── maps_sync.php         Map zone download worker (CLI only)
+│   ├── maps_sync.php         Map zone download worker (CLI only)
+│   └── proxy_heal.php        Replaces failed discovered pool proxies (CLI only)
 │
 ├── logs/                     App + error log (blocked from web)
 ├── uploads/                  Order photos: served by URL, no listing,
@@ -790,7 +805,8 @@ DeadDropMGMT/
 ├── tests/                    Zero-dependency suite (see Tests above)
 ├── e2e/                      Playwright specs, seed script, offline map fixture
 ├── tools/                    CLI maintenance: key rotation/separation,
-│                             CBC→GCM and order-token migrations, recovery purge, mutation probe
+│                             CBC→GCM and order-token migrations, recovery purge, mutation probe,
+│                             build_info.sh (version provenance for image builds)
 ├── docker/                   Apache/nginx/Caddy front configs, entrypoint,
 │                             php.ini overrides, e2e journey
 ├── docs/                     ADRs + troubleshooting guide

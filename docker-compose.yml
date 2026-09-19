@@ -27,7 +27,12 @@ services:
       retries: 10
 
   app:
-    build: .
+    build:
+      context: .
+      args:
+        # tools/build_info.sh --export sets this; empty is fine (Settings then
+        # shows "unknown build").
+        DDMGMT_BUILD_INFO: ${DDMGMT_BUILD_INFO:-}
     restart: unless-stopped
     ports:
       - "${APP_PORT:-2137}:80"

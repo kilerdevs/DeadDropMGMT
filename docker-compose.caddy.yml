@@ -28,6 +28,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.fpm
+      args:
+        DDMGMT_BUILD_INFO: ${DDMGMT_BUILD_INFO:-}
     restart: unless-stopped
     environment:
       DDMGMT_DB_HOST: db

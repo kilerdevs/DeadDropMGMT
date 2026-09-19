@@ -28,6 +28,13 @@ try {
     set_setting('last_cleanup', (string)time());
 
     echo '[' . date('Y-m-d H:i:s') . "] Done — {$deleted} order(s) deleted.\n";
+
+    // Last, because discovery is slow: swap confirmed-dead discovered proxies
+    // for fresh ones (no-op unless routing is on and one is marked failed).
+    $heal = osm_proxy_heal(null, null, true);
+    if ($heal['skipped'] === null) {
+        echo '[' . date('Y-m-d H:i:s') . "] Proxy pool: replaced {$heal['replaced']} of {$heal['dead']} dead.\n";
+    }
 } catch (Throwable $e) {
     log_err('Cron cleanup error: ' . $e->getMessage());
     echo '[' . date('Y-m-d H:i:s') . '] ERROR: ' . $e->getMessage() . "\n";

@@ -33,7 +33,7 @@ foreach (glob($root . '/includes/*.php') as $f) {
     }
     $services[] = strtolower(str_replace('\\', '/', (string)realpath($f)));
 }
-T::ok('service files found', count($services) === 15);
+T::ok('service files found', count($services) === 16);
 foreach ($services as $s) {
     T::ok('kernel loads ' . basename($s), isset($loaded[$s]));
 }

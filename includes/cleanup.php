@@ -131,6 +131,9 @@ function _run_cleanup_pass(): void {
         // never throws): proxies nobody exercised must not keep a fresh
         // 'ok' forever. Real-cron installs get this via cron/cleanup.php.
         osm_proxy_revalidate_stale();
+        // Failures found above (or by live traffic) are healed by a detached
+        // job: discovery takes far too long to run inside a page visit.
+        osm_proxy_heal_kick();
     } catch (Throwable $e) {
         log_err('Cleanup error: ' . $e->getMessage());
     }

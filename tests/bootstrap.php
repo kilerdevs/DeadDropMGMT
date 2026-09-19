@@ -118,6 +118,12 @@ require_once dirname(__DIR__) . '/includes/wipe.php';
 require_once dirname(__DIR__) . '/includes/proxy.php';
 require_once dirname(__DIR__) . '/includes/maps.php';
 require_once dirname(__DIR__) . '/includes/cleanup.php';
+require_once dirname(__DIR__) . '/includes/version.php';
+
+// No suite may ever start the detached proxy healer: it would run real
+// discovery (list downloads, public-IP lookup, probes) against the network.
+// ProxyHealTest installs its own capturing stand-in.
+osm_proxy_heal_spawner(static fn(): bool => false);
 
 // ── Order-token helpers (ADR-019) ─────────────────────────────────────────────
 // The database never holds a token in the clear, so tests cannot INSERT or

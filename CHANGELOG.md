@@ -9,6 +9,24 @@ All notable changes to DeadDropMGMT are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Failed proxies are replaced automatically. While OSM proxy routing is
+  enabled, a discovered pool entry that fails is confirmed dead with a fresh
+  probe, deleted and swapped for a newly discovered proxy chosen by exactly the
+  Auto-discover criteria. Runs as a detached CLI job (`cron/proxy_heal.php`,
+  also invoked by the cleanup cron) under a lock and a 10-minute cooldown,
+  never inside a request. Nothing is deleted until a replacement exists (an
+  outage cannot wipe the pool, which never shrinks), recovered proxies are
+  kept, `manual` entries are never removed, each swap is audited
+  (`proxy_replace`). It reuses discovery, so it makes the same outbound
+  connections as the Auto-discover button — see the README privacy table.
+- Settings shows the running version to owners: `vX.Y.Z` for a tagged release,
+  or `vX.Y.Z+N` with a **BETA** badge, the commit hash and its subject for
+  builds past the last release tag (builds from `dev`). The build host records
+  it with `tools/build_info.sh --export` (the image has no `.git`); a plain
+  build shows "unknown build". Not exposed on any public or unauthenticated
+  page.
+
 ### Changed
 - **Upgrade step required for existing installs:** after loading the new
   `setup.sql`, run `php tools/migrate_order_tokens.php` (dry-run first, back
