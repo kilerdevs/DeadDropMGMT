@@ -19,6 +19,7 @@ Symptom → cause → fix. For setup, see the [README](../README.md); for design
 | "Verify integrity" complaints | [Broken line](#verify-integrity-reports-a-broken-line-n) · [Continuity](#verify-integrity-continuity-says-truncated--rotated--none) · [Empty or key unavailable](#verify-integrity-says-nothing-to-verify-or-log-key-unavailable) |
 | Expired orders are still listed | [Expiry](#expired-orders-never-disappear) |
 | Photo upload rejected | [Photos](#photo-upload-rejected) |
+| Shared hosting: 500 after upload, dead maps, zone downloads refused | [Shared hosting](#shared-hosting-500-after-upload-dead-maps-zone-downloads-refused) |
 | Courier forced to the 2FA page | [2FA](#courier-bounced-to-2faphprequired1) |
 | Panic page restarts | [Panic](#panic-page-resets-to-step-1-with-an-error) |
 | First-owner form asks for a token | [Setup token](#first-owner-form-asks-for-a-setup-token) |
@@ -151,7 +152,11 @@ be caught by design; that is the documented blind spot.
 ## "Verify integrity" says nothing to verify or log key unavailable
 
 - **"Nothing to verify yet — the structured log is empty"**: the check covers the structured log (`logs/app.log`) only, not
-  the error log. A fresh install or a log that was just wiped (panic mode, key rotation archive) has nothing to check.
+  the raw PHP error file (`logs/error.log`). A fresh install or a log that was just wiped (panic mode, key rotation
+  archive) has nothing to check.
+- **"N entries verified" but the panel looked empty** (older versions): Settings used to list only `logs/error.log`.
+  It now shows the structured log first — the entries the check covers, newest 200 — and the raw PHP error log as a
+  second section below it.
 - **"log key unavailable (AES_KEY_HEX invalid)"**: the chain key derives from the master key and the process cannot read a
   valid one — see [AES key](#aes-key-missing-invalid-or-lost). Logging refuses quietly (one warning) rather than writing
   entries it could never verify.
@@ -160,10 +165,29 @@ be caught by design; that is the documented blind spot.
 
 Recipients never see an order past its expiry — lookups, unlocks and receipts treat it as gone the moment `expires_at`
 passes — but the *row* is removed by a sweep. Expiry runs three ways: the Docker image's built-in loop (every 15 minutes),
-real cron (`cron/cleanup.php`, hourly recommended), and pseudo-cron (every page visit checks an hourly stamp — see the
-`last_cleanup` setting). On a quiet site without cron the sweep can lag until the next visit. If rows with a past
+real cron (`cron/cleanup.php`, hourly recommended), and pseudo-cron (every PHP page visit — public, admin or a JSON poll — checks an hourly stamp after sending its
+response; see the `last_cleanup` setting; `DDMGMT_PSEUDO_CRON=0` turns it off). On a quiet site without cron the sweep can lag until the next visit. If rows with a past
 `expires_at` persist for days, run `php cron/cleanup.php` by hand and read its output plus `logs/error.log`. Only
 `delivered` orders expire — `preparing` rows are never swept, even with an `expires_at` set.
+
+## Shared hosting: 500 after upload, dead maps, zone downloads refused
+
+Open **Settings → Hosting** first: it lists what this host allows (cURL, process execution, background jobs, the last
+maintenance sweep, writable folders, zone downloads) and what each missing piece costs.
+
+- **A 500 on every page right after upload:** the host does not allow `Options` in `.htaccess` (`AllowOverride` without
+  `Options`). Delete the `Options -Indexes` line at the top of `.htaccess`; the rest is guarded by `IfModule`.
+- **Maps show nothing (502) for the first minute or two of a new install:** routing through the proxy pool is on by
+  default and the first pool is still being discovered (inline, after a page visit, on hosts without exec). It fills on
+  its own; if this host cannot reach any proxy it switches routing off after three empty attempts and says so in
+  Settings — turn it back on to retry, or leave it off to fetch OSM directly.
+- **"Routing switched off automatically" in Settings:** discovery found nothing three times in a row (outbound
+  connections blocked, or the public lists unreachable from this host). OSM requests now go direct from the server.
+- **"Zone downloads are not available on this host":** they need `proc_open`, Linux and cURL, and a cron job (or
+  exec + CLI PHP) to run `cron/maps_sync.php`. The default OpenStreetMap provider works without any of it.
+- **Nothing is ever swept:** the pseudo-cron needs page visits; **Settings → Hosting → Scheduled maintenance** shows the
+  last sweep. On a very quiet site add a cron job for `php cron/cleanup.php` (hourly).
+- **Writable folders "unavailable":** `chmod` `logs/ uploads/ cache/ data/ tiles/` so PHP can write (755 or 775 by FTP).
 
 ## Photo upload rejected
 

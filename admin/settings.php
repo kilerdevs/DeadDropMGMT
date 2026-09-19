@@ -148,12 +148,14 @@ function s_label(array $s, string $key): string {
                 : '&mdash;' ?></span>
             <?php if ($bi['beta']): ?>
             <span class="beta-badge" title="<?= htmlspecialchars(t('admin.settings.version_beta_hint'), ENT_QUOTES, 'UTF-8') ?>">BETA</span>
-            <span class="version-commit">
-                <?php if ($bi['commit'] !== null): ?><code><?= htmlspecialchars($bi['commit'], ENT_QUOTES, 'UTF-8') ?></code><?php endif; ?>
-                <?php if ($bi['subject'] !== null): ?> <?= htmlspecialchars($bi['subject'], ENT_QUOTES, 'UTF-8') ?><?php endif; ?>
-                <?php if ($bi['branch'] !== null): ?> <span class="version-muted">[<?= htmlspecialchars($bi['branch'], ENT_QUOTES, 'UTF-8') ?>]</span><?php endif; ?>
-                <?php if ($bi['dirty']): ?> <span class="version-muted">&middot; <?= htmlspecialchars(t('admin.settings.version_dirty'), ENT_QUOTES, 'UTF-8') ?></span><?php endif; ?>
-            </span>
+            <span class="version-commit"><?php
+                // One line: hash, branch, and (when the tree was modified) a note.
+                $parts = [];
+                if ($bi['commit'] !== null) { $parts[] = '<code>' . htmlspecialchars($bi['commit'], ENT_QUOTES, 'UTF-8') . '</code>'; }
+                if ($bi['branch'] !== null) { $parts[] = '<span class="version-muted">' . htmlspecialchars($bi['branch'], ENT_QUOTES, 'UTF-8') . '</span>'; }
+                if ($bi['dirty']) { $parts[] = '<span class="version-muted">' . htmlspecialchars(t('admin.settings.version_dirty'), ENT_QUOTES, 'UTF-8') . '</span>'; }
+                echo implode(' <span class="version-muted">&middot;</span> ', $parts);
+            ?></span>
             <?php endif; ?>
             <?php endif; ?>
         </div>
@@ -267,6 +269,11 @@ function s_label(array $s, string $key): string {
                     <?php if ($pxOn && !$proxy_pool): ?>
                     <div class="settings-warning"><?= t('admin.proxies.enabled_empty') ?></div>
                     <?php endif; ?>
+                    <?php if (!host_has_curl()): ?>
+                    <div class="settings-warning"><?= t('admin.proxies.no_curl') ?></div>
+                    <?php elseif (!$pxOn && osm_proxy_auto_off_state() !== null): ?>
+                    <div class="settings-warning"><?= t('admin.proxies.auto_off') ?></div>
+                    <?php endif; ?>
 
                     <div class="proxies-hint"><?= t('admin.proxies.hint') ?></div>
 
@@ -311,6 +318,10 @@ function s_label(array $s, string $key): string {
                 <div class="settings-group">
                     <div class="settings-group-label"><?= htmlspecialchars(t('admin.maps.zones_section'), ENT_QUOTES, 'UTF-8') ?></div>
                     <div class="proxies-hint"><?= t('admin.maps.zones_hint') ?></div>
+                    <?php $zones_ok = maps_downloads_supported(); ?>
+                    <?php if (!$zones_ok): ?>
+                    <div class="settings-warning"><?= t('admin.maps.flash.unsupported') ?></div>
+                    <?php endif; ?>
                     <div class="maps-disk" id="maps-disk">
                         <?= htmlspecialchars(t('admin.maps.disk_free', ['x' => maps_fmt_bytes(maps_disk_free())]), ENT_QUOTES, 'UTF-8') ?>
                     </div>
@@ -386,16 +397,39 @@ function s_label(array $s, string $key): string {
                             <label><input type="radio" name="mz-via" value="0" <?= osm_proxy_enabled() ? '' : 'checked' ?>>
                                 <?= htmlspecialchars(t('admin.maps.via_proxy_no'), ENT_QUOTES, 'UTF-8') ?></label>
                         </fieldset>
-                        <button type="button" id="mz-add" class="action-btn"><?= t('admin.maps.queue_button') ?></button>
+                        <button type="button" id="mz-add" class="action-btn"<?= $zones_ok ? '' : ' disabled' ?>><?= t('admin.maps.queue_button') ?></button>
                     </div>
                 </div>
 
             </div>
         </div>
 
-        <!-- ── Error log viewer ──────────────────────────────────────────── -->
+        <!-- ── Hosting capabilities ─────────────────────────────────────── -->
+        <div class="divider"></div>
+        <div class="section-label"><?= t('admin.host.section') ?></div>
+        <div class="host-list" id="host-list">
+            <?php foreach (host_capabilities() as $c): ?>
+            <?php
+                $hintKey = 'admin.host.' . $c['id'] . '.' . $c['status'];
+                $hint    = t($hintKey, ['n' => $c['note'], 'dirs' => $c['note']]);
+            ?>
+            <div class="host-row host-row--<?= $c['status'] ?>" data-cap="<?= $c['id'] ?>">
+                <span class="host-label"><?= t('admin.host.' . $c['id'] . '.label') ?></span>
+                <span class="host-status"><?= t('admin.host.' . $c['status']) ?></span>
+                <?php if ($hint !== $hintKey): ?><span class="host-hint"><?= $hint ?></span><?php endif; ?>
+            </div>
+            <?php endforeach; ?>
+        </div>
+
+        <!-- ── Log viewer ────────────────────────────────────────────────── -->
         <?php if (get_setting('show_error_log', '0') === '1'): ?>
         <?php
+        // Structured log: the hash-chained file "Verify integrity" checks. It
+        // is shown first and in full sense — verifying entries nobody can see
+        // is what made the old panel (raw PHP error file only) look empty.
+        $app_view  = log_recent_entries(200);
+        $app_shown = count($app_view['entries']);
+
         $log_all   = [];
         $log_total = 0;
         if (is_file(ERROR_LOG_PATH) && filesize(ERROR_LOG_PATH) > 0) {
@@ -405,18 +439,36 @@ function s_label(array $s, string $key): string {
         $log_lines = array_reverse($log_all); // newest first, file line numbers preserved
         ?>
         <div class="divider"></div>
+        <div class="section-label"><?= htmlspecialchars(t('admin.settings.app_log_section'), ENT_QUOTES, 'UTF-8') ?></div>
+        <div class="log-toolbar">
+            <span class="td-muted"><?= tn('admin.settings.log_line', $app_view['total'], ['n' => number_format($app_view['total'])]) ?><?php if ($app_view['total'] > $app_shown): ?> &middot; <?= htmlspecialchars(t('admin.settings.log_showing_latest', ['n' => $app_shown]), ENT_QUOTES, 'UTF-8') ?><?php endif; ?></span>
+            <div class="log-toolbar-actions">
+                <?php if ($app_view['total'] > 0): ?>
+                <a class="action-btn" href="/admin/download_log.php?file=app"><?= t('admin.settings.download_jsonl_button') ?></a>
+                <?php endif; ?>
+                <button type="button" class="action-btn" id="verify-log-btn"><?= t('admin.settings.verify_log_button') ?></button>
+                <span id="verify-log-result" class="td-muted"></span>
+            </div>
+        </div>
+        <?php if ($app_shown === 0): ?>
+        <div class="log-empty"><?= t('admin.settings.log_empty') ?></div>
+        <?php else: ?>
+        <div class="log-view" id="app-log-view">
+            <?php foreach ($app_view['entries'] as $e): ?>
+            <div class="log-line log-line--<?= htmlspecialchars($e['level'], ENT_QUOTES, 'UTF-8') ?>">
+                <span class="log-num"><?= $e['seq'] !== null ? (int)$e['seq'] : '' ?></span><span class="log-ts"><?= htmlspecialchars($e['ts'], ENT_QUOTES, 'UTF-8') ?></span><span class="log-lvl"><?= htmlspecialchars(strtoupper($e['level']), ENT_QUOTES, 'UTF-8') ?></span><span class="log-text"><?= htmlspecialchars($e['text'], ENT_QUOTES, 'UTF-8') ?></span>
+            </div>
+            <?php endforeach; ?>
+        </div>
+        <?php endif; ?>
+
         <div class="section-label"><?= t('admin.settings.error_log_section') ?></div>
         <div class="log-toolbar">
             <span class="td-muted"><?= tn('admin.settings.log_line', $log_total, ['n' => number_format($log_total)]) ?></span>
             <div class="log-toolbar-actions">
                 <?php if ($log_total > 0): ?>
                 <a class="action-btn" href="/admin/download_log.php"><?= t('admin.settings.download_log_button') ?></a>
-                <?php if (is_file(APP_LOG_PATH)): ?>
-                <a class="action-btn" href="/admin/download_log.php?file=app"><?= t('admin.settings.download_jsonl_button') ?></a>
                 <?php endif; ?>
-                <?php endif; ?>
-                <button type="button" class="action-btn" id="verify-log-btn"><?= t('admin.settings.verify_log_button') ?></button>
-                <span id="verify-log-result" class="td-muted"></span>
                 <form method="POST" action="/admin/settings.php">
                     <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
                     <input type="hidden" name="action" value="clear_log">

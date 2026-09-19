@@ -242,6 +242,7 @@ function osm_fetch(string $url, int $maxBytes = 2097152): string|false {
     $pool = osm_proxy_pool();
     if (!$pool) {
         osm_last_via_set(['via' => null, 'failed' => true, 'attempts' => 0, 'skipped' => []]);
+        osm_proxy_heal_kick(); // first run / emptied pool: discover one in the background
         return false; // enabled with an empty pool would mean going direct = leak
     }
 
@@ -428,8 +429,10 @@ const PROXY_ANONYMITY_JUDGES = [
 function proxy_public_ip(): ?string {
     foreach (['https://api.ipify.org?format=text', 'http://httpbin.org/ip'] as $url) {
         // An IP is bytes, not megabytes: cap the read like every other fetch.
-        $raw = @file_get_contents($url, false, stream_context_create(['http' => ['timeout' => 8]]), 0, 4097);
-        if (!is_string($raw) || strlen($raw) > 4096) {
+        // Through the shared fetcher so it works via cURL where
+        // allow_url_fopen is off (common on shared hosting).
+        $raw = osm_fetch_via($url, null, 8, 4096);
+        if (!is_string($raw)) {
             continue;
         }
         if (preg_match('/\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b/', $raw, $m)) {
@@ -468,19 +471,32 @@ function proxy_judge_anonymous(string $pxUrl, string $ourIp, int $timeout_s = 6,
 //   3. HTTP proxies without a source anonymity rating must additionally pass
 //      a live judge check proving our IP stays out of the request headers;
 //      SOCKS is header-anonymous by protocol and rated lists are trusted.
-function proxy_discover(int $max_test = 400, int $timeout_s = 4): array {
+//
+// $budget_s is for hosts that run this inside a page visit (no exec, no CLI,
+// a wall-clock limit of ~30 s): list downloads get at most 60% of it, the
+// anonymity round only runs while time is left, and unrated HTTP proxies that
+// could not be judged in time are dropped — the same fail-closed rule as when
+// the judge is unreachable. Null = the unbounded CLI/button behaviour.
+function proxy_discover(int $max_test = 400, int $timeout_s = 4, ?float $budget_s = null): array {
     // No cURL on this host: every probe below needs it. proxy_multi_probe()
     // would fatal with an Error that callers only catch as Exception.
     if (!function_exists('curl_init')) return [];
+    $started   = microtime(true);
+    $remaining = static fn(): float => $budget_s === null ? INF : $budget_s - (microtime(true) - $started);
     $candidates = []; // url => ['rated' => bool, 'source' => list name]
 
-    foreach (PROXY_DISCOVERY_SOURCES as $src) {
+    foreach (PROXY_DISCOVERY_SOURCES as $i => $src) {
+        // Stop collecting once the download share of the budget is spent: what
+        // is in hand gets probed instead of starting another slow download.
+        if ($budget_s !== null && $i > 0 && $remaining() < $budget_s * 0.4) {
+            break;
+        }
+        $fetchTimeout = $budget_s === null ? 10 : max(2, min(6, (int)floor($remaining() - $budget_s * 0.4)));
         // Third-party list bodies are the largest untrusted input on this
-        // path — same 2 MiB ceiling as the shared fetcher.
-        $raw = @file_get_contents($src['url'], false, stream_context_create([
-            'http' => ['timeout' => 10],
-        ]), 0, 2097153);
-        if (!is_string($raw) || strlen($raw) > 2097152) {
+        // path — same 2 MiB ceiling as the shared fetcher (cURL where
+        // available, so allow_url_fopen is not required).
+        $raw = osm_fetch_via($src['url'], null, $fetchTimeout, 2097152);
+        if (!is_string($raw)) {
             continue;
         }
 
@@ -547,14 +563,21 @@ function proxy_discover(int $max_test = 400, int $timeout_s = 4): array {
     // Round 2: live anonymity verification for unrated HTTP proxies.
     $unrated = array_values(array_filter($working, fn($p) => $candidates[$p['url']]['rated'] === false
         && str_starts_with($p['url'], 'http://')));
+    if ($budget_s !== null) {
+        $unrated = array_slice($unrated, 0, 10); // all a budgeted run can afford to judge
+    }
     $judged = [];
-    if ($unrated) {
+    if ($unrated && $remaining() > 8.0) {
         $ourIp = proxy_public_ip();
         if ($ourIp !== null) {
             foreach (array_chunk($unrated, 50) as $chunk) {
                 $urls     = array_column($chunk, 'url');
                 $judgeRes = proxy_multi_probe($urls, PROXY_ANONYMITY_JUDGES[0], $timeout_s, $timeout_s, false);
                 foreach ($urls as $pxUrl) {
+                    if ($remaining() < 4.0) {
+                        $judged[$pxUrl] = false; // out of time: unproven means rejected
+                        continue;
+                    }
                     [$code, ] = $judgeRes[$pxUrl] ?? [0, 0];
                     $judged[$pxUrl] = $code >= 200 && $code < 300 && proxy_judge_anonymous($pxUrl, $ourIp);
                 }
@@ -633,6 +656,11 @@ function proxy_multi_probe(array $proxies, string $url, int $timeout_s, int $con
 //   - Only while routing is enabled, and only entries that discovery itself
 //     could have added: `manual` entries are the owner's own choice (maybe
 //     their own server) and are never deleted automatically.
+//   - The same job seeds the pool: routing is on by default and an empty pool
+//     fails closed, so on the first run (or after the pool was emptied) it
+//     runs discovery and stores everything the Auto-discover button would.
+//   - DDMGMT_PROXY_HEAL=0 turns all of it off (replacement and seeding) for
+//     deployments that must never start discovery on their own.
 //   - Replace, never just delete: nothing is removed until discovery has
 //     produced a replacement, so a network outage (where every proxy "fails"
 //     and discovery finds nothing) cannot wipe the pool, and the pool never
@@ -642,8 +670,20 @@ function proxy_multi_probe(array $proxies, string $url, int $timeout_s, int $con
 //     in a detached CLI job (cron/proxy_heal.php), never inside a request,
 //     under a lock and a cooldown.
 const OSM_PROXY_HEAL_COOLDOWN    = 600;  // seconds between discovery runs
+const OSM_PROXY_HEAL_INLINE_BUDGET = 22.0; // wall-clock seconds of an inline pass (shared hosts stop scripts at ~30 s)
+const OSM_PROXY_SEED_MAX_FAILURES = 3;   // empty-pool discoveries in a row before routing is switched off
 const OSM_PROXY_HEAL_LOCK_STALL  = 900;  // a lock older than this is dead
 const OSM_PROXY_HEAL_PROBE_URL   = 'https://a.tile.openstreetmap.org/13/4051/2749.png';
+
+// Automatic discovery (replacement and first-run seeding) can be switched off
+// for the whole deployment; disabling routing in Settings also stops it.
+function osm_proxy_heal_allowed(): bool {
+    return host_flag('DDMGMT_PROXY_HEAL', true);
+}
+
+function osm_proxy_pool_empty(): bool {
+    return (int)get_db()->query('SELECT COUNT(*) FROM osm_proxies')->fetchColumn() === 0;
+}
 
 // Failed entries the healer may replace, longest-dead first.
 /** @return list<array{id:int,url:string}> */
@@ -705,25 +745,109 @@ function osm_proxy_heal_spawner(?callable $set = null, bool $reset = false): ?ca
     return $spawner;
 }
 
+// Is there heal work that is allowed right now? Routing on and possible,
+// automatic discovery not disabled, the cooldown passed, and either a
+// replaceable dead entry or an empty pool. $throttle (the pseudo-cron slot,
+// which asks on every request) also remembers "nothing to do" for one
+// cooldown so a healthy pool costs a single query per interval.
+function osm_proxy_heal_pending(bool $throttle = false): bool {
+    if (!osm_proxy_heal_allowed() || !osm_proxy_enabled()) return false;
+    $since = (int)get_setting('proxy_heal_last', '0');
+    if ($throttle) {
+        $since = max($since, (int)get_setting('proxy_heal_checked', '0'));
+    }
+    if ((time() - $since) < OSM_PROXY_HEAL_COOLDOWN) return false;
+    if (osm_proxy_replaceable_dead() !== [] || osm_proxy_pool_empty()) return true;
+    if ($throttle) {
+        set_setting('proxy_heal_checked', (string)time());
+    }
+    return false;
+}
+
+// The pseudo-cron's proxy slot (runs after the response). Where a detached
+// job can be started, start one; where it cannot — shared hosting without
+// exec or CLI PHP — run a time-budgeted pass right here. Never throws.
+// ($discover / $probe: test seams, as in osm_proxy_heal().)
+function osm_proxy_heal_pseudo_cron(?callable $discover = null, ?callable $probe = null): void {
+    try {
+        if (!osm_proxy_heal_pending(true)) return;
+        if (osm_proxy_heal_spawner() !== null || host_can_detach()) {
+            osm_proxy_heal_kick();
+            return;
+        }
+        @set_time_limit(60);
+        osm_proxy_heal($discover, $probe, false, OSM_PROXY_HEAL_INLINE_BUDGET);
+    } catch (Throwable $e) {
+        log_err('Proxy heal slot: ' . $e->getMessage());
+    }
+}
+
+// Routing is on by default, but a host that can never build a pool (outbound
+// connections blocked, every list unreachable, a wall-clock limit too short to
+// finish a pass) would answer 502 on every map view forever. After a few
+// empty-pool discoveries in a row, switch routing off — loudly: audit +
+// warning + a notice in Settings — so OSM requests go direct and the owner
+// decides. Re-enabling the toggle clears the notice.
+//
+// The attempt is counted BEFORE discovery starts: a host that kills the script
+// mid-pass never reaches any "it failed" code, and must still run out of tries.
+// Returns false when the tries were already used up (routing was just switched
+// off instead of trying again).
+function osm_proxy_seed_attempt(): bool {
+    $n = (int)get_setting('proxy_seed_failures', '0');
+    if ($n >= OSM_PROXY_SEED_MAX_FAILURES) {
+        osm_proxy_auto_off('no working proxy could be found from this host');
+        return false;
+    }
+    set_setting('proxy_seed_failures', (string)($n + 1));
+    return true;
+}
+
+// After an attempt that produced nothing: was that the last try?
+function osm_proxy_seed_failed(): void {
+    if ((int)get_setting('proxy_seed_failures', '0') >= OSM_PROXY_SEED_MAX_FAILURES) {
+        osm_proxy_auto_off('no working proxy could be found from this host');
+    }
+}
+
+function osm_proxy_auto_off(string $reason): void {
+    set_setting('osm_proxy_enabled', '0');
+    set_setting('osm_proxy_auto_off', (string)json_encode(['at' => time(), 'reason' => $reason]));
+    delete_setting('proxy_seed_failures');
+    audit('proxy_auto_off', null, null, $reason);
+    log_warn('proxy_auto_off', ['msg' => 'OSM proxy routing switched off automatically: ' . $reason]);
+}
+
+/** @return ?array{at:int,reason:string} */
+function osm_proxy_auto_off_state(): ?array {
+    $raw = get_setting('osm_proxy_auto_off', '');
+    if ($raw === '') return null;
+    $d = json_decode($raw, true);
+    return is_array($d) ? ['at' => (int)($d['at'] ?? 0), 'reason' => (string)($d['reason'] ?? '')] : null;
+}
+
+function osm_proxy_auto_off_clear(): void {
+    delete_setting('osm_proxy_auto_off', 'proxy_seed_failures');
+}
+
 // Start a detached heal job when one is warranted: routing on, a replaceable
-// dead entry exists, and the cooldown has passed. Cheap when nothing is due
+// dead entry exists (or the pool is empty and needs seeding), and the
+// cooldown has passed. Cheap when nothing is due
 // (one setting read plus one SELECT), never throws, never blocks. Returns
 // whether a job was started.
 function osm_proxy_heal_kick(): bool {
     try {
-        if (!osm_proxy_enabled()) return false;
-        if ((time() - (int)get_setting('proxy_heal_last', '0')) < OSM_PROXY_HEAL_COOLDOWN) return false;
-        if (osm_proxy_replaceable_dead() === []) return false;
+        $spawn = osm_proxy_heal_spawner();
+        // No way to detach here (no exec / CLI PHP): the pseudo-cron slot runs
+        // the pass inline instead — and must not find the cooldown burnt.
+        if ($spawn === null && !host_can_detach()) return false;
+        if (!osm_proxy_heal_pending()) return false;
         // Stamp before spawning: concurrent requests must not each start a job.
         set_setting('proxy_heal_last', (string)time());
-        $spawn = osm_proxy_heal_spawner();
         if ($spawn !== null) {
             return (bool)$spawn();
         }
-        if (PHP_OS_FAMILY !== 'Linux' || !function_exists('exec') || !function_exists('maps_php_cli')) {
-            return false; // no detached runner here — the hourly cleanup slot heals instead
-        }
-        $cli = maps_php_cli();
+        $cli = host_php_cli();
         if ($cli === null) return false;
         @exec(escapeshellarg($cli) . ' ' . escapeshellarg(dirname(__DIR__) . '/cron/proxy_heal.php') . ' > /dev/null 2>&1 &');
         return true;
@@ -735,11 +859,14 @@ function osm_proxy_heal_kick(): bool {
 
 // Replace confirmed-dead pool entries with freshly discovered ones. $discover
 // and $probe exist for tests (default: proxy_discover / proxy_multi_probe).
-// $honorCooldown: see the note in the body.
+// $honorCooldown: see the note in the body. $budget: wall-clock seconds for
+// the inline pass on hosts that cannot run a detached job (see
+// proxy_discover()); null = unbounded (CLI job, cron, the button).
 // Blocking and network-heavy — call from CLI only.
-/** @return array{skipped:?string,dead:int,recovered:int,replaced:int} */
-function osm_proxy_heal(?callable $discover = null, ?callable $probe = null, bool $honorCooldown = false): array {
-    $out = ['skipped' => null, 'dead' => 0, 'recovered' => 0, 'replaced' => 0];
+/** @return array{skipped:?string,dead:int,recovered:int,replaced:int,seeded:int} */
+function osm_proxy_heal(?callable $discover = null, ?callable $probe = null, bool $honorCooldown = false, ?float $budget = null): array {
+    $out = ['skipped' => null, 'dead' => 0, 'recovered' => 0, 'replaced' => 0, 'seeded' => 0];
+    if (!osm_proxy_heal_allowed()) { $out['skipped'] = 'disabled by DDMGMT_PROXY_HEAL'; return $out; }
     if (!osm_proxy_enabled()) { $out['skipped'] = 'routing disabled'; return $out; }
     if (!function_exists('curl_init')) { $out['skipped'] = 'no cURL'; return $out; }
     // Scheduled callers (the cleanup cron) honour the cooldown so they cannot
@@ -753,6 +880,37 @@ function osm_proxy_heal(?callable $discover = null, ?callable $probe = null, boo
     $db = get_db();
     try {
         set_setting('proxy_heal_last', (string)time());
+
+        // First run (or a pool that was emptied): nothing to replace, so seed
+        // it with what the Auto-discover button would store. Routing is on and
+        // an empty pool fails closed, so waiting for the owner would leave the
+        // maps dead until they found the button.
+        if (osm_proxy_pool_empty()) {
+            if (!osm_proxy_seed_attempt()) { $out['skipped'] = 'routing switched off'; return $out; }
+            $found = ($discover ?? static fn(): array => proxy_discover(
+                $budget !== null ? 120 : 400, $budget !== null ? 3 : 4, $budget
+            ))();
+            if ($found === []) {
+                $out['skipped'] = 'no proxies found';
+                osm_proxy_seed_failed();
+                return $out;
+            }
+            delete_setting('proxy_seed_failures');
+            $seed = $db->prepare(
+                'INSERT IGNORE INTO osm_proxies (url, source, last_status, latency_ms, last_checked)
+                 VALUES (?, ?, "ok", ?, NOW())'
+            );
+            foreach ($found as $px) {
+                $seed->execute([$px['url'], (string)($px['source'] ?? 'discovered'), $px['latency_ms'] ?? null]);
+                $out['seeded'] += $seed->rowCount();
+            }
+            if ($out['seeded'] > 0) {
+                audit('proxy_seed', null, null, 'added=' . $out['seeded']);
+                log_info('proxy_seeded', ['msg' => "first-run discovery added {$out['seeded']} proxies", 'added' => $out['seeded']]);
+            }
+            return $out;
+        }
+
         $dead = osm_proxy_replaceable_dead();
         if ($dead === []) { $out['skipped'] = 'nothing to replace'; return $out; }
 
@@ -776,7 +934,9 @@ function osm_proxy_heal(?callable $discover = null, ?callable $probe = null, boo
         if ($confirmed === []) { $out['skipped'] = 'all recovered'; return $out; }
 
         // Same criteria as the Auto-discover button, fastest first.
-        $found = ($discover ?? 'proxy_discover')();
+        $found = ($discover ?? static fn(): array => proxy_discover(
+            $budget !== null ? 120 : 400, $budget !== null ? 3 : 4, $budget
+        ))();
         $have = array_flip($db->query('SELECT url FROM osm_proxies')->fetchAll(PDO::FETCH_COLUMN));
         $fresh = array_values(array_filter(
             $found,
@@ -808,7 +968,7 @@ function osm_proxy_heal(?callable $discover = null, ?callable $probe = null, boo
         $out['replaced'] = $swapped;
         if ($swapped > 0) {
             audit('proxy_replace', null, null, "replaced={$swapped} dead={$out['dead']}");
-            log_info('proxy_replaced', ['replaced' => $swapped, 'dead' => $out['dead']]);
+            log_info('proxy_replaced', ['msg' => "replaced {$swapped} of {$out['dead']} dead proxies", 'replaced' => $swapped, 'dead' => $out['dead']]);
         }
         return $out;
     } catch (Throwable $e) {

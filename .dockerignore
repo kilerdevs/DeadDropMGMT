@@ -26,3 +26,5 @@ prompt.txt
 docker-compose*.yml
 Dockerfile*
 .env
+
+build-info.json

@@ -10,9 +10,11 @@
  * Cron example (hourly):
  *     php /path/to/cron/proxy_heal.php
  *
- * Does nothing unless proxy routing is enabled and a discovered (non-manual)
- * entry is marked failed and still fails a fresh probe. Nothing is deleted
- * until a replacement exists. Never invoked from a page visit inline.
+ * Does nothing unless proxy routing is enabled (the default) and either the
+ * pool is empty — first run: it is seeded exactly as Auto-discover would — or
+ * a discovered (non-manual) entry is marked failed and still fails a fresh
+ * probe. Nothing is deleted until a replacement exists. Never invoked from a
+ * page visit inline. DDMGMT_PROXY_HEAL=0 disables it.
  */
 declare(strict_types=1);
 
@@ -32,7 +34,7 @@ $r = osm_proxy_heal();
 echo '[' . date('Y-m-d H:i:s') . '] proxy heal: '
     . ($r['skipped'] !== null
         ? "skipped ({$r['skipped']})"
-        : "replaced {$r['replaced']} of {$r['dead']} dead")
+        : ($r['seeded'] > 0 ? "seeded {$r['seeded']} proxies" : "replaced {$r['replaced']} of {$r['dead']} dead"))
     . ($r['recovered'] > 0 ? ", {$r['recovered']} recovered" : '')
     . "\n";
 exit($r['skipped'] === 'error' ? 1 : 0);

@@ -1342,28 +1342,23 @@ function maps_steward_if_due(float $chance = 1.0): void {
 // php-fpm, so a detached `$PHP_BINARY script &` would die silently while the
 // admin is told the worker started. Fall back to the CLI next to the install.
 function maps_php_cli(): ?string {
-    $candidates = [];
-    // constant(): PHPStan knows PHP_BINARY only as a non-empty string, but
-    // under mod_php it really is '' — the case this guard exists for.
-    $running = (string)constant('PHP_BINARY');
-    if (PHP_SAPI === 'cli' && $running !== '') {
-        $candidates[] = $running;
-    }
-    $candidates[] = PHP_BINDIR . '/php';
-    $candidates[] = '/usr/local/bin/php';
-    $candidates[] = '/usr/bin/php';
-    foreach ($candidates as $bin) {
-        if (is_file($bin) && is_executable($bin)) {
-            return $bin;
-        }
-    }
-    return null;
+    return host_php_cli(); // probing lives in includes/host.php with the other capability checks
+}
+
+// Zone downloads run the external pmtiles binary from a long-lived worker
+// (cron/maps_sync.php): that needs process execution, Linux, cURL for the
+// one-time CLI download and a writable data directory. Free shared hosting
+// usually has none of it — the feature is then refused up front with a clear
+// message instead of leaving zones queued forever. The OSM map provider, the
+// default, needs none of this.
+function maps_downloads_supported(): bool {
+    return host_is_linux() && host_can_proc_open() && host_has_curl() && host_dir_writable(maps_data_dir());
 }
 
 // Detached kick after queueing (Linux + exec only): the worker then runs
 // without holding any request. False = admin waits for system cron.
 function maps_kick_worker(): bool {
-    if (PHP_OS_FAMILY !== 'Linux' || !function_exists('exec')) {
+    if (!host_can_detach()) {
         return false;
     }
     $cli = maps_php_cli();

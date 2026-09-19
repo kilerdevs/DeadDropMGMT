@@ -24,6 +24,9 @@ $db = get_db();
 // Generous budgets: the browser specs assert happy paths and validation
 // errors — the limiter's math belongs to the PHP suites (RateLimitTest).
 set_setting('rate_limit_max', '1000');
+// Routing is on by default and would start real proxy discovery on the first
+// request; the browser specs must stay hermetic (no third-party traffic).
+set_setting('osm_proxy_enabled', '0');
 set_setting('rate_limit_window_min', '60');
 set_setting('default_lang', 'en');
 

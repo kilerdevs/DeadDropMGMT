@@ -68,6 +68,9 @@ if (in_array($key, $booleans, true)) {
 
 try {
     set_setting($key, $value);
+    if ($key === 'osm_proxy_enabled' && $value === '1') {
+        osm_proxy_auto_off_clear(); // the owner decided: drop the "switched off automatically" notice
+    }
     audit('setting_change', null, null, "{$key}={$value}");
     json_out(['ok' => true]);
 } catch (Exception $e) {

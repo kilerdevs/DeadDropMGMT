@@ -362,6 +362,9 @@ jobs:
       DDMGMT_DB_PORT: '3306'
       DDMGMT_DB_USER: deaddrop
       DDMGMT_DB_PASS: deaddrop-db
+      # Keep the pipeline hermetic: no automatic proxy discovery (public list
+      # downloads, probes) while the stacks boot. ProxyHealTest covers it.
+      DDMGMT_PROXY_HEAL: '0'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

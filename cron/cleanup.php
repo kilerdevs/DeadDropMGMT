@@ -33,7 +33,8 @@ try {
     // for fresh ones (no-op unless routing is on and one is marked failed).
     $heal = osm_proxy_heal(null, null, true);
     if ($heal['skipped'] === null) {
-        echo '[' . date('Y-m-d H:i:s') . "] Proxy pool: replaced {$heal['replaced']} of {$heal['dead']} dead.\n";
+        echo '[' . date('Y-m-d H:i:s') . '] Proxy pool: '
+            . ($heal['seeded'] > 0 ? "seeded {$heal['seeded']}." : "replaced {$heal['replaced']} of {$heal['dead']} dead.") . "\n";
     }
 } catch (Throwable $e) {
     log_err('Cron cleanup error: ' . $e->getMessage());

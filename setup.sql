@@ -387,7 +387,7 @@ INSERT INTO settings (key_name, value, label) VALUES
     ('allow_status_lookup',     '1',       'Zezwól na sprawdzenie statusu bez hasła'),
     ('analytics_enabled',       '1',       'Włącz analitykę'),
     ('compliance_note_enabled', '0',       'Pokaż notę o zgodności na stronach publicznych'),
-    ('osm_proxy_enabled',       '0',       'Przekieruj ruch OSM przez serwery proxy'),
+    ('osm_proxy_enabled',       '1',       'Przekieruj ruch OSM przez serwery proxy'),
     ('map_provider',            'osm',     'Dostawca map: osm albo selfhosted'),
     ('show_error_log',          '0',       'Pokaż log błędów w ustawieniach'),
     ('last_cleanup',            '0',       '')

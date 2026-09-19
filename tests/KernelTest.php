@@ -33,7 +33,7 @@ foreach (glob($root . '/includes/*.php') as $f) {
     }
     $services[] = strtolower(str_replace('\\', '/', (string)realpath($f)));
 }
-T::ok('service files found', count($services) === 16);
+T::ok('service files found', count($services) === 17);
 foreach ($services as $s) {
     T::ok('kernel loads ' . basename($s), isset($loaded[$s]));
 }
@@ -41,6 +41,7 @@ foreach ($services as $s) {
 // ── One callable per service ────────────────────────────────────────────────
 foreach ([
     'logger'      => 'app_log',
+    'host'        => 'host_flag',
     'db'          => 'get_db',
     'net'         => 'get_client_ip',
     'settings'    => 'get_setting',

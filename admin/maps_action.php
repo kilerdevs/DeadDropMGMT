@@ -26,6 +26,9 @@ switch ($action) {
     // The row lands as queued; the worker sizes it, then either downloads or
     // fails it with the reason (disk short, no proxy, …).
     case 'add': {
+        if (!maps_downloads_supported()) {
+            json_out(['error' => t('admin.maps.flash.unsupported')], 422);
+        }
         $f = static fn(string $k): ?float => is_numeric($_POST[$k] ?? null)
             ? (float)$_POST[$k] : null;
         $minLon = $f('min_lon');
@@ -60,6 +63,9 @@ switch ($action) {
 
     // ── Re-queue a failed zone ──────────────────────────────────────────────
     case 'retry': {
+        if (!maps_downloads_supported()) {
+            json_out(['error' => t('admin.maps.flash.unsupported')], 422);
+        }
         $id = (int)($_POST['id'] ?? 0);
         if ($id <= 0 || !maps_zone_retry($id)) {
             json_out(['error' => t('admin.common.invalid_request')], 422);
@@ -73,6 +79,9 @@ switch ($action) {
     // Same reset as retry; the worker re-sizes against the fresh build and
     // republishes atomically, so the old file serves until the new one lands.
     case 'refresh': {
+        if (!maps_downloads_supported()) {
+            json_out(['error' => t('admin.maps.flash.unsupported')], 422);
+        }
         $id = (int)($_POST['id'] ?? 0);
         if ($id <= 0 || !maps_zone_refresh($id)) {
             json_out(['error' => t('admin.common.invalid_request')], 422);

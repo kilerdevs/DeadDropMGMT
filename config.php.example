@@ -78,6 +78,19 @@ define('DUMMY_AUTH_HASH', '$2y$12$' . 'JOfiPnfCGcrXUxs5MiJ81.' . 'vMz8Qs6n2qJpel
 // account or undecryptable secret still burns one full verification.
 define('DUMMY_TOTP_SECRET', 'KRZGS5DQNZQXG2DDNZUW453FOV2GKY3O');
 
+// ── Optional switches for hosts that cannot set environment variables ────────
+// Each one is read from the environment first (Docker, systemd), then from a
+// constant of the same name here. Uncomment to change; the defaults are right
+// for almost everyone, including free shared hosting (no cron, no exec).
+//
+// The hourly maintenance runs from page visits (pseudo-cron). Turn it off only
+// if a real cron job runs `php cron/cleanup.php`:
+// define('DDMGMT_PSEUDO_CRON', false);
+//
+// Automatic OSM proxy discovery (first-run pool + replacing failed proxies).
+// false = never start discovery on its own (the Auto-discover button still works):
+// define('DDMGMT_PROXY_HEAL', false);
+
 // ── Timezone (UTC everywhere so PHP + MySQL agree regardless of server clock) ─
 date_default_timezone_set('UTC');
 

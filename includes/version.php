@@ -4,7 +4,7 @@ declare(strict_types=1);
 // ── Build provenance (Settings → Version, owners only) ───────────────────────
 // The Docker image carries no .git, so the build host records what it builds
 // (tools/build_info.sh: `git describe` against the v* release tags, commit,
-// branch, commit subject) and the Dockerfiles store the JSON outside the
+// branch — never the commit message) and the Dockerfiles store the JSON outside the
 // docroot. This file only reads and interprets it — it never runs git and
 // never reaches the network.
 //
@@ -22,12 +22,12 @@ const DDMGMT_BUILD_INFO_FILE = '/usr/local/share/ddmgmt-build.json';
 /**
  * Interpret one provenance document. Pure — no I/O.
  *
- * @return array{known:bool,release:bool,beta:bool,version:?string,ahead:int,commit:?string,subject:?string,branch:?string,dirty:bool}
+ * @return array{known:bool,release:bool,beta:bool,version:?string,ahead:int,commit:?string,branch:?string,dirty:bool}
  */
 function build_info_parse(string $json): array {
     $none = [
         'known' => false, 'release' => false, 'beta' => false, 'version' => null,
-        'ahead' => 0, 'commit' => null, 'subject' => null, 'branch' => null, 'dirty' => false,
+        'ahead' => 0, 'commit' => null, 'branch' => null, 'dirty' => false,
     ];
     $d = json_decode($json, true, 4);
     if (!is_array($d)) {
@@ -47,11 +47,6 @@ function build_info_parse(string $json): array {
         ? substr($d['commit'], 0, 7) : null;
     $branch = is_string($d['branch'] ?? null) && preg_match('/^[A-Za-z0-9._\/-]{1,64}$/', $d['branch']) === 1
         ? $d['branch'] : null;
-    $subject = null;
-    if (is_string($d['subject'] ?? null)) {
-        $s = trim((string)preg_replace('/[\x00-\x1f\x7f]+/u', ' ', $d['subject']));
-        $subject = $s === '' ? null : mb_substr($s, 0, 100, 'UTF-8');
-    }
     $dirty = ($d['dirty'] ?? false) === true;
 
     if ($version === null && $commit === null) {
@@ -60,7 +55,7 @@ function build_info_parse(string $json): array {
     $release = $version !== null && $ahead === 0 && !$dirty;
     return [
         'known' => true, 'release' => $release, 'beta' => !$release, 'version' => $version,
-        'ahead' => $ahead, 'commit' => $commit, 'subject' => $subject, 'branch' => $branch,
+        'ahead' => $ahead, 'commit' => $commit, 'branch' => $branch,
         'dirty' => $dirty,
     ];
 }
@@ -69,8 +64,17 @@ function build_info_parse(string $json): array {
 function build_info(): array {
     static $info = null;
     if ($info === null) {
-        $path = getenv('DDMGMT_BUILD_INFO_FILE') ?: DDMGMT_BUILD_INFO_FILE;
-        $raw = is_file($path) && is_readable($path) ? @file_get_contents($path, false, null, 0, 4096) : false;
+        // Docker image, then a build-info.json next to the app (non-Docker
+        // installs: `tools/build_info.sh --write`, or shipped with a release).
+        $raw = false;
+        foreach ([getenv('DDMGMT_BUILD_INFO_FILE') ?: DDMGMT_BUILD_INFO_FILE, dirname(__DIR__) . '/build-info.json'] as $path) {
+            if (is_file($path) && is_readable($path)) {
+                $raw = @file_get_contents($path, false, null, 0, 4096);
+                if (is_string($raw)) {
+                    break;
+                }
+            }
+        }
         $info = build_info_parse(is_string($raw) ? $raw : '');
     }
     return $info;

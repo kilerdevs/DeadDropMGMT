@@ -324,6 +324,63 @@ function glob_list(string $pattern, int $flags = 0): array {
     return $hits === false ? [] : $hits;
 }
 
+// ── Viewer helpers (Settings → structured log) ──────────────────────────────
+// One line of human-readable text for a structured entry: the event, its
+// message, then every extra context field as key=value. The chain fields
+// (prev/hash/seq), the timestamp and the level are shown in their own
+// columns or not at all. Everything is untrusted text — the caller escapes.
+function log_entry_summary(array $rec): string {
+    $skip = ['ts' => 1, 'level' => 1, 'event' => 1, 'msg' => 1, 'req' => 1, 'prev' => 1, 'seq' => 1, 'hash' => 1];
+    $parts = [];
+    foreach (['event', 'msg'] as $k) {
+        if (isset($rec[$k]) && is_scalar($rec[$k]) && (string)$rec[$k] !== '') {
+            $parts[] = (string)$rec[$k];
+        }
+    }
+    foreach ($rec as $k => $v) {
+        if (isset($skip[$k]) || $v === null || $v === '') {
+            continue;
+        }
+        $val = is_scalar($v) ? (string)$v : (string)json_encode($v, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $parts[] = $k . '=' . mb_strimwidth($val, 0, 80, '…', 'UTF-8');
+    }
+    return mb_strimwidth(implode('  ', $parts), 0, 400, '…', 'UTF-8');
+}
+
+// The newest $limit entries of the structured log, newest first, for the
+// Settings viewer — the same file the integrity check covers. Lines that are
+// not valid JSON records are shown raw rather than hidden. The file is capped
+// at 5 MiB by rotation, so reading it whole is bounded.
+/** @return array{total:int,entries:list<array{seq:?int,ts:string,level:string,text:string}>} */
+function log_recent_entries(int $limit = 200, ?string $path = null): array {
+    $path = $path ?? APP_LOG_PATH;
+    if (!is_file($path) || filesize($path) === 0) {
+        return ['total' => 0, 'entries' => []];
+    }
+    $lines = @file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+    if ($lines === false) {
+        return ['total' => 0, 'entries' => []];
+    }
+    $total = count($lines);
+    $out = [];
+    foreach (array_reverse(array_slice($lines, -max(1, $limit))) as $line) {
+        $rec = json_decode($line, true);
+        if (!is_array($rec)) {
+            $out[] = ['seq' => null, 'ts' => '', 'level' => 'raw', 'text' => mb_strimwidth($line, 0, 400, '…', 'UTF-8')];
+            continue;
+        }
+        $ts = is_string($rec['ts'] ?? null) ? str_replace(['T', 'Z'], [' ', ''], substr($rec['ts'], 0, 19)) : '';
+        $lvl = is_string($rec['level'] ?? null) && preg_match('/^[a-z]{3,10}$/', $rec['level']) === 1 ? $rec['level'] : 'info';
+        $out[] = [
+            'seq'   => isset($rec['seq']) && is_int($rec['seq']) ? $rec['seq'] : null,
+            'ts'    => $ts,
+            'level' => $lvl,
+            'text'  => log_entry_summary($rec),
+        ];
+    }
+    return ['total' => $total, 'entries' => $out];
+}
+
 // ── Chain verification ────────────────────────────────────────────────────────
 // Returns [valid(bool), checked(int), broken_line(int|null), reason(string|null)]
 // broken_line is the 1-based file line of the first bad entry.

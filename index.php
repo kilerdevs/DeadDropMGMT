@@ -7,8 +7,6 @@ start_secure_session();
 // A recipient's explicit ?lang= choice must land before the first t() on
 // this page so the same request already renders in the new language.
 i18n_handle_public_lang_param();
-run_cleanup_if_due();
-maps_steward_if_due(); // stalled zone downloads only — never downloads here
 
 $allow_status_lookup = get_setting('allow_status_lookup', '1') === '1';
 

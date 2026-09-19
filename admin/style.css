@@ -430,6 +430,31 @@ button.sidebar-logout {
 }
 .log-line:first-child .log-num { color: #555; }
 
+.host-list { margin-bottom: 40px; }
+.host-row {
+    display:        flex;
+    flex-wrap:      wrap;
+    align-items:    baseline;
+    gap:            4px 14px;
+    padding:        10px 0;
+    border-bottom:  1px solid var(--border);
+    font-family:    'IBM Plex Mono', monospace;
+    font-size:      12px;
+}
+.host-label  { color: var(--text); min-width: 190px; }
+.host-status { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; }
+.host-row--ok          .host-status { color: #4caf50; }
+.host-row--limited     .host-status { color: #e0a100; }
+.host-row--unavailable .host-status { color: #f44336; }
+.host-hint   { flex-basis: 100%; color: var(--text-muted); font-size: 11px; line-height: 1.6; }
+
+.log-ts   { flex-shrink: 0; color: #444; white-space: nowrap; }
+.log-lvl  { flex-shrink: 0; min-width: 44px; font-size: 10px; letter-spacing: 0.08em; color: #666; }
+.log-text { flex: 1 1 auto; min-width: 0; }
+.log-line--error .log-lvl { color: #f44336; }
+.log-line--warn  .log-lvl { color: #e0a100; }
+.log-line--info  .log-lvl { color: #4caf50; }
+
 .log-empty {
     font-family:   'IBM Plex Mono', monospace;
     font-size:     12px;
@@ -1191,8 +1216,10 @@ h1 {
 }
 .version-commit {
     flex-basis:     100%;
-    overflow-wrap:  anywhere;
     line-height:    1.5;
+    white-space:    nowrap;
+    overflow:       hidden;
+    text-overflow:  ellipsis;
 }
 .version-commit code { color: var(--text); }
 
@@ -1530,6 +1557,10 @@ h1 {
     /* ── Extend buttons row in edit ──────────────────────────────────── */
 
     .btn.btn-sm { padding: 8px 12px; font-size: 10px; }
+
+    /* ── Settings: structured log rows — message on its own line ────── */
+    .log-line { flex-wrap: wrap; gap: 0 10px; }
+    .log-line .log-text { flex-basis: 100%; padding-left: 46px; }
 
     /* ── Settings: proxy pool + zones as cards, never a 580px table ──── */
     /* The blanket table min-width above is for scroll-wrapped data tables.

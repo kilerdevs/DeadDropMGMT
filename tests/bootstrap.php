@@ -119,6 +119,13 @@ require_once dirname(__DIR__) . '/includes/proxy.php';
 require_once dirname(__DIR__) . '/includes/maps.php';
 require_once dirname(__DIR__) . '/includes/cleanup.php';
 require_once dirname(__DIR__) . '/includes/version.php';
+require_once dirname(__DIR__) . '/includes/host.php';
+
+// Suites run their own HTTP servers against a shared database: a sweep firing
+// at the end of some request would delete or touch rows a test just seeded.
+// The pseudo-cron is therefore off unless a suite (PseudoCronTest) turns it on
+// for its own server, which inherits this environment.
+putenv('DDMGMT_PSEUDO_CRON=0');
 
 // No suite may ever start the detached proxy healer: it would run real
 // discovery (list downloads, public-IP lookup, probes) against the network.

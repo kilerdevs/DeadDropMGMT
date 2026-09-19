@@ -9,7 +9,39 @@ All notable changes to DeadDropMGMT are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- **OSM proxy routing is on by default** (new installs; existing installs keep
+  their setting) and the pool is **discovered automatically on the first run**:
+  an empty pool fails closed, so the same background job that replaces failed
+  proxies seeds a first pool with exactly what the Auto-discover button would
+  store (`proxy_seed` in the audit log) — started at container boot, by the
+  first page visit or by the first OSM request. Until it finishes, OSM-backed
+  maps answer 502 instead of leaking the server address. This makes the same
+  outbound connections as the button, so it is opt-out: routing off in
+  Settings, or `DDMGMT_PROXY_HEAL=0`.
+- The pseudo-cron now runs from **any PHP page** (public, admin, receipt, JSON
+  polls), not just the public index, and after the response has been sent, so
+  an install used only through `/admin/` still gets its hourly maintenance and
+  no visitor waits for a sweep. `healthz.php` stays code-free;
+  `DDMGMT_PSEUDO_CRON=0` turns it off for installs with real cron.
+
 ### Added
+- **Runs on free shared hosting** (no Docker, no cron, no exec, no CLI PHP, no
+  way to set environment variables). A new capability layer
+  (`includes/host.php`) is consulted by everything that used to assume them:
+  the proxy pool upkeep runs **inline after the response** in a time-budgeted
+  pass when no detached job can be started; discovery fetches its lists and the
+  public-IP probe through cURL, so `allow_url_fopen` is not required; a host
+  that can never find a working proxy has routing **switched off
+  automatically after three empty discoveries** (audit + warning + Settings
+  notice) instead of staying wedged fail-closed; without cURL routing is not
+  applied and OSM requests go direct; map-zone **downloads** (which genuinely
+  need `proc_open`, Linux and cURL) are refused up front with a clear message
+  and a disabled Queue button. `DDMGMT_PSEUDO_CRON` / `DDMGMT_PROXY_HEAL` can be
+  `define()`d in `config.php`. **Settings → Hosting** lists what the host
+  allows and what each gap costs. A non-Docker install gets its version line
+  from `tools/build_info.sh --write` (`build-info.json`, web-denied). New README
+  section "Free shared hosting" and a troubleshooting entry.
 - Failed proxies are replaced automatically. While OSM proxy routing is
   enabled, a discovered pool entry that fails is confirmed dead with a fresh
   probe, deleted and swapped for a newly discovered proxy chosen by exactly the
@@ -21,8 +53,9 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   (`proxy_replace`). It reuses discovery, so it makes the same outbound
   connections as the Auto-discover button — see the README privacy table.
 - Settings shows the running version to owners: `vX.Y.Z` for a tagged release,
-  or `vX.Y.Z+N` with a **BETA** badge, the commit hash and its subject for
-  builds past the last release tag (builds from `dev`). The build host records
+  or `vX.Y.Z+N` with a **BETA** badge and a one-line `hash · branch` for
+  builds past the last release tag (builds from `dev`); commit messages are
+  never recorded. The build host records
   it with `tools/build_info.sh --export` (the image has no `.git`); a plain
   build shows "unknown build". Not exposed on any public or unauthenticated
   page.
@@ -46,6 +79,12 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   ADR-006/016/019 describe the changes above.
 
 ### Fixed
+- Settings → log viewer: **Verify integrity** checks the structured,
+  hash-chained log, but the panel listed only PHP's raw error file — so "2
+  entries verified" sat under "The log is empty". The viewer now shows the
+  structured entries (newest 200, with time, level, event, message and context)
+  above the raw error log, with Verify and the structured-log download next to
+  them.
 - Admin panel on phones: the menu button was missing on **New order** when the
   map provider is self-hosted (`admin.js` was only loaded on the Leaflet path,
   which also skipped the live-CSRF refresh on that form); the OSM proxy badge

@@ -40,6 +40,10 @@ services:
       DDMGMT_DB_PASS: ${DB_PASS:-deaddrop-db}
       DDMGMT_AES_KEY_HEX: ${DDMGMT_AES_KEY_HEX:-}
       DDMGMT_SETUP_TOKEN: ${DDMGMT_SETUP_TOKEN:-}
+      # Automatic OSM proxy discovery (first-run seeding + replacing failed
+      # proxies) and the page-visit pseudo-cron: 0 turns either one off.
+      DDMGMT_PROXY_HEAL: ${DDMGMT_PROXY_HEAL:-1}
+      DDMGMT_PSEUDO_CRON: ${DDMGMT_PSEUDO_CRON:-1}
     volumes:
       - app-src:/var/www/html        # populated from the image on first use…
       - app-uploads:/var/www/html/uploads

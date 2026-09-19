@@ -2,6 +2,7 @@
 declare(strict_types=1);
 require_once dirname(__DIR__) . '/config.php';
 require_once dirname(__DIR__) . '/includes/db.php';
+require_once __DIR__ . '/host.php';
 
 // Shared store behind get_settings()/set_setting(): a reference so writes can
 // keep an already-built cache coherent. Matters for any long-lived process
@@ -32,6 +33,23 @@ function get_settings(): array {
 
 function get_setting(string $key, string $default = ''): string {
     return get_settings()[$key] ?? $default;
+}
+
+// Drop settings rows (internal bookkeeping such as heal stamps), keeping the
+// per-process cache coherent.
+function delete_setting(string ...$keys): void {
+    if ($keys === []) {
+        return;
+    }
+    get_db()->prepare(
+        'DELETE FROM settings WHERE key_name IN (' . implode(',', array_fill(0, count($keys), '?')) . ')'
+    )->execute(array_values($keys));
+    $cache = &_settings_store();
+    if ($cache !== null) {
+        foreach ($keys as $k) {
+            unset($cache[$k]);
+        }
+    }
 }
 
 function set_setting(string $key, string $value): void {
@@ -98,10 +116,16 @@ function compliance_note_enabled(): bool {
 }
 
 // Route admin-panel OpenStreetMap traffic (tiles, geocoding) through the
-// osm_proxies pool. Off by default — with no proxies configured it would
-// only add failure modes.
+// osm_proxies pool. On by default: the server's own address should not reach
+// OSM unless the owner chooses that. An empty pool fails closed, so the
+// healer (includes/proxy.php) discovers a first pool automatically on the
+// first run — until it has, OSM-backed maps answer 502 rather than leak.
+//
+// Routing needs cURL (proxies cannot be reached without it). On a host without
+// it the setting cannot be honoured, so it is not applied and OSM requests go
+// direct — Settings says so — instead of failing every map view closed.
 function osm_proxy_enabled(): bool {
-    return get_setting('osm_proxy_enabled', '0') === '1';
+    return get_setting('osm_proxy_enabled', '1') === '1' && host_has_curl();
 }
 
 function extend_hours_options(): array {

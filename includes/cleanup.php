@@ -149,3 +149,50 @@ function run_cleanup_if_due(float $chance = 1.0): void {
     $ran = true;
     _run_cleanup_pass();
 }
+
+// ── Pseudo-cron entry point ───────────────────────────────────────────────────
+// Registered by the kernel for EVERY web request, so any PHP page — public,
+// admin, receipt, a JSON poll — can be the visit that starts the hourly
+// maintenance; an install only ever used through /admin/ still gets it.
+// Runs AFTER the response is on its way (fastcgi_finish_request under FPM, an
+// explicit buffer flush elsewhere) so the visitor never waits for a sweep,
+// and keeps going if the visitor disconnects. Both slots are hourly-stamped
+// and Throwable-guarded, so a request that finds nothing due costs one
+// integer comparison against the already-loaded settings.
+//
+// DDMGMT_PSEUDO_CRON=0 (environment variable, or a constant of that name in
+// config.php on hosts that cannot set variables) turns it off for installs
+// that run real cron (cron/cleanup.php). CLI never runs it: cron and tools
+// call the passes they need themselves.
+function pseudo_cron_enabled(): bool {
+    return PHP_SAPI !== 'cli' && host_flag('DDMGMT_PSEUDO_CRON', true);
+}
+
+function pseudo_cron_run(): void {
+    if (!pseudo_cron_enabled()) {
+        return;
+    }
+    ignore_user_abort(true);
+    // Release the session lock first: a sweep can take seconds, and the same
+    // visitor's next request (a poll, a click) must not queue behind it.
+    if (session_status() === PHP_SESSION_ACTIVE) {
+        session_write_close();
+    }
+    if (function_exists('fastcgi_finish_request')) {
+        @fastcgi_finish_request();
+    } else {
+        while (ob_get_level() > 0) {
+            @ob_end_flush();
+        }
+        @flush();
+    }
+    try {
+        run_cleanup_if_due();
+        maps_steward_if_due(); // stalled zone downloads only — never downloads here
+        // Proxy pool upkeep: a detached job where the host allows one, a
+        // time-budgeted inline pass where it does not (no exec, no CLI).
+        osm_proxy_heal_pseudo_cron();
+    } catch (Throwable $e) {
+        log_err('Pseudo-cron: ' . $e->getMessage());
+    }
+}

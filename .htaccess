@@ -51,7 +51,7 @@ ErrorDocument 503 /error/503.php
     # (PHP_SAPI guard), so a server that ignores this file still cannot be
     # made to run them.
     RewriteRule ^(cron|tools|docker|e2e|tests|backups|data|\.semgrep|\.github)/ - [F,L]
-    RewriteRule ^(setup\.sql|composer\.(json|lock)|package(-lock)?\.json|playwright\.config\.js|phpstan\.neon|\.php-cs-fixer\.php|auto-update\.(sh|log)|config\.php\.example|Dockerfile[^/]*|docker-compose[^/]*\.yml)$ - [F,L]
+    RewriteRule ^(setup\.sql|build-info\.json|composer\.(json|lock)|package(-lock)?\.json|playwright\.config\.js|phpstan\.neon|\.php-cs-fixer\.php|auto-update\.(sh|log)|config\.php\.example|Dockerfile[^/]*|docker-compose[^/]*\.yml)$ - [F,L]
 </IfModule>
 
 # Protect this file

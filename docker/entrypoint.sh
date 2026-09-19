@@ -53,6 +53,16 @@ if [ "${DDMGMT_DB_PASS:-}" = "deaddrop-db" ]; then
     echo "[entrypoint] WARNING: DDMGMT_DB_PASS is the published default — set DB_PASS in .env before exposing this stack" >&2
 fi
 
+# First run: OSM proxy routing is on by default and an empty pool fails closed,
+# so discover a first pool now instead of waiting for the first page visit or
+# the 15-minute timer below. Detached, Throwable-guarded and a one-SELECT no-op
+# whenever the pool already exists (every later container start).
+# DDMGMT_PROXY_HEAL=0 turns automatic discovery off.
+(
+    sleep 20
+    runuser -u www-data -- php "$DOCROOT/cron/proxy_heal.php" >/dev/null 2>&1 || true
+) &
+
 # Real maintenance timer. The page-visit pseudo-cron is only a fallback: this
 # loop deletes expired orders, prunes rate-limit rows, the tile cache and old
 # records every 15 minutes even when nobody visits. Runs as www-data so log and

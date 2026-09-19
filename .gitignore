@@ -16,3 +16,4 @@ coverage-html/
 node_modules/
 test-results/
 playwright-report/
+build-info.json

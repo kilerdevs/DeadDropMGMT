@@ -18,14 +18,15 @@ register_shutdown_function(static function () use ($restore): void {
     $db = get_db();
     $db->exec('DELETE FROM osm_proxies');
     $db->exec("DELETE FROM settings WHERE key_name IN ('proxy_heal_lock', 'proxy_heal_last')");
-    $db->exec("DELETE FROM audit_log WHERE action = 'proxy_replace'");
+    $db->exec("DELETE FROM audit_log WHERE action IN ('proxy_replace', 'proxy_seed')");
+    putenv('DDMGMT_PROXY_HEAL');
     foreach ($restore as $k => $v) { set_setting($k, $v); }
 });
 
 $reset = static function () use ($db): void {
     $db->exec('DELETE FROM osm_proxies');
     $db->exec("DELETE FROM settings WHERE key_name IN ('proxy_heal_lock', 'proxy_heal_last')");
-    $db->exec("DELETE FROM audit_log WHERE action = 'proxy_replace'");
+    $db->exec("DELETE FROM audit_log WHERE action IN ('proxy_replace', 'proxy_seed')");
     // Settings are cached per process: drop what was just deleted.
     $c = &_settings_store();
     $c = null;
@@ -139,6 +140,45 @@ $db->prepare("UPDATE settings SET value = ? WHERE key_name = 'proxy_heal_lock'")
 $r = osm_proxy_heal(fn() => [$fresh('http://10.9.9.1:80')], $deadProbe);
 T::eq('a stale lock (dead process) is stolen', 1, $r['replaced']);
 
+// ── seed: first run — routing is on by default and an empty pool fails closed ─
+$reset();
+$r = osm_proxy_heal(fn() => [$fresh('http://10.9.9.1:80', 300), $fresh('http://10.9.9.2:80', 200)], $neverDiscover);
+T::eq('empty pool: discovery result is stored', 2, $r['seeded']);
+T::eq('seeded pool contents', ['http://10.9.9.1:80', 'http://10.9.9.2:80'], $urls());
+$row = $db->query("SELECT source, last_status, latency_ms FROM osm_proxies WHERE url = 'http://10.9.9.1:80'")->fetch();
+T::ok('seeded entry stored like Auto-discover stores it',
+      $row && $row['last_status'] === 'ok' && (int)$row['latency_ms'] === 300 && $row['source'] === 'proxifly');
+T::eq('seeding is audited', 1, (int)$db->query("SELECT COUNT(*) FROM audit_log WHERE action = 'proxy_seed'")->fetchColumn());
+
+$reset();
+$r = osm_proxy_heal(fn() => [], $neverDiscover);
+T::eq('empty pool + discovery finds nothing: reported, pool untouched', 'no proxies found', $r['skipped']);
+T::eq('...and stays empty', [], $urls());
+
+$reset();
+$add('http://10.0.0.1:80', 'proxifly', 'ok');
+$r = osm_proxy_heal($neverDiscover, $deadProbe);
+T::ok('a non-empty healthy pool is never re-seeded', $r['seeded'] === 0 && $r['skipped'] === 'nothing to replace');
+
+$reset();
+set_setting('osm_proxy_enabled', '0');
+$r = osm_proxy_heal($neverDiscover, $deadProbe);
+T::eq('routing off: an empty pool is left alone', 'routing disabled', $r['skipped']);
+set_setting('osm_proxy_enabled', '1');
+
+// The deployment-wide opt-out stops every automatic discovery.
+putenv('DDMGMT_PROXY_HEAL=0');
+$reset();
+$r = osm_proxy_heal($neverDiscover, $deadProbe);
+T::eq('DDMGMT_PROXY_HEAL=0: no seeding', 'disabled by DDMGMT_PROXY_HEAL', $r['skipped']);
+$add('http://10.0.0.1:80', 'proxifly', 'fail');
+$r = osm_proxy_heal($neverDiscover, $deadProbe);
+T::eq('DDMGMT_PROXY_HEAL=0: no replacement either', 'disabled by DDMGMT_PROXY_HEAL', $r['skipped']);
+osm_proxy_heal_spawner(static fn(): bool => true);
+T::ok('DDMGMT_PROXY_HEAL=0: live traffic starts nothing', osm_proxy_heal_kick() === false);
+putenv('DDMGMT_PROXY_HEAL');
+osm_proxy_heal_spawner(static fn(): bool => false);
+
 // ── kick: what live traffic may start ────────────────────────────────────────
 $started = 0;
 osm_proxy_heal_spawner(static function () use (&$started): bool { $started++; return true; });
@@ -146,6 +186,11 @@ osm_proxy_heal_spawner(static function () use (&$started): bool { $started++; re
 $reset();
 $add('http://10.0.0.1:80', 'proxifly', 'ok');
 T::ok('kick: healthy pool starts nothing', osm_proxy_heal_kick() === false && $started === 0);
+
+$reset();
+T::ok('kick: an empty pool (first run) starts the seeding job', osm_proxy_heal_kick() === true && $started === 1);
+T::ok('kick: ...once (cooldown)', osm_proxy_heal_kick() === false && $started === 1);
+$started = 0;
 
 $reset();
 $add('http://10.0.0.2:80', 'manual', 'fail');
@@ -159,6 +204,20 @@ set_setting('osm_proxy_enabled', '1');
 
 T::ok('kick: failed discovered entry starts one job', osm_proxy_heal_kick() === true && $started === 1);
 T::ok('kick: cooldown suppresses the next one', osm_proxy_heal_kick() === false && $started === 1);
+
+// ── osm_fetch on an empty pool (first request after install) seeds it ─────────
+$reset();
+$started = 0;
+T::ok('empty pool: fetch fails closed', osm_fetch('http://127.0.0.1:1/x', 1024) === false);
+osm_last_via_stage(null);
+T::eq('empty pool: fetch kicked the seeding job', 1, $started);
+T::ok('routing defaults to ON when no setting exists',
+      (function () use ($db): bool {
+          $db->exec("DELETE FROM settings WHERE key_name = 'osm_proxy_enabled'");
+          $c = &_settings_store(); $c = null;
+          return osm_proxy_enabled() === true;
+      })());
+set_setting('osm_proxy_enabled', '1');
 
 // ── osm_fetch kicks the healer when the pool fails ───────────────────────────
 $reset();

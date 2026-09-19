@@ -13,17 +13,17 @@ $doc = static fn(array $o): string => (string)json_encode($o);
 $sha = '610eff73772a939d6304a9c8316103d586aa2d2b';
 
 // ── parse ────────────────────────────────────────────────────────────────────
-$rel = build_info_parse($doc(['describe' => 'v1.5.0-0-g610eff7', 'commit' => $sha, 'branch' => '', 'subject' => 'Release', 'dirty' => false]));
+$rel = build_info_parse($doc(['describe' => 'v1.5.0-0-g610eff7', 'commit' => $sha, 'branch' => '', 'dirty' => false]));
 T::ok('exact tag + clean tree is a release', $rel['known'] && $rel['release'] && !$rel['beta']);
 T::eq('release version', '1.5.0', $rel['version']);
 T::eq('release ahead count', 0, $rel['ahead']);
 
 $dev = build_info_parse($doc(['describe' => 'v1.5.0-8-g610eff7', 'commit' => $sha, 'branch' => 'dev', 'subject' => 'Fix things', 'dirty' => false]));
+T::ok('a commit message in the file is ignored, never surfaced', !in_array('Fix things', $dev, true) && !array_key_exists('subject', $dev));
 T::ok('commits after the tag are a beta', $dev['known'] && $dev['beta'] && !$dev['release']);
 T::eq('beta keeps the base version', '1.5.0', $dev['version']);
 T::eq('beta ahead count', 8, $dev['ahead']);
 T::eq('short commit name', '610eff7', $dev['commit']);
-T::eq('commit subject kept', 'Fix things', $dev['subject']);
 T::eq('branch kept', 'dev', $dev['branch']);
 
 $dirty = build_info_parse($doc(['describe' => 'v1.5.0-0-g610eff7', 'commit' => $sha, 'dirty' => true]));
@@ -40,10 +40,8 @@ foreach (['' => 'empty', 'not json' => 'garbage', '[]' => 'empty list', '{"descr
 $hostile = build_info_parse($doc([
     'describe' => 'v1.5.0-3-g610eff7', 'commit' => $sha,
     'branch'   => 'dev"><script>alert(1)</script>',
-    'subject'  => "Line\nbreak <b>x</b>" . str_repeat('y', 300),
 ]));
 T::eq('unsafe branch name is dropped', null, $hostile['branch']);
-T::ok('subject is single-line and capped', !str_contains((string)$hostile['subject'], "\n") && mb_strlen((string)$hostile['subject']) <= 100);
 
 // ── rendering + audience (HTTP) ──────────────────────────────────────────────
 $file = sys_get_temp_dir() . '/ddmgmt_build_' . getmypid() . '.json';
@@ -121,15 +119,18 @@ $settings = static function () use ($B, &$ck): string {
 };
 
 file_put_contents($file, $doc(['describe' => 'v1.5.0-8-g610eff7', 'commit' => $sha, 'branch' => 'dev',
-    'subject' => 'Tricky <b>subject</b> & "quotes"', 'dirty' => false]));
+    'subject' => 'Tricky <b>subject</b> & "quotes"', 'dirty' => true]));
 $html = $settings();
 T::ok('beta build: version line rendered with the offset', str_contains($html, 'v1.5.0+8'));
 T::ok('beta build: BETA badge shown', str_contains($html, 'class="beta-badge"'));
-T::ok('beta build: commit name shown', str_contains($html, '<code>610eff7</code>'));
-T::ok('beta build: commit subject shown, escaped', str_contains($html, 'Tricky &lt;b&gt;subject&lt;/b&gt; &amp; &quot;quotes&quot;'));
-T::ok('beta build: branch shown', str_contains($html, '[dev]'));
+T::ok('beta build: commit hash shown', str_contains($html, '<code>610eff7</code>'));
+T::ok('beta build: commit message not displayed', !str_contains($html, 'Tricky') && !str_contains($html, 'subject</b>'));
+preg_match('#<span class="version-commit">(.*?)</span>\s*</div>#s', $html, $vc);
+$line = trim(preg_replace('/\s+/', ' ', html_entity_decode(strip_tags($vc[1] ?? ''), ENT_QUOTES, 'UTF-8')));
+T::eq('beta build: hash, branch and local-changes note on ONE line', '610eff7 · dev · local changes', $line);
+T::ok('beta build: that line contains no line break', !str_contains($vc[1] ?? "\n", "\n"));
 
-file_put_contents($file, $doc(['describe' => 'v1.5.0-0-g610eff7', 'commit' => $sha, 'branch' => '', 'subject' => 'Release 1.5.0', 'dirty' => false]));
+file_put_contents($file, $doc(['describe' => 'v1.5.0-0-g610eff7', 'commit' => $sha, 'branch' => '', 'dirty' => false]));
 $html = $settings();
 T::ok('release build: plain version', str_contains($html, '>v1.5.0<'));
 T::ok('release build: no BETA badge', !str_contains($html, 'class="beta-badge"'));
@@ -140,10 +141,10 @@ $html = $settings();
 T::ok('no provenance file: says unknown, no badge', str_contains($html, 'class="version-muted"') && !str_contains($html, 'class="beta-badge"'));
 
 // Audience: never on a public or unauthenticated surface.
-file_put_contents($file, $doc(['describe' => 'v1.5.0-8-g610eff7', 'commit' => $sha, 'branch' => 'dev', 'subject' => 'Secretive subject']));
+file_put_contents($file, $doc(['describe' => 'v1.5.0-8-g610eff7', 'commit' => $sha, 'branch' => 'dev']));
 foreach (['/', '/healthz.php', '/admin/index.php', '/receive.php'] as $path) {
     [, $body] = _vr('GET', "$B$path", null, '');
-    T::ok("$path does not disclose the build", !str_contains($body, '610eff7') && !str_contains($body, 'Secretive subject') && !str_contains($body, 'beta-badge'));
+    T::ok("$path does not disclose the build", !str_contains($body, '610eff7') && !str_contains($body, 'beta-badge'));
 }
 [$st, $body] = _vr('GET', "$B/admin/settings.php", null, '');
 T::ok('settings without a session redirects, discloses nothing', $st === 302 && !str_contains($body, '610eff7'));

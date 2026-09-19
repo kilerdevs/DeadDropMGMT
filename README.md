@@ -28,7 +28,7 @@ all without the underlying data ever leaving the server in readable form.
 ![Log integrity](https://img.shields.io/badge/audit%20log-HMAC%20chained-blue?style=flat)
 
 ![PHPStan](https://img.shields.io/badge/PHPStan-level%205-4F5D95?style=flat)
-![Test suites](https://img.shields.io/badge/PHP%20test%20suites-34-success?style=flat)
+![Test suites](https://img.shields.io/badge/PHP%20test%20suites-37-success?style=flat)
 ![E2E](https://img.shields.io/badge/E2E-Playwright-45ba4b?style=flat&logo=playwright&logoColor=white)
 ![Coverage floor](https://img.shields.io/badge/coverage%20floor-%E2%89%A585%25-success?style=flat)
 ![Mutation probe](https://img.shields.io/badge/mutation%20probe-16%20mutants-success?style=flat)
@@ -62,7 +62,7 @@ all without the underlying data ever leaving the server in readable form.
 | | |
 |---|---|
 | **Get started** | [Overview](#overview) · [Quick start](#quick-start) · [Features](#features) · [Tech stack](#tech-stack) |
-| **Deploy** | [Docker](#docker) · [Setup (manual install)](#setup) · [Configuration reference](#configuration-reference) · [Requirements](#requirements) |
+| **Deploy** | [Docker](#docker) · [Setup (manual install)](#setup) · [Free shared hosting](#free-shared-hosting-no-docker-no-cron) · [Configuration reference](#configuration-reference) · [Requirements](#requirements) |
 | **Maps** | [Self-hosted maps](#self-hosted-maps-opt-in-zero-third-party-tile-contact) |
 | **Security** | [Threat model](#threat-model) · [Third-party code & external services](#third-party-code--external-services) |
 | **Quality** | [Tests](#tests) |
@@ -226,7 +226,7 @@ The app is then on <http://localhost:2137> (`APP_PORT` in `.env` to change). Ove
 DB password, port, AES key.
 
 **Version line in Settings.** Owners see the running build under Settings: `v1.5.0` for a tagged release, or `v1.5.0+8`
-with a **BETA** badge, the commit hash and its subject for anything past the last release tag (a build from `dev`).
+with a **BETA** badge and a `hash · branch` line for anything past the last release tag (a build from `dev`). Commit messages are never recorded.
 The image has no `.git`, so the build host supplies it — prefix the build with the helper (any compose file):
 
 ```sh
@@ -433,10 +433,12 @@ values.
 | `DDMGMT_TRUST_PROXY` | `0` | Honor `X-Forwarded-*` / `CF-Connecting-IP` from a trusted peer |
 | `DDMGMT_TRUSTED_PROXIES` | loopback + RFC1918 | Comma-separated IPs / CIDRs allowed to set proxy headers |
 | `DDMGMT_SETUP_TOKEN` | *(unset)* | When set, creating the first owner requires this token; when unset the first visitor claims the instance (logged as a warning) |
+| `DDMGMT_PROXY_HEAL` | `1` | `0` disables all *automatic* OSM proxy discovery — first-run seeding and replacing failed proxies (the Auto-discover button still works) |
+| `DDMGMT_PSEUDO_CRON` | `1` | `0` disables the page-visit pseudo-cron (for installs that run real cron) |
 | `DDMGMT_PMTILES_URL` / `DDMGMT_PMTILES_BIN` | *(unset)* | Use your own `pmtiles` CLI download / binary — opts out of the pinned SHA-256 (trust-on-first-use instead) |
 
 **Docker `.env` overrides:** `APP_PORT` (default `2137`), `DB_PASS` (default `deaddrop-db`), `DB_ROOT_PASS`
-(default `deaddrop-root`), plus `DDMGMT_AES_KEY_HEX`. Change the defaults before exposing the stack.
+(default `deaddrop-root`), plus `DDMGMT_AES_KEY_HEX`, `DDMGMT_PROXY_HEAL` and `DDMGMT_PSEUDO_CRON`. Change the defaults before exposing the stack.
 
 Runtime behavior (rate limits, session length, TTL, upload size, map provider, …) is configured in the admin **Settings**
 page, not in files.
@@ -452,9 +454,48 @@ page, not in files.
   deny block, see [Setup §3](#3-web-server))
 - **Served from the root of its own host** — a virtual host or subdomain (`https://drop.example.org/`), not a sub-path like `example.org/drop/`. Links, redirects and asset URLs are root-relative (`/admin/…`, `/uploads/…`, `Location: /`), so a sub-directory install or a reverse proxy that strips or adds a path prefix will break them
 - **Self-hosted maps only:** process execution (`proc_open`) for the `pmtiles` CLI, Linux x86_64 or arm64, and free disk
-  for the zones you draw
+  for the zones you draw (zone *downloads* only — the default OSM provider needs none of this)
+- **No Docker, cron or exec needed:** see [Free shared hosting](#free-shared-hosting-no-docker-no-cron)
 
 Stuck? Symptom → cause → fix lives in [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
+
+---
+
+## Free shared hosting (no Docker, no cron)
+
+The app is built to run on a plain PHP + MySQL shared host — the kind with FTP, phpMyAdmin, no shell, no cron and a
+locked-down `php.ini`. Everything that would normally lean on Docker, cron or process execution has a fallback, and
+**Settings → Hosting** (owners only) shows what this particular host can and cannot do.
+
+| Feature | Needs | On a host without it |
+|---|---|---|
+| Orders, admin panel, encrypted locations, photos, 2FA, 8 languages | PHP + MySQL | Works fully |
+| Expiry sweep, log checkpoints, cache and record pruning | cron | **Pseudo-cron**: any PHP page visit (public, admin or a JSON poll) runs the hourly pass *after* the response has been sent. Recipients never see an expired order anyway — the sweep only removes rows. On a very quiet site add a cron job for `cron/cleanup.php` if you can |
+| OpenStreetMap maps through the proxy pool | cURL | Without cURL routing cannot work, so it is not applied and OSM requests go direct from the server (Settings says so) |
+| Proxy pool upkeep (first-run discovery, replacing failed proxies) | exec + CLI PHP for a detached job | Runs **inline after the response** in a time-budgeted pass (~22 s, a smaller sample) instead. If a host can never find a working proxy — outbound connections blocked, every list unreachable — routing is **switched off automatically after 3 empty attempts**, with an audit entry, a log warning and a notice in Settings, so maps do not stay dead; turn the toggle on to retry |
+| Self-hosted map zone **downloads** | `proc_open`, Linux, cURL, and cron or exec + CLI PHP | Unavailable: the Queue button is disabled and the request refused with a clear message. The default OpenStreetMap provider does not need any of it |
+| Version line in Settings | a Docker build arg | Run `tools/build_info.sh --write` on a checkout to produce `build-info.json`, or it shows "unknown build" |
+
+**Set-up without a shell**
+
+1. **PHP 8.2 or newer** with `pdo_mysql`, `openssl`, `mbstring`, `gd` (and `curl` if you want the proxy pool). Many free
+   hosts still offer 8.1 or older — check the control panel first; the app will not run there.
+2. Give the app **its own (sub)domain** — it cannot live under `/drop/` (see [Requirements](#requirements)). Free hosts hand out subdomains.
+3. Upload the files (FTP), create a database and import `setup.sql` with phpMyAdmin (it is idempotent — re-import it after upgrades).
+4. Copy `config.php.example` to `config.php` and fill in the database credentials and a 64-hex `AES_KEY_HEX`
+   (`php -r "echo bin2hex(random_bytes(32));"` on any machine). Environment variables are optional — every value works as a constant.
+   **Back the key up.**
+5. Make `logs/`, `uploads/`, `cache/`, `data/` and `tiles/` writable for PHP (FTP chmod `755`, or `775` if the host runs PHP as a different user).
+6. Open `/admin/` and create the owner. Then look at **Settings → Hosting**.
+
+**Switches** (`config.php` constants, or environment variables where you have them — the environment wins): 
+`define('DDMGMT_PSEUDO_CRON', false);` only if a real cron job runs `cron/cleanup.php`;
+`define('DDMGMT_PROXY_HEAL', false);` to never start proxy discovery on its own.
+
+**If the site answers `500` right after upload:** the shipped `.htaccess` starts with `Options -Indexes`, which some hosts
+refuse to accept (`AllowOverride` without `Options`). Delete that one line — every other directive is inside `IfModule`
+guards — and keep directory listing off in the host's panel instead. See also [Setup §3](#3-web-server): nginx-only hosts
+ignore `.htaccess` and need the deny rules replicated.
 
 ---
 
@@ -471,7 +512,7 @@ picker and public reveal alike).
 | **Zone editor** | The bbox can be typed or drawn directly on an OSM canvas in the same section (same-origin tiles via `tile_proxy.php`, so still zero third-party contact): drag to draw, drag the body to move, corners to resize; overlapping drafts warn with the shared-tiles percentage and existing zones render in red. A place search pans through the proxied Nominatim path |
 | **Route consent per download** | Proxy pool (anonymous, can be extremely slow — pool proxies are volunteer-run) or direct (fast, reveals the server IP to the tile host). Proxy mode is fail-closed: no working pool proxy means a failed job, never silent direct |
 | **Sizing before downloading** | The worker dry-runs each zone for its exact byte count and refuses zones that don't fit the free disk (512 MiB headroom always kept). Deleting a zone frees its disk immediately; the worker measures, downloads with live speed/ETA, verifies, and publishes atomically |
-| **Worker** | `cron/maps_sync.php` (system cron recommended, e.g. every 15 min; the Settings page kicks it detached after queueing when the platform allows). Page visits never download — extracts can't resume, so a killed request would waste the whole transfer; the hourly pseudo-cron steward only fails jobs whose worker died silently (`maps_steward_if_due()` in `index.php`) |
+| **Worker** | `cron/maps_sync.php` (system cron recommended, e.g. every 15 min; the Settings page kicks it detached after queueing when the platform allows). Page visits never download — extracts can't resume, so a killed request would waste the whole transfer; the hourly pseudo-cron steward only fails jobs whose worker died silently (`maps_steward_if_due()`, run by the pseudo-cron) |
 | **Freshness** | The planet rebuilds daily and each zone remembers the build it was cut from. When the worker next learns a newer build, ready zones cut from older ones show an *Update available* badge with a **Refresh** button that re-queues them — the worker re-downloads and republishes atomically, so the old file keeps serving until the new one lands. Freshness is computed from the cached build key only; no page view ever fetches the build list |
 | **Public reveal** | With the self-hosted provider, a delivered order whose pin sits inside a ready zone renders the same MapLibre stack on the public reveal page (`reveal-map.js`, style inlined server-side — no new endpoint) instead of the OSM iframe. Only the covering zones' files are fetched, so zones elsewhere stay undisclosed; a pin outside every zone (or provider `osm`) keeps the OSM embed. The Google/Apple Maps links remain plain outbound links either way |
 | **`pmtiles` CLI** | Pinned v1.31.2 (Linux x86_64 / arm64), fetched automatically on first use over TLS and verified against built-in SHA-256 pins (archive and binary) *before* it is ever executed. Only when you override the download (`DDMGMT_PMTILES_URL` / `DDMGMT_PMTILES_BIN`) or run another architecture does the app fall back to a trust-on-first-use hash recorded in `maps_cli_sha256`. Address search still uses the proxied Nominatim path — self-hosted geocoding (100 GB+ PostGIS) is deliberately out of scope |
@@ -561,7 +602,7 @@ What remains after mitigations — stated plainly:
 - **Panic mode destroys everything, evidence included** — orders, photos, event log, audit log, tile cache and on-disk logs; only accounts and settings survive. Partial filesystem failures are reported honestly and the wipe is re-runnable (ADR-015).
 - **File wipe is best-effort.** Overwriting with null bytes before `unlink()` raises the bar for casual recovery; copy-on-write filesystems, SSD wear-leveling and journaling may retain the original blocks. Full-disk encryption is the only real answer.
 - **Rate limiting is IP-based *plus* a per-session failure bucket**, which fixes both classic blind spots: strangers behind one NAT/VPN exit no longer lock each other out (separate session buckets), and an attacker must rotate IP *and* cookie per attempt. The IP budget and window are tunable in Settings (the session bucket follows the window, keeps its own threshold); still no defense against truly industrial distributed guessing — the ≥64-bit passphrase and auto-expiry carry that.
-- **Availability is best-effort**: pseudo-cron cleanup runs on page hits unless a real cron calls `cron/cleanup.php` (the Docker image does so every 15 minutes); nothing protects against DDoS.
+- **Availability is best-effort**: pseudo-cron cleanup runs on hits to any PHP page (public, admin or a JSON poll — the kernel hooks it after the response is sent; `healthz.php` is excluded; `DDMGMT_PSEUDO_CRON=0` turns it off) unless a real cron calls `cron/cleanup.php` (the Docker image does so every 15 minutes); nothing protects against DDoS.
 
 ---
 
@@ -603,7 +644,7 @@ The public Content-Security-Policy allows exactly one external origin: `frame-sr
 | OSM tile hosts | Admin map tiles, cache misses only | This server's IP (or a pool proxy's) |
 | Protomaps (`build.protomaps.com`, `build-metadata.protomaps.dev`) | Self-hosted map zone downloads and freshness checks | This server's IP, or a pool proxy's — per the route you consent to per download |
 | GitHub releases (`github.com/protomaps/go-pmtiles`) | First use of the `pmtiles` CLI | This server's IP |
-| Public proxy lists (`raw.githubusercontent.com`), anonymity judges and public-IP lookup services | When the owner clicks **Auto-discover**, and — while routing is enabled — when a discovered pool proxy has failed and is being replaced (at most once per 10 minutes) | This server's IP — see below |
+| Public proxy lists (`raw.githubusercontent.com`), anonymity judges and public-IP lookup services | When the owner clicks **Auto-discover**; **automatically on the first run** (OSM proxy routing is on by default and an empty pool fails closed, so a first pool is discovered in the background); and when a discovered pool proxy has failed and is replaced (at most once per 10 minutes). Set `DDMGMT_PROXY_HEAL=0` or turn routing off in Settings to prevent the automatic runs | This server's IP — see below |
 
 <details>
 <summary><b>Proxy auto-discovery sources</b> — what each list contributes and how candidates are vetted</summary>
@@ -623,7 +664,9 @@ All fetched from GitHub raw by the server (never the browser) when the owner cli
 
 **What this means for your server's exposure:** clicking Auto-discover (or an automatic replacement, below) makes your server's IP visible to GitHub (list fetch, direct — not proxied), to the public-IP lookup services, to every candidate proxy probed, and to the judge services. OSM itself is only contacted through accepted proxies while routing is enabled.
 
-**Failed proxies are replaced automatically.** While routing is enabled, a discovered pool entry that fails (seen by live traffic or by the stale re-probe below) is confirmed dead with a fresh probe, deleted, and replaced by a newly discovered proxy chosen by exactly the Auto-discover criteria (answers a real HTTPS OSM tile in under 3 s; anonymity check for unrated HTTP proxies). The work runs in a detached CLI job (`cron/proxy_heal.php`, also called from the cleanup cron), under a lock, at most once per 10 minutes — never inside a page request. Safeguards: **nothing is deleted until a replacement exists** (an outage where every proxy "fails" and discovery finds nothing leaves the pool untouched, and the pool never shrinks); a proxy that answers the confirmation probe is kept; entries you added by hand (`manual`) are never deleted automatically; with routing disabled nothing happens. Each swap is written to the audit log (`proxy_replace`). Because this reuses discovery, it makes the same outbound connections as the Auto-discover button — enabling proxy routing and running Auto-discover once is what opts a deployment into it.
+**Failed proxies are replaced automatically.** While routing is enabled, a discovered pool entry that fails (seen by live traffic or by the stale re-probe below) is confirmed dead with a fresh probe, deleted, and replaced by a newly discovered proxy chosen by exactly the Auto-discover criteria (answers a real HTTPS OSM tile in under 3 s; anonymity check for unrated HTTP proxies). The work runs in a detached CLI job (`cron/proxy_heal.php`, also called from the cleanup cron), under a lock, at most once per 10 minutes — never inside a page request. Safeguards: **nothing is deleted until a replacement exists** (an outage where every proxy "fails" and discovery finds nothing leaves the pool untouched, and the pool never shrinks); a proxy that answers the confirmation probe is kept; entries you added by hand (`manual`) are never deleted automatically; with routing disabled nothing happens. Each swap is written to the audit log (`proxy_replace`). Because this reuses discovery, it makes the same outbound connections as the Auto-discover button.
+
+**First run: routing is on and the pool is filled automatically.** OSM proxy routing is enabled by default for new installs. The pool starts empty and an empty pool fails closed, so on the first run the same job discovers a first pool and stores everything Auto-discover would (`proxy_seed` in the audit log) — started at container boot, by the first page visit's pseudo-cron, or by the first OSM request, whichever comes first, with the same lock and cooldown. Until it finishes (typically a minute or two) OSM-backed map views answer `502` rather than reach OSM from the server's own address; if discovery finds nothing (no outbound network) it retries after the cooldown. Existing installs keep whatever the owner set. To opt out: turn routing off in Settings, or set `DDMGMT_PROXY_HEAL=0` (routing on + empty pool then simply stays failed-closed until you add proxies).
 
 **Stale entries are re-probed automatically.** A manually added proxy is only format-checked at insert, so a typo'd-but-well-formed URL would sit at `new` forever. Every cleanup pass (hourly pseudo-cron, or real cron) re-probes the 3 stalest entries — never checked, or not checked in 7 days — against a real OSM tile and updates their status, so the pool display reflects reality even for proxies live traffic never exercises.
 
@@ -637,7 +680,7 @@ A zero-dependency PHP suite (no PHPUnit — each file is a standalone script), a
 
 | Layer | What it proves | Run it |
 |---|---|---|
-| **PHP suites** — 34 | Crypto, auth, limits, state machine, maps, i18n, fail-closed branches, live-HTTP flows | `php tests/schema_loader.php && php tests/run_all.php` |
+| **PHP suites** — 37 | Crypto, auth, limits, state machine, maps, i18n, fail-closed branches, live-HTTP flows | `php tests/schema_loader.php && php tests/run_all.php` |
 | **Browser E2E** — 7 specs | What raw HTTP cannot see: no-JS paths, CSP-clean DOM, offline maps, mid-reveal UI | `npm ci && npx playwright install chromium && npm run e2e` |
 | **Coverage gate** | Line coverage floors over `includes/` under `pcov` | `composer install && php tests/coverage_runner.php` |
 | **Mutation probe** — 16 mutants | A tested guard versus a dead one | `php tools/mutation_probe.php` |
@@ -647,7 +690,7 @@ A zero-dependency PHP suite (no PHPUnit — each file is a standalone script), a
 The suite never touches your real database: `tests/bootstrap.php` forces `DDMGMT_DB_NAME=deaddrops_test` and points the app at TCP loopback unless you say otherwise.
 
 <details>
-<summary><b>The 34 PHP suites</b>, by area</summary>
+<summary><b>The 37 PHP suites</b>, by area</summary>
 
 <br>
 
@@ -661,7 +704,7 @@ The suite never touches your real database: `tests/bootstrap.php` forces `DDMGMT
 | Uploads | `UploadHardeningTest`, `PhotoCapTest` |
 | Logging | `LoggerTest` — hash chain, continuity checkpoints, unusable-key behaviour |
 | Maps & proxy | `MapsTest`, `MapsFetchTest` (zone tokens, CLI pins, worker lock, orphan sweep), `ProxyTest` (anonymity gate, tile cache), `ProxyClientTest` (response size ceilings), `ProxyHealTest` (failed-proxy replacement: confirm, replace-never-just-delete, manual entries exempt, lock, cooldown) |
-| Structure & guards | `KernelTest` (service manifest, CLI-only guards, web-server denies), `AdminMobileTest` (phone layout contract: menu button, OSM badge rules, touch zone editor), `VersionTest` (release vs beta build line, owners only), `DispatchTest` (the thin admin dispatcher contract), `FailClosedTest` (every guard, limiter, wipe and decrypt path, plus the DB TLS option matrix) |
+| Structure & guards | `KernelTest` (service manifest, CLI-only guards, web-server denies), `AdminMobileTest` (phone layout contract: menu button, OSM badge rules, touch zone editor), `VersionTest` (release vs beta build line, owners only), `PseudoCronTest` (any page starts the hourly sweep, healthz doesn't, the env switch), `LogViewerTest` (Settings lists the structured log that Verify integrity checks), `HostTest` (shared-hosting degradations: config-constant switches, no exec / CLI / cURL, inline proxy upkeep, automatic routing switch-off, zone-download gating), `DispatchTest` (the thin admin dispatcher contract), `FailClosedTest` (every guard, limiter, wipe and decrypt path, plus the DB TLS option matrix) |
 
 </details>
 
@@ -782,6 +825,7 @@ DeadDropMGMT/
 │   │                         account preference + public ?lang= switcher)
 │   ├── proxy.php             OSM outbound proxy pool + free-proxy discovery + self-healing + tile cache
 │   ├── version.php           Build provenance: release vs beta (Settings → Version)
+│   ├── host.php              Host capability probes + config-constant switches (shared hosting)
 │   ├── maps.php              Self-hosted maps: zones, pmtiles CLI, worker, map style
 │   ├── analytics.php         Event logger
 │   ├── logger.php            Structured JSONL log + tamper-evident hash chain

@@ -48,6 +48,10 @@ services:
       # Optional: require this token to create the first owner (recommended
       # before a fresh instance is reachable from a network).
       DDMGMT_SETUP_TOKEN: ${DDMGMT_SETUP_TOKEN:-}
+      # Automatic OSM proxy discovery (first-run seeding + replacing failed
+      # proxies) and the page-visit pseudo-cron: 0 turns either one off.
+      DDMGMT_PROXY_HEAL: ${DDMGMT_PROXY_HEAL:-1}
+      DDMGMT_PSEUDO_CRON: ${DDMGMT_PSEUDO_CRON:-1}
     volumes:
       - app-uploads:/var/www/html/uploads
       - app-logs:/var/www/html/logs
