@@ -268,7 +268,7 @@ $init_zoom = $has_pin ? 17 : 12;
 
     <main class="main">
     <?php require __DIR__ . '/totp_banner.php'; ?>
-    <?php require __DIR__ . '/osm_monit.php'; ?>
+    <?php if (map_provider() === MAP_PROVIDER_OSM && osm_proxy_enabled()) { require __DIR__ . '/osm_monit.php'; } ?>
         <div class="page-heading">
             <?= t('admin.edit.title_prefix') ?> — <span class="token"><?= htmlspecialchars($order['order_token'], ENT_QUOTES, 'UTF-8') ?></span>
         </div>

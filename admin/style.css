@@ -74,6 +74,11 @@ body.login-page {
 
 .shell { display: flex; min-height: 100vh; }
 
+/* The hidden attribute must beat any component's own display rule (the OSM
+   badge and the zones table set display:flex/block and would otherwise show
+   while hidden). */
+[hidden] { display: none !important; }
+
 /* Hidden on desktop — mobile media query overrides these */
 .sidebar-toggle,
 .sidebar-backdrop { display: none; }
@@ -1231,6 +1236,18 @@ h1 {
     pointer-events:  none;
     box-shadow:      0 2px 12px rgba(0, 0, 0, 0.5);
 }
+/* Phones: sit beside the menu button instead of over the page content. */
+@media (max-width: 780px) {
+    .osm-monit {
+        top:        12px;
+        left:       64px;
+        right:      12px;
+        max-width:  none;
+        min-height: 40px;
+        padding:    8px 12px;
+        font-size:  11px;
+    }
+}
 .osm-monit-dot {
     flex:            none;
     width:           9px;
@@ -1479,6 +1496,42 @@ h1 {
     /* ── Extend buttons row in edit ──────────────────────────────────── */
 
     .btn.btn-sm { padding: 8px 12px; font-size: 10px; }
+
+    /* ── Settings: proxy pool + zones as cards, never a 580px table ──── */
+    /* The blanket table min-width above is for scroll-wrapped data tables.
+       These live directly in .main (a scroll container), so a min-width would
+       drag the whole page sideways. */
+
+    .proxies-table { min-width: 0; }
+
+    .proxies-table:not(.maps-table),
+    .proxies-table:not(.maps-table) tbody { display: block; }
+    .proxies-table:not(.maps-table) thead {
+        position: absolute;
+        width:    1px;
+        height:   1px;
+        overflow: hidden;
+        clip:     rect(0 0 0 0);
+    }
+    .proxies-table:not(.maps-table) tr {
+        display:       flex;
+        flex-wrap:     wrap;
+        align-items:   center;
+        gap:           4px 14px;
+        padding:       10px 0;
+        border-bottom: 1px solid var(--border);
+    }
+    .proxies-table:not(.maps-table) td {
+        padding:       0;
+        border:        0;
+        min-width:     0;
+        font-size:     11px;
+    }
+    .proxies-table:not(.maps-table) .px-url { flex: 1 1 100%; }
+    .proxies-table:not(.maps-table) .px-actions { margin-left: auto; }
+
+    .proxies-toolbar { flex-wrap: wrap; }
+    .proxies-toolbar input[type="text"] { flex: 1 1 100%; }
 
     /* ── Login page ──────────────────────────────────────────────────── */
 

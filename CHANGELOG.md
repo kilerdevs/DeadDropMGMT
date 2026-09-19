@@ -28,6 +28,14 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   ADR-006/016/019 describe the changes above.
 
 ### Fixed
+- Admin panel on phones: the menu button was missing on **New order** when the
+  map provider is self-hosted (`admin.js` was only loaded on the Leaflet path,
+  which also skipped the live-CSRF refresh on that form); the OSM proxy badge
+  was always on screen because its `display:flex` overrode the `hidden`
+  attribute, and is now only rendered for OSM maps with proxy routing enabled
+  (and sits beside the menu button on narrow screens); **Settings** no longer
+  scrolls sideways — the proxy pool and map zones render as cards instead of a
+  580px-minimum table. `[hidden]` now always wins over component display rules.
 - A crafted array-shaped field (`order_token[]=x`) with a valid CSRF token made
   `index.php` throw an uncaught `TypeError` while re-rendering the form. The
   public and admin pages now read form and query fields through
