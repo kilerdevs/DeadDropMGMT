@@ -133,6 +133,16 @@ T::ok('zone labels re-sync after the status poll re-renders rows',
       str_contains($set, "typeof mzSyncZoneLayers === 'function'"));
 
 $css = (string)file_get_contents($root . '/admin/style.css');
+// The OSM status strip must never be an overlay again: a fixed badge covered
+// the heading and forms, and on failover (several lines) covered more.
+T::ok('style.css: the OSM status strip is in the page flow, not fixed or layered',
+      preg_match('/\.osm-monit\s*\{[^}]*\}/', $css, $mm) === 1
+      && !preg_match('/position:\s*(fixed|absolute|sticky)|z-index/', $mm[0]));
+T::ok('style.css: ...and the phone override does not turn it back into an overlay',
+      preg_match('/@media \(max-width: 780px\)\s*\{\s*\.osm-monit\s*\{[^}]*\}/', $css, $mp) === 1
+      && !preg_match('/position:|z-index|top:|left:|right:/', $mp[0]));
+$mon = (string)file_get_contents($root . '/admin/osm_monit.php');
+T::ok('failover detail sits on its own capped line', str_contains($mon, 'osm-monit-detail') && str_contains($mon, 'sk.slice(0, 3)'));
 T::ok('style.css: draw mode blocks browser touch panning',
       (bool)preg_match('/\.maps-editor-map\.mz-drawing\s*\{[^}]*touch-action:\s*none/', $css));
 T::ok('style.css: zone labels styled', str_contains($css, '.leaflet-tooltip.mz-zone-label'));

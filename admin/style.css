@@ -1278,39 +1278,49 @@ h1 {
 /* ── OSM proxy monit (map pages) ─────────────────────────────────────────── */
 
 .osm-monit {
-    position:        fixed;
-    right:           16px;
-    top:             16px;
-    z-index:         5000;
+    /* In the page flow, never an overlay: a floating badge sat on top of the
+       heading and forms, and on failover (several lines) covered even more.
+       Content now moves down instead of being covered. */
     display:         flex;
-    align-items:     center;
-    gap:             8px;
+    align-items:     flex-start;
+    gap:             10px;
+    box-sizing:      border-box;
+    width:           fit-content;
+    max-width:       100%;
+    margin:          0 0 18px auto;
     background:      var(--surface, #111);
     border:          1px solid var(--accent, #4caf50);
-    padding:         10px 16px;
+    padding:         8px 14px;
     font-family:     'IBM Plex Mono', monospace;
     font-size:       12px;
     letter-spacing:  0.05em;
+    line-height:     1.5;
     color:           var(--text, #ddd);
-    word-break:      break-all;
-    max-width:       70vw;
-    pointer-events:  none;
-    box-shadow:      0 2px 12px rgba(0, 0, 0, 0.5);
 }
-/* Phones: sit beside the menu button instead of over the page content. */
+.osm-monit-body {
+    display:         flex;
+    flex-direction:  column;
+    gap:             2px;
+    min-width:       0;
+    overflow-wrap:   anywhere;
+}
+/* Failover detail: second, muted line — which pool proxies were skipped. */
+.osm-monit-detail {
+    font-size:       11px;
+    color:           var(--text-muted, #888);
+}
+/* Phones: a full-width strip under the menu button's row. */
 @media (max-width: 780px) {
     .osm-monit {
-        top:        12px;
-        left:       64px;
-        right:      12px;
-        max-width:  none;
-        min-height: 40px;
-        padding:    8px 12px;
+        width:      100%;
+        margin:     0 0 16px;
         font-size:  11px;
+        padding:    8px 12px;
     }
 }
 .osm-monit-dot {
     flex:            none;
+    margin-top:      5px;
     width:           9px;
     height:          9px;
     border-radius:   50%;
