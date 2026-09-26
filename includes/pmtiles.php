@@ -838,9 +838,6 @@ function pmtiles_parse_dir(string $raw, int $comp): ?array {
         } else {
             $off = $v === 0 ? $prevOff + $prevLen : $v - 1;
         }
-        if ($off < 0) {
-            return null;
-        }
         $out[] = ['id' => $ids[$i], 'run' => $runs[$i], 'len' => $lens[$i], 'off' => $off];
         $prevOff = $off;
         $prevLen = $lens[$i];
