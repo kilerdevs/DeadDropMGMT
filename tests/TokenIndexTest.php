@@ -183,8 +183,10 @@ T::eq('dry run changes nothing', 2, (int)$db->query('SELECT COUNT(*) FROM orders
 _warn_legacy_tokens(); // must answer (with a logged warning), not throw
 T::ok('legacy warning does not throw', true);
 
-$out = (string)shell_exec("$php " . $tool('migrate_order_tokens.php') . ' 2>&1; echo EXIT:$?');
-T::ok('migration reports success', str_contains($out, 'Done') && str_contains($out, 'EXIT:0'));
+$lines = []; $code = -1;
+exec("$php " . $tool('migrate_order_tokens.php') . ' 2>&1', $lines, $code);
+$out = implode("\n", $lines);
+T::ok('migration reports success', str_contains($out, 'Done') && $code === 0);
 foreach (['orders', 'order_events', 'audit_log'] as $t) {
     T::eq("$t.order_token is gone", 0, (int)$db->query("SELECT COUNT(*) FROM information_schema.COLUMNS
         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '$t' AND COLUMN_NAME = 'order_token'")->fetchColumn());
@@ -205,8 +207,10 @@ T::ok('second run is a clean no-op', str_contains($out, 'Nothing to do'));
 $addLegacy();
 $db->exec("INSERT INTO orders (order_token, pickup_password_hash, location_encrypted, location_iv, status)
            VALUES ('bad token!', 'x', 'ZQ==', 'abababababababababababab', 'preparing')");
-$out = (string)shell_exec("$php " . $tool('migrate_order_tokens.php') . ' 2>&1; echo EXIT:$?');
-T::ok('a malformed legacy token aborts the migration', str_contains($out, 'ABORTED') && !str_contains($out, 'EXIT:0'));
+$lines = []; $code = -1;
+exec("$php " . $tool('migrate_order_tokens.php') . ' 2>&1', $lines, $code);
+$out = implode("\n", $lines);
+T::ok('a malformed legacy token aborts the migration', str_contains($out, 'ABORTED') && $code !== 0);
 T::ok('the abort left the plaintext column in place', (int)$db->query(
     "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE()
      AND TABLE_NAME = 'orders' AND COLUMN_NAME = 'order_token'")->fetchColumn() === 1);
@@ -246,15 +250,18 @@ $db->prepare("INSERT INTO audit_log (username, action, order_id, token_hmac, ip_
    ->execute([$rotId, token_index('RotTokenAAAA0001')]);
 $before = (string)$db->query("SELECT token_hmac FROM orders WHERE id = $rotId")->fetchColumn();
 
-$rot = static fn(string $from, string $to, string $extra = ''): string => (string)shell_exec(
-    "$php " . $tool('rotate_aes_key.php') . ' --old=' . escapeshellarg($from) . ' --new=' . escapeshellarg($to) . " $extra 2>&1; echo EXIT:$?");
+$rot = static function (string $from, string $to, string $extra = '') use ($php, $tool): array {
+    $lines = []; $code = -1;
+    exec("$php " . $tool('rotate_aes_key.php') . ' --old=' . escapeshellarg($from) . ' --new=' . escapeshellarg($to) . " $extra 2>&1", $lines, $code);
+    return [implode("\n", $lines), $code];
+};
 
-$out = $rot($oldHex, $newHex, '--dry-run');
-T::ok('rotation dry run succeeds', str_contains($out, 'Dry run OK') && str_contains($out, 'EXIT:0'));
+[$out, $code] = $rot($oldHex, $newHex, '--dry-run');
+T::ok('rotation dry run succeeds', str_contains($out, 'Dry run OK') && $code === 0);
 T::eq('dry run leaves the index alone', $before, (string)$db->query("SELECT token_hmac FROM orders WHERE id = $rotId")->fetchColumn());
 
-$out = $rot($oldHex, $newHex);
-T::ok('rotation succeeds', str_contains($out, 'Done') && str_contains($out, 'EXIT:0'));
+[$out, $code] = $rot($oldHex, $newHex);
+T::ok('rotation succeeds', str_contains($out, 'Done') && $code === 0);
 $after = (string)$db->query("SELECT token_hmac FROM orders WHERE id = $rotId")->fetchColumn();
 T::ok('the index changed with the master key', $after !== $before && preg_match('/^[0-9a-f]{64}$/', $after) === 1);
 T::eq('the live event followed the order to the new index', $after,
@@ -266,8 +273,8 @@ T::eq('an event whose order is gone loses its index', null,
 T::ok('the app (still on the old key) can no longer find it — as expected', order_id_for($db, 'RotTokenAAAA0001') === null);
 
 // Rotate back: everything lines up with the original key again.
-$out = $rot($newHex, $oldHex);
-T::ok('rotation back succeeds', str_contains($out, 'Done') && str_contains($out, 'EXIT:0'));
+[$out, $code] = $rot($newHex, $oldHex);
+T::ok('rotation back succeeds', str_contains($out, 'Done') && $code === 0);
 T::eq('original index restored', $before, (string)$db->query("SELECT token_hmac FROM orders WHERE id = $rotId")->fetchColumn());
 T::eq('the token is reachable again', $rotId, order_id_for($db, 'RotTokenAAAA0001'));
 $row = $db->query("SELECT token_hmac, token_enc, token_iv FROM orders WHERE id = $rotId")->fetch();
@@ -278,8 +285,8 @@ T::eq('the location survived both rotations', 'rotation drop', decrypt_location_
 
 // Rotation refuses to run while plaintext token columns exist.
 $addLegacy();
-$out = $rot($oldHex, $newHex, '--dry-run');
-T::ok('rotation refuses while plaintext tokens exist', str_contains($out, 'migrate_order_tokens.php') && !str_contains($out, 'EXIT:0'));
+[$out, $code] = $rot($oldHex, $newHex, '--dry-run');
+T::ok('rotation refuses while plaintext tokens exist', str_contains($out, 'migrate_order_tokens.php') && $code !== 0);
 $dropLegacy();
 
 $db->exec('DELETE FROM orders');

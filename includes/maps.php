@@ -1026,6 +1026,10 @@ function maps_zone_exists(int $id): bool {
 // worker that has not written its row state yet.
 function maps_sweep_orphan_files(): int {
     $removed = 0;
+    // Fresh mtimes, not process memory: a steward that listed or statted the
+    // tiles earlier in its lifetime must decide on disk truth — a stale cache
+    // keeps orphans forever, or worse, deletes a live download as "aged".
+    clearstatcache();
     foreach (glob_list(maps_tiles_dir() . '/zone_*') as $f) {
         if (!preg_match('/^zone_(\d+)(?:_([0-9a-f]{32}))?\.(pmtiles|part)$/', basename($f), $m)) {
             continue;

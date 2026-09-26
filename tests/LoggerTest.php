@@ -422,7 +422,12 @@ T::ok('a valid key works again once the override is cleared', strlen(_log_key())
 // (`docker exec` shells and cron never inherited the key: app_log() used to
 // create an empty app.log and spray hex2bin() warnings into error.log.)
 $child = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(__DIR__ . '/_log_badkey.php') . ' 2>&1';
-$out = (string)shell_exec('DDMGMT_AES_KEY_HEX=not-a-real-key ' . $child);
+// Bourne `VAR=val cmd` prefixes do not run on Windows shells: hand the bad
+// key to the child through the environment instead (portable both ways).
+$prevKey = getenv('DDMGMT_AES_KEY_HEX');
+putenv('DDMGMT_AES_KEY_HEX=not-a-real-key');
+$out = (string)shell_exec($child);
+if ($prevKey === false) { putenv('DDMGMT_AES_KEY_HEX'); } else { putenv('DDMGMT_AES_KEY_HEX=' . $prevKey); }
 T::eq('bad key: no write, log untouched, verify names the cause',
     '0|untouched|log key unavailable (AES_KEY_HEX invalid)', trim($out));
 
