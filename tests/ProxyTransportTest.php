@@ -610,6 +610,18 @@ T::eq('dispatcher covers every input', [200, 0], [$both[$connectPx][0] ?? -1, $b
 host_override(['curl' => false]);
 T::eq('no-cURL direct fetch still works', $BODY, osm_fetch_via($originBase . '/tile', null, 10));
 T::eq('no-cURL proxied fetch works', $BODY, osm_fetch_via($originBase . '/tile', $connectPx, 10));
+// DEBUG ONLY (throwaway branch): the CI-only failure leaves no trace, so
+// dump the structured result plus stub aliveness to stderr (unbuffered).
+$dbg = proxy_request_streams('GET', $originBase . '/tile', [], $socksPx, 10, 2097152, 0);
+$aliveS = @fsockopen('127.0.0.1', $socksPort, $enS, $esS, 2);
+$aliveO = @fsockopen('127.0.0.1', $originPort, $enO, $esO, 2);
+fwrite(STDERR, 'DBG613 code=' . $dbg['code'] . ' bytes=' . $dbg['bytes']
+    . ' trunc=' . ($dbg['truncated'] ? '1' : '0') . ' bodylen=' . strlen($dbg['body'])
+    . ' socksAlive=' . (is_resource($aliveS) ? 'y' : "n($enS/$esS)")
+    . ' originAlive=' . (is_resource($aliveO) ? 'y' : "n($enO/$esO)")
+    . ' sockslog=' . substr(str_replace("\n", '|', (string)@file_get_contents($socksLog)), -300) . "\n");
+if (is_resource($aliveS)) fclose($aliveS);
+if (is_resource($aliveO)) fclose($aliveO);
 T::eq('no-cURL SOCKS fetch works', $BODY, osm_fetch_via($originBase . '/tile', $socksPx, 10));
 T::ok('no-cURL routing stays honoured', osm_proxy_enabled() === (get_setting('osm_proxy_enabled', '1') === '1'));
 host_override(null, true);
