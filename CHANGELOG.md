@@ -104,6 +104,8 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   refreshed zone cannot be failed by a worker racing the test — and
   queue-dependent specs skip cleanly on hosts that cannot run downloads
   (no Linux/exec/cURL) instead of timing out on the disabled button.
+- PhotoCapTest probes for a free loopback port like MapsFetchTest instead of
+  insisting on a fixed one, so a busy CI runner cannot fail the boot.
 - Settings → Maps: queueing a zone without a name (or with the name not
   reaching the server) gave a toast naming a field that sits far above the
   button and vanished in seconds. The name is now checked in the browser: the

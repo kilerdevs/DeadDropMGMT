@@ -19,12 +19,58 @@ if (!function_exists('imagecreatetruecolor')) {
 }
 
 $root = dirname(__DIR__);
-$port = 8945;
-$cmd  = escapeshellarg(PHP_BINARY)
-      . ' -d session.save_path=' . escapeshellarg(ini_get('session.save_path'))
-      . " -S 127.0.0.1:$port -t " . escapeshellarg($root);
 $null = DIRECTORY_SEPARATOR === '\\' ? 'NUL' : '/dev/null';
-$proc = proc_open($cmd, [['pipe', 'r'], ['file', $null, 'w'], ['file', $null, 'w']], $p);
+// Fixed loopback ports collide on shared CI runners (same pattern as
+// MapsFetchTest): probe pid-based candidates and keep the first one whose
+// server actually answers healthz.
+$port = 0;
+$proc = null;
+for ($t = 0; $t < 10 && $port === 0; $t++) {
+    $cand = 8945 + ((getmypid() + $t * 131) % 200);
+    $probe = @fsockopen('127.0.0.1', $cand, $errno, $errstr, 0.2);
+    if (is_resource($probe)) {
+        fclose($probe);
+        continue; // occupied — try the next candidate
+    }
+    $cmd = escapeshellarg(PHP_BINARY)
+        . ' -d session.save_path=' . escapeshellarg(ini_get('session.save_path'))
+        . " -S 127.0.0.1:$cand -t " . escapeshellarg($root);
+    $try = proc_open($cmd, [['pipe', 'r'], ['file', $null, 'w'], ['file', $null, 'w']], $pipes);
+    if (!is_resource($try)) {
+        continue;
+    }
+    $ready = false;
+    for ($i = 0; $i < 15; $i++) {
+        try {
+            [$st] = _pc('GET', "http://127.0.0.1:$cand/healthz.php", null, '');
+            if ($st === 200) {
+                $ready = true;
+                break;
+            }
+        } catch (Throwable) {
+        }
+        usleep(200000);
+    }
+    if ($ready) {
+        $port = $cand;
+        $proc = $try;
+    } else {
+        $ps = proc_get_status($try);
+        if (!empty($ps['running'])) {
+            if (DIRECTORY_SEPARATOR === '\\') {
+                exec('taskkill /F /T /PID ' . (int)$ps['pid'] . ' >NUL 2>&1');
+            } else {
+                proc_terminate($try);
+            }
+        }
+        proc_close($try);
+    }
+}
+if (!is_resource($proc) || $port === 0) {
+    fwrite(STDERR, "PhotoCapTest: no serving port found\n");
+    T::ok('server booted', false);
+    exit(T::done());
+}
 register_shutdown_function(function () use ($proc): void {
     $st = proc_get_status($proc);
     if (!empty($st['running'])) {
@@ -83,18 +129,7 @@ function _pc(string $method, string $url, ?array $f, string $ck, ?string $raw = 
     return [$status, $body === false ? '' : $body, $sc ?: $ck, $loc];
 }
 
-$up = false;
-for ($i = 0; $i < 50; $i++) {
-    try {
-        [$st] = _pc('GET', "$B/healthz.php", null, '');
-        if ($st === 200) {
-            $up = true;
-            break;
-        }
-    } catch (Throwable) {
-    }
-    usleep(200000);
-}
+$up = $port !== 0;
 T::ok('server booted', $up);
 if (!$up) {
     exit(T::done());
