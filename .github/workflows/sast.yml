@@ -19,7 +19,7 @@ permissions:
 jobs:
   semgrep:
     name: Semgrep (php security)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     container:
       # Digest-pinned: a moving tag must not change what scans this repo.
       image: semgrep/semgrep@sha256:67319956da3dcb58baf5b322899c15458e3963e7018a86aeeb5cd224e69cb77a
