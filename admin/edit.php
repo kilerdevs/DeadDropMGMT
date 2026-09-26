@@ -258,7 +258,7 @@ $init_zoom = $has_pin ? 17 : 12;
 <?php else: ?>
 <link rel="stylesheet" href="/admin/vendor/leaflet/leaflet.css">
 <?php endif; ?>
-<link rel="stylesheet" href="/admin/style.css">
+<link rel="stylesheet" href="/admin/style.css?v=<?= admin_css_ver() ?>">
 <meta name="csrf-token" content="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
 </head>
 <body>

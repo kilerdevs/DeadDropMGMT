@@ -79,6 +79,10 @@ body.login-page {
    while hidden). */
 [hidden] { display: none !important; }
 
+/* Off-screen clipboard scratch element (admin.js copy fallback). A class,
+   not el.style: style-src has no 'unsafe-inline'. */
+.copy-scratch { position: fixed; opacity: 0; top: 0; left: 0; }
+
 /* Hidden on desktop — mobile media query overrides these */
 .sidebar-toggle,
 .sidebar-backdrop { display: none; }
@@ -430,7 +434,8 @@ button.sidebar-logout {
 }
 .log-line:first-child .log-num { color: #555; }
 
-.host-list { max-width: 680px; margin-inline: auto; margin-bottom: 40px; }
+/* Same column as the settings panel below, so the two align. */
+.host-list { max-width: 600px; margin-inline: auto; margin-bottom: 40px; }
 .host-row {
     display:        flex;
     flex-wrap:      wrap;
@@ -447,6 +452,10 @@ button.sidebar-logout {
 .host-row--limited     .host-status { color: #e0a100; }
 .host-row--unavailable .host-status { color: #f44336; }
 .host-hint   { flex-basis: 100%; color: var(--text-muted); font-size: 11px; line-height: 1.6; }
+
+/* Spacing formerly carried by style="" attributes (blocked by style-src). */
+.maps-add-group { margin-top: 18px; }
+.maps-editor-title { margin-top: 12px; }
 
 .mz-field-error {
     color:          var(--error);
@@ -676,25 +685,11 @@ input[type="range"]::-moz-range-track { height: 2px; background: var(--border); 
 
 .form-panel { border: 1px solid var(--border); padding: 36px; max-width: 680px; margin-inline: auto; }
 
-/* Viewport-centered panels: `margin-inline: auto` alone centers within
-   .main (the viewport minus the fixed 230px sidebar), so a "centered"
-   panel lands right of the true screen center. The relative offset pulls
-   it left by half the sidebar width. Relative positioning — not transform —
-   so position:fixed descendants (e.g. the settings .save-popup, appended
-   to body) stay viewport-anchored. Desktop only: on mobile the sidebar is
-   an off-canvas drawer and .main already spans the full width. Applies to
-   panels that are direct children of .main. */
-@media (min-width: 781px) {
-    .form-panel,
-    .settings-panel,
-    .totp-panel,
-    .centered-panel,
-    .panic-wrap,
-    .users-add-panel {
-        position: relative;
-        left: -115px; /* half the desktop sidebar width */
-    }
-}
+/* Panels center within .main via margin-inline: auto — the same column as
+   the version strip, the hosting list, and every other centered block, so
+   they stay aligned at every viewport width. (A former relative-offset hack
+   pulled panels 115px left toward the viewport center; it only applied to
+   some blocks and broke the column whenever the sidebar width changed.) */
 
 /* Centered panels for the settings and 2FA screens */
 .settings-panel { margin-inline: auto; }
@@ -1835,12 +1830,21 @@ tr[data-status="failed"] .mz-status { color: #f44336; }
     touch-action:        none !important;
     -webkit-user-select: none;
     user-select:         none;
+    cursor:              crosshair;
 }
 
-/* Permanent zone-name labels on the already-downloaded rectangles. */
+/* Drag handles and the draft rectangle must not start a page scroll under
+   the finger. A class, not el.style: style-src blocks inline style writes. */
+.maps-editor-map .mz-no-touch {
+    touch-action: none !important;
+}
+
+/* Permanent zone-name labels on the already-downloaded rectangles.
+   The frame takes the zone colour via the .mz-cN palette class (--zc),
+   falling back to red when no palette class is present. */
 .leaflet-tooltip.mz-zone-label {
     background:     rgba(17, 20, 24, 0.85);
-    border:         1px solid #c0392b;
+    border:         1px solid var(--zc, #c0392b);
     border-radius:  0;
     box-shadow:     none;
     color:          #eee;

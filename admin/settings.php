@@ -118,7 +118,7 @@ function s_label(array $s, string $key): string {
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <meta name="darkreader-lock">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Admin — <?= t('admin.settings.title') ?></title><link rel="stylesheet" href="/admin/style.css">
+<title>Admin — <?= t('admin.settings.title') ?></title><link rel="stylesheet" href="/admin/style.css?v=<?= admin_css_ver() ?>">
 <link rel="stylesheet" href="/admin/vendor/leaflet/leaflet.css">
 <meta name="csrf-token" content="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
 </head>
@@ -363,7 +363,7 @@ function s_label(array $s, string $key): string {
                         </tbody>
                     </table>
 
-                    <div class="form-group" style="margin-top:18px">
+                    <div class="form-group maps-add-group">
                         <div class="field-label"><?= t('admin.maps.add_title') ?></div>
                         <div class="maps-add-grid">
                             <label><?= htmlspecialchars(t('admin.maps.name_label'), ENT_QUOTES, 'UTF-8') ?>
@@ -380,7 +380,7 @@ function s_label(array $s, string $key): string {
                             <input type="hidden" id="mz-max-lon">
                             <input type="hidden" id="mz-max-lat">
                         </div>
-                        <div class="field-label" style="margin-top:12px"><?= htmlspecialchars(t('admin.maps.editor_title'), ENT_QUOTES, 'UTF-8') ?></div>
+                        <div class="field-label maps-editor-title"><?= htmlspecialchars(t('admin.maps.editor_title'), ENT_QUOTES, 'UTF-8') ?></div>
                         <div class="proxies-hint"><?= t('admin.maps.editor_hint') ?></div>
                         <div class="maps-search-row">
                             <input type="text" id="mz-search" maxlength="200" autocomplete="off"
@@ -1067,10 +1067,12 @@ function s_label(array $s, string $key): string {
                     fillColor: color, fillOpacity: ready ? 0.16 : 0.05,
                 }).addTo(mzMap);
                 if (b.name) {
-                    // The label's frame takes the zone colour once it is on the map.
+                    // The label's frame takes the zone colour once it is on the map
+                    // (palette class, not an inline style: style-src has no
+                    // 'unsafe-inline', so element.style writes are blocked).
                     r.on('tooltipopen', function (e) {
                         var el = e.tooltip.getElement();
-                        if (el) el.style.borderColor = color;
+                        if (el) el.classList.add('mz-c' + (b.id % MZ_PALETTE.length));
                     });
                     r.bindTooltip(b.name, { permanent: true, direction: 'center', className: 'mz-zone-label' });
                 }
@@ -1195,7 +1197,7 @@ function s_label(array $s, string $key): string {
                 h.mzCorner = pair[0];
                 var el = h.getElement();
                 if (el) {
-                    el.style.touchAction = 'none';
+                    el.classList.add('mz-no-touch');
                     el.addEventListener('pointerdown', function (e) {
                         if (mzDrawing || !mzDraft || !mzPrimary(e)) return;
                         e.preventDefault();
@@ -1222,7 +1224,7 @@ function s_label(array $s, string $key): string {
             mzAddHandles();
             var body = mzDraft.getElement();
             if (body) {
-                body.style.touchAction = 'none';
+                body.classList.add('mz-no-touch');
                 // Move the whole rectangle; corners have their own handlers.
                 body.addEventListener('pointerdown', function (e) {
                     if (mzDrawing || !mzDraft || !mzPrimary(e)) return;
@@ -1248,9 +1250,10 @@ function s_label(array $s, string $key): string {
                 mzDrawBtn.textContent = on ? I.mz_drawing : I.mz_draw;
                 mzDrawBtn.classList.toggle('action-btn--active', on);
             }
-            mzMapEl.style.cursor = on ? 'crosshair' : '';
             // Draw mode owns the gesture: no panning, and touch-action off so
             // the browser does not scroll the page under the finger.
+            // (Cursor lives in .maps-editor-map.mz-drawing: style-src blocks
+            // element.style writes, so it cannot be set from JS.)
             mzMapEl.classList.toggle('mz-drawing', on);
             if (on) mzMap.dragging.disable(); else mzMap.dragging.enable();
         }

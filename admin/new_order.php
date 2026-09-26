@@ -23,7 +23,7 @@ $csrf = generate_csrf();
 <?php else: ?>
 <link rel="stylesheet" href="/admin/vendor/leaflet/leaflet.css">
 <?php endif; ?>
-<link rel="stylesheet" href="/admin/style.css">
+<link rel="stylesheet" href="/admin/style.css?v=<?= admin_css_ver() ?>">
 </head>
 <body>
 <div class="shell">

@@ -79,3 +79,13 @@ function build_info(): array {
     }
     return $info;
 }
+
+/**
+ * Cache-buster for the admin stylesheet: its mtime, so a deploy (or any
+ * edit) changes the <link> URL and browsers fetch the new CSS instead of
+ * serving a stale cached copy.
+ */
+function admin_css_ver(): int {
+    $t = @filemtime(dirname(__DIR__) . '/admin/style.css');
+    return $t === false ? 0 : (int)$t;
+}

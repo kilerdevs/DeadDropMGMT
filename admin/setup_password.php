@@ -125,7 +125,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <meta name="darkreader-lock">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Admin — <?= t('admin.setup.title') ?></title><link rel="stylesheet" href="/admin/style.css">
+<title>Admin — <?= t('admin.setup.title') ?></title><link rel="stylesheet" href="/admin/style.css?v=<?= admin_css_ver() ?>">
 </head>
 <body class="login-page">
 <div class="login-wrap">

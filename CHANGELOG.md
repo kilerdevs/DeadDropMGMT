@@ -146,6 +146,16 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   validation error.
 - `receive.php` parsed `step` with an `(int)` cast, so `step[]=x` or `1abc`
   counted as step 1. Only the literal `1` and `2` are steps now.
+- The admin console no longer reports `style-src` CSP violations: the last
+  inline `style=""` attributes and every `element.style` write (copy-button
+  scratch element, mobile menu toggle, zone-label colours, editor touch and
+  cursor handling) are stylesheet classes now, so the fail-closed policy is
+  satisfiable on every page.
+- Settings is one aligned column again: the panel no longer sits 115px left
+  of the version line (a viewport-centering offset that applied to some
+  blocks but not others), the hosting list is the same width as the settings
+  panel, and the version line is a single centered row. The admin stylesheet
+  link carries its mtime, so a deploy is visible without a hard refresh.
 
 ### Security
 - Order tokens are no longer stored in the clear (ADR-019). Lookups go through
