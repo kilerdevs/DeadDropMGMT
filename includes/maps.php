@@ -1373,6 +1373,11 @@ function maps_downloads_supported(): bool {
 // Detached kick after queueing (Linux + exec only): the worker then runs
 // without holding any request. False = admin waits for system cron.
 function maps_kick_worker(): bool {
+    // Internal switch, not admin UI: the e2e seed turns the detached kick
+    // off so browser specs own the queue — no worker may race them.
+    if (get_setting('maps_worker_kick', '1') !== '1') {
+        return false;
+    }
     if (!host_can_detach()) {
         return false;
     }

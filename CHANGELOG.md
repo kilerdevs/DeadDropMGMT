@@ -95,6 +95,15 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   ADR-006/016/019 describe the changes above.
 
 ### Fixed
+- Map zone downloads no longer decide on stale file ages: the orphan sweep
+  reads mtimes from disk instead of the process stat cache, so a steward that
+  listed the tiles earlier cannot keep orphans forever — or mistake a live
+  download for an aged file.
+- The browser specs own the map queue deterministically again: the detached
+  worker kick honours a `maps_worker_kick` switch (off in the e2e seed), so a
+  refreshed zone cannot be failed by a worker racing the test — and
+  queue-dependent specs skip cleanly on hosts that cannot run downloads
+  (no Linux/exec/cURL) instead of timing out on the disabled button.
 - Settings → Maps: queueing a zone without a name (or with the name not
   reaching the server) gave a toast naming a field that sits far above the
   button and vanished in seconds. The name is now checked in the browser: the

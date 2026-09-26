@@ -1,10 +1,11 @@
 // Maps zone editor (Phase 3): draw-on-canvas fills the bbox inputs, typed
 // bboxes redraw the draft, overlapping drafts warn, and queueing flows into
 // the zone table. Hermetic: tile traffic is aborted (Leaflet draws fine on
-// an empty grid) and queued zones are deleted again, so no worker can do
-// real work — the kick races a delete it always loses on a fresh queue.
+// an empty grid), the seed disables the detached kick so no worker can do
+// real work, and queued zones are deleted again. Queueing specs need a host
+// that can run downloads (Linux + exec + cURL) and skip elsewhere.
 const { test, expect } = require('@playwright/test');
-const { freshPage, closePage, setZoneBbox } = require('../helpers');
+const { freshPage, closePage, setZoneBbox, zonesSupported } = require('../helpers');
 
 async function login(page) {
   await page.goto('/admin/index.php');
@@ -87,6 +88,7 @@ test('bbox fields are not shown; Clear resets what a draw left behind', async ({
   const page = await freshPage(browser);
   try {
     await openEditor(page);
+    if (!(await zonesSupported(page))) test.skip(true, 'zone downloads need Linux + exec + cURL');
     for (const id of ['#mz-min-lon', '#mz-min-lat', '#mz-max-lon', '#mz-max-lat']) {
       await expect(page.locator(id)).toBeHidden();
     }
@@ -114,6 +116,7 @@ test('typed bbox redraws the draft and queueing lists the zone', async ({ browse
   const name = 'E2E Editor Typed';
   try {
     await openEditor(page);
+    if (!(await zonesSupported(page))) test.skip(true, 'zone downloads need Linux + exec + cURL');
     await page.locator('#mz-name').fill(name);
     // Setting the bbox and firing change redraws the draft rectangle.
     await setZoneBbox(page, '20.95', '52.10', '21.05', '52.20');
@@ -133,6 +136,7 @@ test('overlapping draft shows the warning', async ({ browser }) => {
   const name = 'E2E Editor Base';
   try {
     await openEditor(page);
+    if (!(await zonesSupported(page))) test.skip(true, 'zone downloads need Linux + exec + cURL');
     // Seed an existing zone through the real queue path (tiny bbox).
     await page.locator('#mz-name').fill(name);
     await setZoneBbox(page, '20.90', '52.10', '21.10', '52.30');

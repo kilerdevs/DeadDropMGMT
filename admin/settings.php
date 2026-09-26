@@ -319,7 +319,7 @@ function s_label(array $s, string $key): string {
                     <div class="proxies-hint"><?= t('admin.maps.zones_hint') ?></div>
                     <?php $zones_ok = maps_downloads_supported(); ?>
                     <?php if (!$zones_ok): ?>
-                    <div class="settings-warning"><?= t('admin.maps.flash.unsupported') ?></div>
+                    <div class="settings-warning" id="maps-unsupported"><?= t('admin.maps.flash.unsupported') ?></div>
                     <?php endif; ?>
                     <div class="maps-disk" id="maps-disk">
                         <?= htmlspecialchars(t('admin.maps.disk_free', ['x' => maps_fmt_bytes(maps_disk_free())]), ENT_QUOTES, 'UTF-8') ?>

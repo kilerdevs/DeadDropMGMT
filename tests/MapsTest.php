@@ -257,6 +257,11 @@ foreach (maps_zone_list() as $z) {
 T::eq('stale job failed', 'failed', $stale['status'] ?? null);
 T::eq('stale reason coded', 'code:stalled', $stale['error'] ?? null);
 
+// The detached kick is an internal switch (the e2e seed turns it off so no
+// worker races the browser specs): off answers false without detaching.
+set_setting('maps_worker_kick', '0');
+T::ok('kick stays down when switched off', maps_kick_worker() === false);
+
 // Full pipeline against a stub CLI (no network, no real binary): sizing →
 // extract with live progress → verify → atomic publish → ready.
 set_setting('maps_build_key', '20260918');
@@ -346,7 +351,7 @@ $pxIns = $db->prepare(
 foreach ($prevProxies as $px) {
     $pxIns->execute([$px['url'], $px['source'], $px['last_status'], $px['latency_ms'], $px['last_checked']]);
 }
-foreach (['maps_build_key', 'maps_build_at'] as $k) {
+foreach (['maps_build_key', 'maps_build_at', 'maps_worker_kick'] as $k) {
     if (!array_key_exists($k, $prevSettings)) {
         $db->prepare('DELETE FROM settings WHERE key_name = ?')->execute([$k]);
     }

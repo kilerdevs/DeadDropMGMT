@@ -31,4 +31,12 @@ async function setZoneBbox(page, minLon, minLat, maxLon, maxLat, { fireChange = 
   }, [minLon, minLat, maxLon, maxLat, fireChange]);
 }
 
-module.exports = { freshPage, closePage, unlockForm, setZoneBbox };
+// Zone downloads need Linux + exec + cURL (maps_downloads_supported): on
+// hosts without them the queue button renders disabled and the actions
+// refuse, so queue-dependent specs skip instead of timing out on the
+// disabled control.
+async function zonesSupported(page) {
+  return (await page.locator('#maps-unsupported').count()) === 0;
+}
+
+module.exports = { freshPage, closePage, unlockForm, setZoneBbox, zonesSupported };

@@ -27,6 +27,10 @@ set_setting('rate_limit_max', '1000');
 // Routing is on by default and would start real proxy discovery on the first
 // request; the browser specs must stay hermetic (no third-party traffic).
 set_setting('osm_proxy_enabled', '0');
+// The queueing actions kick a detached worker where the host allows it; in
+// e2e that worker would race the specs (a refreshed zone must stay queued).
+// Off here keeps the queue owned by the specs alone.
+set_setting('maps_worker_kick', '0');
 set_setting('rate_limit_window_min', '60');
 set_setting('default_lang', 'en');
 
