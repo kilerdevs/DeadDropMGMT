@@ -1,6 +1,6 @@
 // Maps zone management (Phase 2): section rendering, route-consent default,
 // and server-side bbox validation. Queueing specs need a host that can run
-// downloads (Linux + exec + cURL) and skip elsewhere; the detached kick is
+// downloads (outbound HTTPS) and skip elsewhere; the detached kick is
 // off in e2e, so no worker can ever fire and the run stays hermetic.
 const { test, expect } = require('@playwright/test');
 const { freshPage, closePage, setZoneBbox, zonesSupported } = require('../helpers');
@@ -35,7 +35,7 @@ test('queueing with nothing drawn asks to draw on the map', async ({ browser }) 
   try {
     await login(page);
     await page.goto('/admin/settings.php');
-    if (!(await zonesSupported(page))) test.skip(true, 'zone downloads need Linux + exec + cURL');
+    if (!(await zonesSupported(page))) test.skip(true, 'zone downloads need outbound HTTPS');
     await page.locator('#mz-name').fill('E2E Undrawn Zone');
     await page.locator('#mz-add').click();
     const popup = page.locator('#save-popup.visible.error');
@@ -52,7 +52,7 @@ test('a drawn zone without a name marks the name field instead of sending', asyn
   try {
     await login(page);
     await page.goto('/admin/settings.php');
-    if (!(await zonesSupported(page))) test.skip(true, 'zone downloads need Linux + exec + cURL');
+    if (!(await zonesSupported(page))) test.skip(true, 'zone downloads need outbound HTTPS');
     await setZoneBbox(page, '20.95', '52.20', '21.05', '52.26');
     await page.locator('#mz-add').click();
     // The field sits far above the button: it must be flagged, explained and focused.
@@ -74,7 +74,7 @@ test('non-numeric bbox is rejected with an error popup', async ({ browser }) => 
   try {
     await login(page);
     await page.goto('/admin/settings.php');
-    if (!(await zonesSupported(page))) test.skip(true, 'zone downloads need Linux + exec + cURL');
+    if (!(await zonesSupported(page))) test.skip(true, 'zone downloads need outbound HTTPS');
     await page.locator('#mz-name').fill('E2E Bad Zone');
     await setZoneBbox(page, 'not-a-number', '52.05', '21.30', '52.40', { fireChange: false });
     await page.locator('#mz-add').click();
@@ -94,7 +94,7 @@ test('stale ready zone offers refresh and re-queues on click', async ({ browser 
   try {
     await login(page);
     await page.goto('/admin/settings.php');
-    if (!(await zonesSupported(page))) test.skip(true, 'zone downloads need Linux + exec + cURL');
+    if (!(await zonesSupported(page))) test.skip(true, 'zone downloads need outbound HTTPS');
     // Seeded ready zone with an older build than the cached planet build.
     const row = page.locator('#maps-table tbody tr', { hasText: 'E2E Reveal Zone' });
     await expect(row).toBeVisible();

@@ -183,8 +183,9 @@ maintenance sweep, writable folders, zone downloads) and what each missing piece
   Settings — turn it back on to retry, or leave it off to fetch OSM directly.
 - **"Routing switched off automatically" in Settings:** discovery found nothing three times in a row (outbound
   connections blocked, or the public lists unreachable from this host). OSM requests now go direct from the server.
-- **"Zone downloads are not available on this host":** they need `proc_open`, Linux and cURL, and a cron job (or
-  exec + CLI PHP) to run `cron/maps_sync.php`. The default OpenStreetMap provider works without any of it.
+- **"Zone downloads are not available on this host":** the pure-PHP engine needs nothing but outbound HTTPS
+  (the faster `pmtiles` CLI path needs `proc_open` + Linux), so this now only appears when outbound HTTPS
+  itself is unreachable or `data/` is not writable. The default OpenStreetMap provider works without any of it.
 - **Nothing is ever swept:** the pseudo-cron needs page visits; **Settings → Hosting → Scheduled maintenance** shows the
   last sweep. On a very quiet site add a cron job for `php cron/cleanup.php` (hourly).
 - **Writable folders "unavailable":** `chmod` `logs/ uploads/ cache/ data/ tiles/` so PHP can write (755 or 775 by FTP).

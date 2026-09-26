@@ -53,14 +53,23 @@ T::ok('the environment wins over the constant', host_flag('DDMGMT_T_CONST_OFF', 
 putenv('DDMGMT_T_CONST_OFF');
 
 // ── a host with no exec, no CLI PHP ───────────────────────────────────────────
+// Downloads no longer need the CLI triplet: the pure-PHP engine covers them
+// wherever outbound HTTPS exists (cURL is on in this fixture).
 host_override($noHost);
 T::ok('no exec/CLI: cannot detach', host_can_detach() === false);
-T::ok('no exec/CLI: zone downloads unsupported', maps_downloads_supported() === false);
+T::eq('no exec/CLI: PHP engine dispatches', 'php', maps_engine());
+T::ok('no exec/CLI: zone downloads supported', maps_downloads_supported() === true);
 $caps = array_column(host_capabilities(), 'status', 'id');
 T::eq('capabilities: exec unavailable', 'unavailable', $caps['exec']);
 T::eq('capabilities: jobs limited (they run inline)', 'limited', $caps['jobs']);
-T::eq('capabilities: zone downloads unavailable', 'unavailable', $caps['zones']);
+T::eq('capabilities: zone downloads ok via PHP engine', 'ok', $caps['zones']);
 T::eq('capabilities: cURL still fine', 'ok', $caps['curl']);
+// Engine off refuses everywhere, like the old no-triplet gate.
+putenv('DDMGMT_MAPS_ENGINE=off');
+T::ok('engine off: zone downloads unsupported', maps_downloads_supported() === false);
+$caps = array_column(host_capabilities(), 'status', 'id');
+T::eq('capabilities: zone downloads unavailable', 'unavailable', $caps['zones']);
+putenv('DDMGMT_MAPS_ENGINE');
 T::ok('every capability row has an id, a valid status and a note',
       count(host_capabilities()) === 6
       && array_reduce(host_capabilities(), static fn(bool $c, array $r): bool => $c
@@ -72,11 +81,13 @@ host_override(['linux' => false]);
 T::ok('not Linux: cannot detach', host_can_detach() === false);
 host_override(null, true);
 
-// ── no cURL: proxy routing cannot be honoured, so it is not applied ──────────
+// ── no cURL: proxy routing is honoured anyway, via the built-in engine ──────
 $reset();
 set_setting('osm_proxy_enabled', '1');
 host_override(['curl' => false]);
-T::ok('no cURL: routing is not applied (OSM requests go direct, not fail closed)', osm_proxy_enabled() === false);
+T::ok('no cURL: the routing setting still applies', osm_proxy_enabled() === true);
+$caps = array_column(host_capabilities(), 'status', 'id');
+T::eq('no cURL: capability row is limited, not unavailable', 'limited', $caps['curl']);
 host_override(['curl' => true]);
 T::ok('with cURL the same setting applies', osm_proxy_enabled() === true);
 host_override(null, true);
@@ -147,8 +158,8 @@ $act = (string)file_get_contents($root . '/admin/maps_action.php');
 T::eq('zone add/retry/refresh are all refused on an unsupported host', 3, substr_count($act, 'maps_downloads_supported()'));
 $set = (string)file_get_contents($root . '/admin/settings.php');
 T::ok('Settings lists the host capabilities', str_contains($set, 'host_capabilities()') && str_contains($set, 'host-list'));
-T::ok('Settings warns about missing cURL and about the automatic switch-off',
-      str_contains($set, 'admin.proxies.no_curl') && str_contains($set, 'admin.proxies.auto_off'));
+T::ok('Settings warns about the automatic switch-off, never about missing cURL',
+      !str_contains($set, 'admin.proxies.no_curl') && str_contains($set, 'admin.proxies.auto_off'));
 T::ok('the zone Queue button is disabled where downloads cannot work', str_contains($set, "\$zones_ok ? '' : ' disabled'"));
 $sav = (string)file_get_contents($root . '/admin/actions/save_setting.php');
 T::ok('re-enabling routing clears the auto-off notice', str_contains($sav, 'osm_proxy_auto_off_clear()'));

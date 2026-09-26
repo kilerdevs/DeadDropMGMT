@@ -33,7 +33,7 @@ foreach (glob($root . '/includes/*.php') as $f) {
     }
     $services[] = strtolower(str_replace('\\', '/', (string)realpath($f)));
 }
-T::ok('service files found', count($services) === 17);
+T::ok('service files found', count($services) === 18);
 foreach ($services as $s) {
     T::ok('kernel loads ' . basename($s), isset($loaded[$s]));
 }
@@ -53,6 +53,7 @@ foreach ([
     'analytics'   => 'log_event',
     'order_state' => 'order_delete_atomic',
     'proxy'       => 'osm_proxy_pool',
+    'pmtiles'     => 'pmtiles_tile_id',
     'maps'        => 'map_provider',
     'cleanup'     => 'run_cleanup_if_due',
     'wipe'        => 'do_panic_wipe',

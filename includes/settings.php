@@ -121,11 +121,11 @@ function compliance_note_enabled(): bool {
 // healer (includes/proxy.php) discovers a first pool automatically on the
 // first run — until it has, OSM-backed maps answer 502 rather than leak.
 //
-// Routing needs cURL (proxies cannot be reached without it). On a host without
-// it the setting cannot be honoured, so it is not applied and OSM requests go
-// direct — Settings says so — instead of failing every map view closed.
+// Routing works with or without cURL now (the pure-PHP transport speaks
+// every proxy scheme); the setting is honoured wherever outbound HTTPS
+// exists. An empty pool still fails closed — see osm_fetch().
 function osm_proxy_enabled(): bool {
-    return get_setting('osm_proxy_enabled', '1') === '1' && host_has_curl();
+    return get_setting('osm_proxy_enabled', '1') === '1';
 }
 
 function extend_hours_options(): array {

@@ -10,10 +10,12 @@ declare(strict_types=1);
 //   no cron            → the pseudo-cron runs the hourly maintenance from page
 //                        visits (includes/cleanup.php)
 //   no exec / CLI      → background jobs (proxy healer) run inline after the
-//                        response, under a time budget; map-zone downloads,
-//                        which cannot, are refused with a clear message
-//   no cURL            → proxy routing cannot work, so it is not applied and
-//                        OSM requests go direct (Settings says so)
+//                        response, under a time budget; map-zone downloads run
+//                        on the pure-PHP engine instead (inline + poll slices)
+//   no cURL            → proxy routing uses the built-in socket engine and
+//                        pool probing runs sequentially instead of parallel
+//                        (Settings says so); map downloads ride the same
+//                        engine, including the one-time CLI fetch
 //   no env variables   → every DDMGMT_* switch can also be a constant in
 //                        config.php (host_flag)
 //
@@ -130,7 +132,7 @@ function host_capabilities(): array {
     $root = dirname(__DIR__);
     $rows = [];
 
-    $rows[] = ['id' => 'curl', 'status' => host_has_curl() ? 'ok' : 'unavailable', 'note' => ''];
+    $rows[] = ['id' => 'curl', 'status' => host_has_curl() ? 'ok' : 'limited', 'note' => ''];
     $rows[] = ['id' => 'exec', 'status' => (host_can_exec() && host_can_proc_open()) ? 'ok' : 'unavailable', 'note' => ''];
     $rows[] = ['id' => 'jobs', 'status' => host_can_detach() ? 'ok' : 'limited', 'note' => ''];
 

@@ -268,9 +268,7 @@ function s_label(array $s, string $key): string {
                     <?php if ($pxOn && !$proxy_pool): ?>
                     <div class="settings-warning"><?= t('admin.proxies.enabled_empty') ?></div>
                     <?php endif; ?>
-                    <?php if (!host_has_curl()): ?>
-                    <div class="settings-warning"><?= t('admin.proxies.no_curl') ?></div>
-                    <?php elseif (!$pxOn && osm_proxy_auto_off_state() !== null): ?>
+                    <?php if (!$pxOn && osm_proxy_auto_off_state() !== null): ?>
                     <div class="settings-warning"><?= t('admin.proxies.auto_off') ?></div>
                     <?php endif; ?>
 
@@ -409,7 +407,7 @@ function s_label(array $s, string $key): string {
 
         <!-- ── Hosting capabilities ─────────────────────────────────────── -->
         <div class="divider"></div>
-        <div class="section-label"><?= t('admin.host.section') ?></div>
+        <div class="section-label host-section-label"><?= t('admin.host.section') ?></div>
         <div class="host-list" id="host-list">
             <?php foreach (host_capabilities() as $c): ?>
             <?php

@@ -40,6 +40,7 @@ foreach ([
     'analytics',
     'order_state',
     'proxy',
+    'pmtiles',
     'maps',
     'cleanup',
     'wipe',

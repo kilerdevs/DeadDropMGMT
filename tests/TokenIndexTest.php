@@ -129,11 +129,13 @@ $addLegacy = static function () use ($db): void {
         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '$t' AND COLUMN_NAME = 'order_token'")->fetchColumn() > 0;
     if (!$has('orders')) {
         $db->exec('DELETE FROM orders');
-        $db->exec('ALTER TABLE orders ADD COLUMN order_token CHAR(16) NOT NULL, ADD UNIQUE KEY order_token (order_token), ADD INDEX idx_token (order_token)');
+        // ALGORITHM=INPLACE: MariaDB 10.4's instant ADD path mis-reports a
+        // 1118 row-size error on these tables (COPY/INPLACE succeed).
+        $db->exec('ALTER TABLE orders ADD COLUMN order_token CHAR(16) NOT NULL, ADD UNIQUE KEY order_token (order_token), ADD INDEX idx_token (order_token), ALGORITHM=INPLACE');
     }
     foreach (['order_events', 'audit_log'] as $t) {
         if (!$has($t)) {
-            $db->exec("ALTER TABLE $t ADD COLUMN order_token CHAR(16) DEFAULT NULL");
+            $db->exec("ALTER TABLE $t ADD COLUMN order_token CHAR(16) DEFAULT NULL, ALGORITHM=INPLACE");
         }
     }
     // The documented upgrade order: load setup.sql first. It must relax the
@@ -145,7 +147,11 @@ $dropLegacy = static function () use ($db): void {
         $has = (int)$db->query("SELECT COUNT(*) FROM information_schema.COLUMNS
             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '$t' AND COLUMN_NAME = 'order_token'")->fetchColumn();
         if ($has > 0) {
-            $db->exec("ALTER TABLE $t DROP COLUMN order_token");
+            // ALGORITHM=COPY: the default path refuses this rebuild on some
+            // MariaDB builds with a bogus 1118 row-size error, which would
+            // make a stranded column unrecoverable — exactly what this
+            // cleanup exists to heal.
+            $db->exec("ALTER TABLE $t DROP COLUMN order_token, ALGORITHM=COPY");
         }
     }
 };

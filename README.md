@@ -447,8 +447,9 @@ page, not in files.
 
 ## Requirements
 
-- **PHP 8.2+** with `pdo_mysql`, `openssl`, `mbstring` and `gd` (JPEG, PNG and WebP support). `curl` is needed for the
-  optional proxy pool and auto-discovery
+- **PHP 8.2+** with `pdo_mysql`, `openssl`, `mbstring` and `gd` (JPEG, PNG and WebP support). The `curl`
+  extension is optional: without it the proxy pool and map downloads use the built-in socket engine (pool
+  probing just runs sequentially instead of in parallel)
 - **MySQL 5.7+ or MariaDB 10.3+** (CI-tested: MariaDB 11 and MySQL 8.0)
 - **Apache 2.4+** with `mod_rewrite`, `mod_headers` — or nginx / Caddy (Docker stacks; manual installs must replicate every
   deny block, see [Setup §3](#3-web-server))
@@ -471,14 +472,14 @@ locked-down `php.ini`. Everything that would normally lean on Docker, cron or pr
 |---|---|---|
 | Orders, admin panel, encrypted locations, photos, 2FA, 8 languages | PHP + MySQL | Works fully |
 | Expiry sweep, log checkpoints, cache and record pruning | cron | **Pseudo-cron**: any PHP page visit (public, admin or a JSON poll) runs the hourly pass *after* the response has been sent. Recipients never see an expired order anyway — the sweep only removes rows. On a very quiet site add a cron job for `cron/cleanup.php` if you can |
-| OpenStreetMap maps through the proxy pool | cURL | Without cURL routing cannot work, so it is not applied and OSM requests go direct from the server (Settings says so) |
+| OpenStreetMap maps through the proxy pool | PHP sockets + `openssl` (`curl` only parallelises pool probing) | Works fully; without `curl` the pool is probed sequentially and Settings → Hosting shows `curl: limited` |
 | Proxy pool upkeep (first-run discovery, replacing failed proxies) | exec + CLI PHP for a detached job | Runs **inline after the response** in a time-budgeted pass (~22 s, a smaller sample) instead. If a host can never find a working proxy — outbound connections blocked, every list unreachable — routing is **switched off automatically after 3 empty attempts**, with an audit entry, a log warning and a notice in Settings, so maps do not stay dead; turn the toggle on to retry |
-| Self-hosted map zone **downloads** | `proc_open`, Linux, cURL, and cron or exec + CLI PHP | Unavailable: the Queue button is disabled and the request refused with a clear message. The default OpenStreetMap provider does not need any of it |
+| Self-hosted map zone **downloads** | nothing extra (pure-PHP engine: the queue POST and the progress polls carry the download, no cron, no detach) — the faster `pmtiles` CLI path needs `proc_open` + Linux | Downloads work wherever outbound HTTPS exists. The default OpenStreetMap provider does not need any of it |
 | Version line in Settings | a Docker build arg | Run `tools/build_info.sh --write` on a checkout to produce `build-info.json`, or it shows "unknown build" |
 
 **Set-up without a shell**
 
-1. **PHP 8.2 or newer** with `pdo_mysql`, `openssl`, `mbstring`, `gd` (and `curl` if you want the proxy pool). Many free
+1. **PHP 8.2 or newer** with `pdo_mysql`, `openssl`, `mbstring` and `gd`. Many free
    hosts still offer 8.1 or older — check the control panel first; the app will not run there.
 2. Give the app **its own (sub)domain** — it cannot live under `/drop/` (see [Requirements](#requirements)). Free hosts hand out subdomains.
 3. Upload the files (FTP), create a database and import `setup.sql` with phpMyAdmin (it is idempotent — re-import it after upgrades).
@@ -704,7 +705,7 @@ The suite never touches your real database: `tests/bootstrap.php` forces `DDMGMT
 | Uploads | `UploadHardeningTest`, `PhotoCapTest` |
 | Logging | `LoggerTest` — hash chain, continuity checkpoints, unusable-key behaviour |
 | Maps & proxy | `MapsTest`, `MapsFetchTest` (zone tokens, CLI pins, worker lock, orphan sweep), `ProxyTest` (anonymity gate, tile cache), `ProxyClientTest` (response size ceilings), `ProxyHealTest` (failed-proxy replacement: confirm, replace-never-just-delete, manual entries exempt, lock, cooldown) |
-| Structure & guards | `KernelTest` (service manifest, CLI-only guards, web-server denies), `AdminMobileTest` (phone layout contract: menu button, OSM badge rules, touch zone editor), `VersionTest` (release vs beta build line, owners only), `PseudoCronTest` (any page starts the hourly sweep, healthz doesn't, the env switch), `LogViewerTest` (Settings lists the structured log that Verify integrity checks), `ArrayInputTest` (every entry point is sent every parameter name as an array — no crash, no TypeError in the logs), `HostTest` (shared-hosting degradations: config-constant switches, no exec / CLI / cURL, inline proxy upkeep, automatic routing switch-off, zone-download gating), `DispatchTest` (the thin admin dispatcher contract), `FailClosedTest` (every guard, limiter, wipe and decrypt path, plus the DB TLS option matrix) |
+| Structure & guards | `KernelTest` (service manifest, CLI-only guards, web-server denies), `AdminMobileTest` (phone layout contract: menu button, OSM badge rules, touch zone editor), `VersionTest` (release vs beta build line, owners only), `PseudoCronTest` (any page starts the hourly sweep, healthz doesn't, the env switch), `LogViewerTest` (Settings lists the structured log that Verify integrity checks), `ArrayInputTest` (every entry point is sent every parameter name as an array — no crash, no TypeError in the logs), `HostTest` (shared-hosting degradations: config-constant switches, no exec / CLI / cURL, curl-less proxy routing with sequential pool probing, inline proxy upkeep, automatic routing switch-off, pure-PHP zone downloads), `ProxyTransportTest` (proxy framing units plus loopback CONNECT/SOCKS stubs and live-TLS proofs through both tunnel types), `DispatchTest` (the thin admin dispatcher contract), `FailClosedTest` (every guard, limiter, wipe and decrypt path, plus the DB TLS option matrix) |
 
 </details>
 

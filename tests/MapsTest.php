@@ -263,7 +263,10 @@ set_setting('maps_worker_kick', '0');
 T::ok('kick stays down when switched off', maps_kick_worker() === false);
 
 // Full pipeline against a stub CLI (no network, no real binary): sizing →
-// extract with live progress → verify → atomic publish → ready.
+// extract with live progress → verify → atomic publish → ready. The CLI
+// engine is forced: elsewhere the PHP engine would dispatch instead (its own
+// hermetic suite is MapsPhpTest).
+putenv('DDMGMT_MAPS_ENGINE=cli');
 set_setting('maps_build_key', '20260918');
 set_setting('maps_build_at', (string)time());
 $seenEnv = null;
@@ -343,6 +346,7 @@ foreach ([$pid, $qid, $fid, $sid] as $cid) {
     $db->prepare('DELETE FROM map_zones WHERE id = ?')->execute([$cid]);
 }
 maps_cli_runner(null, true);
+putenv('DDMGMT_MAPS_ENGINE');
 $db->prepare('DELETE FROM osm_proxies')->execute();
 $pxIns = $db->prepare(
     'INSERT INTO osm_proxies (url, source, last_status, latency_ms, last_checked)

@@ -436,6 +436,11 @@ button.sidebar-logout {
 
 /* Same column as the settings panel below, so the two align. */
 .host-list { max-width: 600px; margin-inline: auto; margin-bottom: 40px; }
+/* The hosting label heads the centered list above, so it sits in the same
+   column (text stays left-aligned, meeting the rows' left edge). Other
+   .section-label users (analytics, orders, log viewer) head full-width
+   content and keep the full-width label. */
+.host-section-label { max-width: 600px; margin-inline: auto; }
 .host-row {
     display:        flex;
     flex-wrap:      wrap;
@@ -690,6 +695,24 @@ input[type="range"]::-moz-range-track { height: 2px; background: var(--border); 
    they stay aligned at every viewport width. (A former relative-offset hack
    pulled panels 115px left toward the viewport center; it only applied to
    some blocks and broke the column whenever the sidebar width changed.) */
+
+/* ── Viewport-centered settings column ─────────────────────────────────── */
+/* Windows-app behaviour: the settings column sits on the true screen center,
+   not just in the area right of the sidebar. Every centered block carries the
+   same relative nudge — half the 230px sidebar — so the column moves as one
+   and stays aligned with itself. The nudge self-limits to the free side
+   margin, so narrow windows never push the column under the sidebar. At phone
+   widths the sidebar is a drawer and .main already is the viewport, hence the
+   breakpoint (it mirrors the sidebar's own 781px media query). */
+@media (min-width: 781px) {
+    .version-strip,
+    .settings-panel,
+    .host-section-label,
+    .host-list {
+        position: relative;
+        left: calc(-1 * min(115px, max(0px, (100% - 600px) / 2)));
+    }
+}
 
 /* Centered panels for the settings and 2FA screens */
 .settings-panel { margin-inline: auto; }

@@ -9,6 +9,22 @@ All notable changes to DeadDropMGMT are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Map zone downloads no longer need process execution, cURL or Linux: a
+  pure-PHP engine (PMTiles reader/writer over the server's own HTTP
+  transport) extracts zones wherever outbound HTTPS exists. The go-pmtiles
+  binary stays the engine where the full triplet is present; elsewhere the
+  queue POST finishes small zones inline and every progress poll donates a
+  resumable slice, so downloads complete with no cron, no detach and no
+  hanging request. `DDMGMT_MAPS_ENGINE` pins `cli`/`php`/`off` for tests.
+- The OSM proxy path no longer needs cURL either: direct, forward-proxy,
+  CONNECT and SOCKS4/4a/5(h) requests, redirect following, chunked bodies and
+  the multi-proxy prober all run on plain PHP streams, so routing, discovery,
+  healing and zone downloads stay up on hosts whose PHP lacks the curl
+  extension (fail-closed as before; pool probing just runs sequentially).
+  Covered by a new `ProxyTransportTest` (framing units, loopback CONNECT/SOCKS
+  stubs, live-TLS proofs through both tunnel types).
+
 ### Changed
 - Settings → Maps: **every zone has its own colour**, on the OSM zone map and
   as a swatch in the zone list, so a rectangle can be matched to its row at a
@@ -47,12 +63,14 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   (`includes/host.php`) is consulted by everything that used to assume them:
   the proxy pool upkeep runs **inline after the response** in a time-budgeted
   pass when no detached job can be started; discovery fetches its lists and the
-  public-IP probe through cURL, so `allow_url_fopen` is not required; a host
-  that can never find a working proxy has routing **switched off
-  automatically after three empty discoveries** (audit + warning + Settings
-  notice) instead of staying wedged fail-closed; without cURL routing is not
-  applied and OSM requests go direct; map-zone **downloads** (which genuinely
-  need `proc_open`, Linux and cURL) are refused up front with a clear message
+  public-IP probe through the built-in socket engine, so neither cURL nor
+  `allow_url_fopen` is required; a host that can never find a working proxy
+  has routing **switched off automatically after three empty discoveries**
+  (audit + warning + Settings notice) instead of staying wedged fail-closed;
+  without cURL routing still applies and OSM requests still go through the
+  pool — only pool probing runs sequentially; map-zone **downloads** (which
+  genuinely need `proc_open` and Linux for the CLI fast path, and otherwise
+  ride the pure-PHP engine) are refused up front with a clear message
   and a disabled Queue button. `DDMGMT_PSEUDO_CRON` / `DDMGMT_PROXY_HEAL` can be
   `define()`d in `config.php`. **Settings → Hosting** lists what the host
   allows and what each gap costs. A non-Docker install gets its version line
