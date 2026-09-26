@@ -430,7 +430,7 @@ button.sidebar-logout {
 }
 .log-line:first-child .log-num { color: #555; }
 
-.host-list { margin-bottom: 40px; }
+.host-list { max-width: 680px; margin-inline: auto; margin-bottom: 40px; }
 .host-row {
     display:        flex;
     flex-wrap:      wrap;
