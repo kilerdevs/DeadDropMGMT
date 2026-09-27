@@ -140,6 +140,9 @@ file_put_contents($stub . '/proxifly.json', json_encode([
 ]));
 file_put_contents($stub . '/plain.txt', "127.0.0.1:8080\nnot-a-proxy\n");
 file_put_contents($stub . '/judge-clean.txt', '{"headers":{"Host":"example"}}');
+file_put_contents($stub . '/proxifly2.json', json_encode([
+    ['protocol' => 'http', 'anonymity' => 'elite', 'ip' => '127.0.0.1', 'port' => '8080'],
+]));
 if (class_exists('ZipArchive')) {
     $z = new ZipArchive();
     $zp = $stub . '/pkg.zip';
@@ -177,6 +180,11 @@ T::eq('fetch 200 + 4 bytes', [200, 4], [$fetch['code'] ?? 0, $fetch['bytes'] ?? 
 [$code, $badFetch] = ix_run($work, [], ['action' => 'fetch', 'url' => 'http://127.0.0.1:9/unreachable', 'proxy_type' => 'none']);
 T::eq('unreachable host is JSON, not a fatal', false, $badFetch['ok'] ?? true);
 T::ok('unreachable host names a reason', ($badFetch['error'] ?? '') !== '');
+// Timeout pin honored: unroutable TEST-NET address with timeout=2 must fail
+// in ~2s, not the ~10s default connect window (wide margin for slow CI).
+[$code, $tFetch] = ix_run($work, [], ['action' => 'fetch', 'url' => 'http://192.0.2.1/unroutable', 'proxy_type' => 'none', 'timeout' => '2']);
+T::eq('unroutable host fails', false, $tFetch['ok'] ?? true);
+T::ok('timeout pin honored (ms=' . ($tFetch['ms'] ?? -1) . ')', ($tFetch['ms'] ?? 999999) < 8000);
 [$code, $disc] = ix_run($work, [], ['action' => 'discover', 'src' => $base . '/proxifly.json', 'proxy_type' => 'none']);
 T::eq('discover keeps socks5 + elite, drops transparent', 2, count($disc['candidates'] ?? []));
 T::ok('discover normalizes to scheme://ip:port', str_starts_with(($disc['candidates'][0]['url'] ?? ''), 'socks5://'));
@@ -195,6 +203,16 @@ if ($server === null) {
     [$code, $jUnk] = ix_run($work, [], ['action' => 'judge', 'px' => 'http://127.0.0.1:9',
         'judges' => json_encode([$base . '/judge-clean.txt']), 'our_ip' => '9.9.9.9']);
     T::eq('judge through dead proxy is unknown', 'unknown', $jUnk['state'] ?? null);
+    // Rated outranks unrated for the same entry (app parity): plain first,
+    // then rated proxifly for the identical norm.
+    $multiSrc = json_encode([
+        ['url' => $base . '/plain.txt', 'name' => 'plain', 'type' => 'plain', 'proto' => 'http', 'rated' => false],
+        ['url' => $base . '/proxifly2.json', 'name' => 'ratedup', 'type' => 'proxifly', 'rated' => true],
+    ]);
+    [$code, $disc3] = ix_run($work, [], ['action' => 'discover', 'src' => $multiSrc, 'proxy_type' => 'none',
+        'judges' => json_encode([$base . '/judge-clean.txt']), 'our_ip' => '9.9.9.9']);
+    T::eq('rated source upgrades the duplicate', true, $disc3['candidates'][0]['rated'] ?? null);
+    T::eq('upgraded entry keeps rated source name', 'ratedup', $disc3['candidates'][0]['source'] ?? null);
 }
 [$code, $jBad] = ix_run($work, [], ['action' => 'judge', 'px' => 'not-a-proxy']);
 T::eq('judge refuses garbage', false, $jBad['ok'] ?? true);
