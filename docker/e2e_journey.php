@@ -204,8 +204,12 @@ jok($cnt('SELECT COUNT(*) FROM orders WHERE token_hmac = ?', [token_index($token
     'order row gone');
 jok($cnt('SELECT COUNT(*) FROM order_photos WHERE order_id = ?', [$orderId]) === 0,
     'photo rows gone');
-jok($cnt('SELECT COUNT(*) FROM order_events WHERE token_hmac = ?', [token_index($token)]) >= 1,
-    'event log recorded the lifecycle');
+// The receipt stays on record only as an anonymous terminal row: nothing in
+// the event log may still link to the delivered order's token.
+jok($cnt('SELECT COUNT(*) FROM order_events WHERE token_hmac = ?', [token_index($token)]) === 0,
+    'no event row links to the wiped order');
+jok($cnt("SELECT COUNT(*) FROM order_events WHERE event_type = 'received' AND token_hmac IS NULL AND ip_address = '' AND created_at >= NOW() - INTERVAL 1 HOUR", []) >= 1,
+    'anonymous receipt event recorded');
 $uploadsDir = dirname(__DIR__) . '/uploads/' . $orderId;
 jok(!is_dir($uploadsDir) || count(glob_list($uploadsDir . '/*')) === 0, 'no orphaned upload files');
 [$st, $html] = _j_unlock($base, ['order_token' => $token], '');

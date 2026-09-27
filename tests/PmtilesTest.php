@@ -236,4 +236,12 @@ T::ok('lookup past end misses', pmtiles_lookup_id($mixedRoot, $fetch, 99) === nu
 T::ok('lookup before start misses', pmtiles_lookup_id($mixedRoot, $fetch, 4) === null);
 T::ok('lookup corrupt leaf fails', pmtiles_lookup_id($mixedRoot, static fn(): ?array => null, 11) === null);
 
+// Hostile-upstream bounds: an absurd entry count or a gzip bomb fails
+// closed instead of exhausting memory.
+T::ok('directory claiming too many entries fails closed',
+      pmtiles_parse_dir(pmtiles_vint_encode(PMTILES_DIR_ENTRIES_MAX + 1), PMTILES_COMP_NONE) === null);
+$bomb = gzencode(str_repeat("\0", PMTILES_DIR_INFLATED_MAX + 1), 9);
+T::ok('gzip bomb directory fails closed', pmtiles_parse_dir((string)$bomb, PMTILES_COMP_GZIP) === null);
+unset($bomb);
+
 exit(T::done());

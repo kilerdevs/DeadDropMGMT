@@ -117,7 +117,7 @@ $mutants = [
     [
         'id'    => 'log-linkage-ignored',
         'file'  => 'includes/logger.php',
-        'old'   => 'if (!hash_equals($prev, (string)$rec[\'prev\'])) {',
+        'old'   => 'if (!hash_equals((string)$prev, $rec[\'prev\'])) {',
         'new'   => 'if (false) { // MUTANT: chain linkage unchecked',
         'suite' => 'LoggerTest',
         'why'   => 'reordered/deleted log entries verify clean',
@@ -169,7 +169,7 @@ $mutants = [
     [
         'id'    => 'log-seq-dropped',
         'file'  => 'includes/logger.php',
-        'old'   => "    \$rec['seq'] = _log_compute_seq(\n        \$prev,\n        \$tipSeq,\n        \$tipSeq > 0 ? 0 : _log_count_entries(\$fh),\n        (\$prev !== APP_LOG_GENESIS || \$tipSeq > 0) ? 0 : _log_rot_tip_seq(\$path . '.1')\n    );",
+        'old'   => "    \$rec['seq'] = _log_compute_seq(\n        \$prev,\n        \$tipSeq,\n        \$tipSeq > 0 ? 0 : _log_count_entries(\$fh),\n        \$rot[1]\n    );",
         'new'   => "    \$rec['seq'] = 0; // MUTANT: sequence numbers dropped",
         'suite' => 'LoggerTest',
         'why'   => 'truncation checkpoints anchor meaningless seqs',
@@ -192,29 +192,71 @@ $mutants = [
     ],
 ];
 
-// The probe edits the real source files in place (and restores them). If the
-// current user cannot write them — root-owned files in the Docker image, a
-// read-only checkout — every mutant would fail with a wall of file_put_contents
-// warnings and the "kill" verdicts would be meaningless. Say so up front.
-$unwritable = [];
-foreach (array_unique(array_map(static fn(array $m): string => (string)$m['file'], $mutants)) as $rel) {
-    if (!is_writable($root . '/' . $rel)) {
-        $unwritable[] = $rel;
+// Mutants are applied to a THROWAWAY COPY of the tree, never to the checkout
+// itself: weakened guards (CSRF comparison removed, limiter disabled...) used
+// to sit in the live includes/ while the suites ran — reachable by any web
+// request on a served checkout, and left there for good when the run was
+// interrupted (Ctrl-C / SIGKILL skip shutdown handlers). The suites run from
+// the copy (they locate everything relative to their own directory).
+$source = $root;
+$root = sys_get_temp_dir() . '/ddmgmt-mutation-' . getmypid() . '-' . bin2hex(random_bytes(4));
+$skipTop = ['.git', 'node_modules', 'vendor', 'uploads', 'tiles', 'cache', 'logs', 'backups', 'data',
+            'test-results', 'playwright-report', 'coverage-html'];
+
+function mp_copy_tree(string $from, string $to, array $skipTop, bool $top = true): bool {
+    if (!is_dir($to) && !@mkdir($to, 0700, true)) {
+        return false;
     }
-}
-if ($unwritable !== []) {
-    fwrite(STDERR, 'Cannot run: this user may not write ' . implode(', ', $unwritable) . ".\n"
-        . "The mutation probe rewrites source files temporarily; run it from a writable checkout (CI / a development clone), not the deployed container.\n");
-    exit(2);
+    foreach (scandir($from) ?: [] as $e) {
+        if ($e === '.' || $e === '..' || ($top && in_array($e, $skipTop, true))) {
+            continue;
+        }
+        $s = $from . '/' . $e;
+        $d = $to . '/' . $e;
+        if (is_link($s)) {
+            continue;
+        }
+        if (is_dir($s)) {
+            if (!mp_copy_tree($s, $d, $skipTop, false)) {
+                return false;
+            }
+        } elseif (!@copy($s, $d)) {
+            return false;
+        }
+    }
+    return true;
 }
 
-/** @var array<string,string> $backups path => original content, restored on shutdown */
-$backups = [];
-register_shutdown_function(static function () use (&$backups): void {
-    foreach ($backups as $file => $content) {
-        @file_put_contents($file, $content);
+function mp_rm_tree(string $p): void {
+    if (is_link($p) || is_file($p)) {
+        @unlink($p);
+        return;
     }
+    if (!is_dir($p)) {
+        return;
+    }
+    foreach (scandir($p) ?: [] as $e) {
+        if ($e !== '.' && $e !== '..') {
+            mp_rm_tree($p . '/' . $e);
+        }
+    }
+    @rmdir($p);
+}
+
+register_shutdown_function(static function () use ($root): void {
+    mp_rm_tree($root);
 });
+if (!mp_copy_tree($source, $root, $skipTop)) {
+    fwrite(STDERR, "Cannot run: could not copy the tree to $root.\n");
+    exit(2);
+}
+// Runtime dirs the suites expect to exist (their contents are not copied).
+foreach (['logs', 'uploads', 'tiles', 'cache/osm_tiles', 'cache/sessions', 'data/maps', 'backups'] as $d) {
+    @mkdir($root . '/' . $d, 0700, true);
+}
+
+/** @var array<string,string> $backups path => original content (copy-local) */
+$backups = [];
 
 // A mutant may need several coordinated edits (e.g. two independent guards
 // for the same invariant — removing one must NOT kill, removing both must).

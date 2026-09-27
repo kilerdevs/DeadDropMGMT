@@ -21,7 +21,11 @@ if ($z === null || $z === false || $z < 0 || $z > 19
     exit;
 }
 
-$cacheFile = dirname(__DIR__) . "/cache/osm_tiles/$z/$x/$y.png";
+// Street-level tiles are cached PER ACCOUNT: a shared cache answers a hit
+// instantly and a miss slowly, so any courier could probe z13+ tiles around
+// a city and learn where the owner or other couriers recently looked — i.e.
+// roughly where their pins are. Overview zooms reveal nothing and stay shared.
+$cacheFile = dirname(__DIR__) . '/cache/osm_tiles/' . ($z >= 13 ? 'u' . current_user_id() . '/' : '') . "$z/$x/$y.png";
 $cacheTtl  = 7 * 24 * 3600;
 
 if (is_file($cacheFile) && (time() - filemtime($cacheFile)) < $cacheTtl) {

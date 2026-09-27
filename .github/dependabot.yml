@@ -30,3 +30,12 @@ updates:
     target-branch: dev
     schedule:
       interval: weekly
+
+  # Service images in the compose files (mariadb, nginx, caddy), pinned by
+  # digest like the Dockerfile bases — without this entry nothing would ever
+  # propose their security updates.
+  - package-ecosystem: docker-compose
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: weekly

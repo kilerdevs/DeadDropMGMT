@@ -8,7 +8,8 @@ require_once dirname(__DIR__) . '/includes/crypto.php';
 function log_event(
     string  $event_type,
     ?int    $order_id  = null,
-    ?string $token     = null
+    ?string $token     = null,
+    bool    $anonymous = false
 ): void {
     if (!analytics_enabled()) {
         return;
@@ -20,10 +21,13 @@ function log_event(
              VALUES (?, ?, ?, ?, ?)'
         )->execute([
             $order_id,
-            token_index_or_null($token),
+            // Anonymous rows (a flow's terminal event after the order and its
+            // history were deleted) keep only the fact and the time: no token
+            // index, IP or user agent may outlive the wipe.
+            $anonymous ? null : token_index_or_null($token),
             $event_type,
-            get_client_ip(),
-            substr($_SERVER['HTTP_USER_AGENT'] ?? '', 0, 500),
+            $anonymous ? '' : get_client_ip(),
+            $anonymous ? null : substr($_SERVER['HTTP_USER_AGENT'] ?? '', 0, 500),
         ]);
     } catch (Exception $e) {
         log_err('Event log failed: ' . $e->getMessage());

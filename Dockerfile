@@ -2,7 +2,9 @@
 # Config is rendered from config.php.example at first boot (see docker/entrypoint.sh);
 # secrets arrive via DDMGMT_* environment variables, never baked into the image.
 
-FROM php:8.5-apache
+# Pinned by digest (Dependabot bumps it): a re-pushed tag cannot swap the base
+# under a rebuild without a reviewed diff.
+FROM php:8.5-apache@sha256:70d80539dcacae817d9a1320518b95c86bb9568835ef3a7a024d57a4898c90e4
 
 # gd needs freetype/jpeg/png/webp system libs; everything else (openssl,
 # fileinfo, session, json) ships enabled in the base image already.
@@ -35,9 +37,11 @@ RUN chmod +x /usr/local/bin/entrypoint.sh \
  # writable runtime dirs; real content comes from volumes at runtime
  && mkdir -p /var/www/html/logs /var/www/html/uploads /var/www/html/cache/osm_tiles /var/www/html/data/maps /var/www/html/tiles /config \
  && chown -R www-data:www-data /var/www/html/logs /var/www/html/uploads /var/www/html/cache /var/www/html/data /var/www/html/tiles /config \
- # the base image leaves the docroot itself world-writable (1777): only the
- # runtime directories above need to be writable, never the docroot root
- && chmod 755 /var/www/html
+ # the base image leaves the docroot itself www-data-owned and world-writable
+ # (1777): only the runtime directories above need to be writable, never the
+ # docroot root — www-data could otherwise drop a *.php there or replace the
+ # root-owned config.php (both only need write access to the directory)
+ && chown root:root /var/www/html && chmod 755 /var/www/html
 
 # Build provenance for Settings → Version (owners only). Produced on the
 # build host by tools/build_info.sh and passed through the compose files as

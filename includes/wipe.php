@@ -72,6 +72,14 @@ function do_panic_wipe(): array {
     // street zoom around a drop that IS the location. It dies with the rest.
     _panic_wipe_tile_cache(dirname(__DIR__) . '/cache/osm_tiles', $report);
 
+    // Database dumps (auto-update.sh's pre-upgrade backups, manual dumps)
+    // hold every order the wipe just deleted — they die with the rest.
+    foreach (glob_list(dirname(__DIR__) . '/backups/*') as $bk) {
+        if (basename($bk) !== '.htaccess' && (is_file($bk) || is_link($bk))) {
+            _panic_unlink($bk, $report);
+        }
+    }
+
     // On-disk logs carry IPs and tokens — destroyed along with everything
     // else. Same overwrite treatment as photo files (finding: truncation
     // alone leaves the old blocks recoverable); both daemons reopen their

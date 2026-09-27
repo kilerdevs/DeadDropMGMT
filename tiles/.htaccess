@@ -9,11 +9,12 @@ Options -Indexes
 
 # Only style.php (admin-gated in code) and the static *.pmtiles files belong
 # here. The directory is writable by the map worker, so nothing else may ever
-# execute or download: no other PHP-ish file, no half-finished .part transfer.
+# execute or download: no other PHP-ish file, no half-finished .part transfer,
+# no pure-PHP engine sidecar (.plan / .tiles / .tmp: plan carries the proxy URL).
 <FilesMatch "^(?!style\.php$).+\.(php[0-9]?|phtml|phar)$">
     Require all denied
 </FilesMatch>
-<FilesMatch "\.part$">
+<FilesMatch "\.(part|plan|tiles|tmp)$">
     Require all denied
 </FilesMatch>
 # Pre-token names (zone_<id>.pmtiles / .part) are guessable by counting: the app

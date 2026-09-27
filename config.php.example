@@ -131,6 +131,11 @@ function overwrite_and_unlink(string $path): void {
             if ($fh !== false) {
                 @fwrite($fh, str_repeat("\0", $size));
                 @fflush($fh);
+                // Without fsync the zeros usually sit in the page cache and
+                // the unlink below discards them before they reach the disk.
+                if (function_exists('fsync')) {
+                    @fsync($fh);
+                }
                 @fclose($fh);
             }
         }

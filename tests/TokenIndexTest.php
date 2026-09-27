@@ -285,9 +285,26 @@ T::eq('original index restored', $before, (string)$db->query("SELECT token_hmac 
 T::eq('the token is reachable again', $rotId, order_id_for($db, 'RotTokenAAAA0001'));
 $row = $db->query("SELECT token_hmac, token_enc, token_iv FROM orders WHERE id = $rotId")->fetch();
 T::eq('and its display copy still opens', 'RotTokenAAAA0001', order_token_plain($row));
+$locRow = $db->query("SELECT location_encrypted, location_iv, token_hmac FROM orders WHERE id = $rotId")->fetch();
+// Rotation re-binds the location to the order's (new) token index: it opens
+// only together with that row identity.
+T::ok('rotation leaves the location bound to its order', str_starts_with((string)$locRow['location_encrypted'], LOCATION_BIND_PREFIX));
 T::eq('the location survived both rotations', 'rotation drop', decrypt_location_data(
-    (string)$db->query("SELECT location_encrypted FROM orders WHERE id = $rotId")->fetchColumn(),
-    (string)$db->query("SELECT location_iv FROM orders WHERE id = $rotId")->fetchColumn())['text'] ?? null);
+    (string)$locRow['location_encrypted'], (string)$locRow['location_iv'], (string)$locRow['token_hmac'])['text'] ?? null);
+T::ok('a bound location does not open without its row identity',
+    decrypt_location_data((string)$locRow['location_encrypted'], (string)$locRow['location_iv']) === false);
+
+// Pre-binding locations are bound in place by tools/bind_locations.php.
+$db->prepare('UPDATE orders SET location_encrypted = ?, location_iv = ? WHERE id = ?')
+   ->execute([...array_values(encrypt_location_data(['text' => 'unbound drop'])), $rotId]);
+$bindOut = []; $bindCode = -1;
+exec("$php " . $tool('bind_locations.php') . ' 2>&1', $bindOut, $bindCode);
+$locRow = $db->query("SELECT location_encrypted, location_iv, token_hmac FROM orders WHERE id = $rotId")->fetch();
+T::ok('bind tool succeeds', $bindCode === 0 && str_contains(implode("\n", $bindOut), 'bound 1 row'));
+T::eq('bound in place, same content', 'unbound drop', decrypt_location_data(
+    (string)$locRow['location_encrypted'], (string)$locRow['location_iv'], (string)$locRow['token_hmac'])['text'] ?? null);
+exec("$php " . $tool('bind_locations.php') . ' 2>&1', $bindOut2, $bindCode2);
+T::ok('bind tool is idempotent', $bindCode2 === 0 && str_contains(implode("\n", $bindOut2), 'bound 0 row'));
 
 // Rotation refuses to run while plaintext token columns exist.
 $addLegacy();

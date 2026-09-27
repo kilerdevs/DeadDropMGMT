@@ -33,6 +33,9 @@ return [
     'admin.setupcheck.dir_ro'         => '{dir} n’est pas accessible en écriture.',
     'admin.setupcheck.key_bad'        => 'Aucune clé AES utilisable : définissez DDMGMT_AES_KEY_HEX avec 64 caractères hexadécimaux.',
     'admin.setupcheck.not_apache'     => 'Pas Apache, donc .htaccess est ignoré : appliquez l’extrait nginx de la documentation.',
+    'admin.setupcheck.db_default_pass' => 'Le mot de passe de la base est la valeur par défaut publiée dans les fichiers compose. Définissez DB_PASS dans .env (et changez-le dans la base).',
+    'admin.setupcheck.db_down_public' => 'Base de données injoignable. Les détails sont dans le journal d’erreurs du serveur ; connectez-vous en tant que propriétaire pour la vérification complète.',
+    'admin.setupcheck.deny_missing'   => 'Fichiers de blocage manquants : {files} — ces dossiers peuvent être téléchargeables. Restaurez-les depuis la version publiée.',
     'admin.setupcheck.db_down'        => 'Base de données injoignable : {error}',
     'admin.setupcheck.db_zone'        => 'Le fuseau de session est {zone}, pas UTC : les fenêtres temporelles PHP et base peuvent diverger.',
     'admin.setupcheck.schema_missing' => '{n} tables sur {m} sont manquantes : appliquez le schéma ci-dessous.',
@@ -292,6 +295,7 @@ return [
     'admin.users.disable_2fa_confirm' => 'Désactiver 2FA pour le compte {username} ?',
     'admin.users.disable_2fa_button'  => 'Désactiver 2FA',
     'admin.users.new_password_placeholder' => 'Nouveau mot de passe (min. 8 caractères)',
+    'admin.users.current_password_placeholder' => 'Votre mot de passe actuel',
     'admin.users.save_button' => 'Enregistrer',
     'admin.users.no_data'     => 'AUCUNE DONNÉE',
     'admin.users.couriers_section' => 'Coursiers ({n})',
@@ -394,6 +398,8 @@ return [
 
 
     'admin.edit.error.invalid_transition' => 'Une commande livrée ne peut pas revenir en préparation.',
+    'admin.edit.error.stale' => 'Cette commande a changé entre-temps (livrée, retirée ou supprimée). Rien n’a été enregistré — rechargez la page.',
+    'admin.edit.error.decrypt_locked' => 'La position de cette commande ne peut pas être déchiffrée (clé erronée ou changée ?). La modification est bloquée pour ne pas écraser les données enregistrées — corrigez d’abord la clé.',
     'admin.edit.success.saved'      => 'Modifications enregistrées.',
     'admin.edit.error.save_failed'  => "Échec de l'enregistrement — vérifiez le journal des erreurs.",
     'admin.edit.title_prefix' => 'Modifier',
@@ -542,6 +548,8 @@ return [
     'admin.settings.log_verify_ok'       => 'Chaîne intacte — {n} entrées vérifiées',
     'admin.settings.log_verify_empty' => 'Rien à vérifier pour l\'instant : le journal structuré est vide. (La vérification d\'intégrité ne couvre que le journal structuré, pas le journal d\'erreurs ci-dessus.)',
     'admin.settings.log_verify_fail'     => 'RUPTURE D\'INTÉGRITÉ à l\'entrée #{n} : {r}',
+    'admin.settings.log_verify_truncated' => 'ÉCHEC d’intégrité : des entrées manquent — le journal s’arrête avant le dernier point de contrôle en base (entrée #{n}).',
+    'admin.settings.log_verify_cont_unknown' => 'Contrôle de troncature indisponible : {r}',
     'admin.settings.log_empty' => 'Le journal est vide.',
     'admin.settings.js.empty_field'        => 'Ce champ ne peut pas être vide.',
     'admin.settings.js.range_error'        => 'La valeur doit être comprise entre {min} et {max}.',
@@ -580,6 +588,7 @@ return [
     'admin.users.flash.new_password_min8'      => 'Le nouveau mot de passe doit contenir au moins 8 caractères.',
     'admin.users.flash.password_changed'       => 'Mot de passe modifié.',
     'admin.users.flash.password_change_failed' => 'Échec du changement de mot de passe.',
+    'admin.users.flash.reauth_failed' => 'Modifier votre propre compte exige votre mot de passe actuel — il manquait ou était incorrect.',
     'admin.users.flash.twofa_reset'            => "L'authentification à deux facteurs a été désactivée pour ce compte.",
     'admin.users.flash.twofa_reset_failed'     => 'Échec de la réinitialisation 2FA.',
 

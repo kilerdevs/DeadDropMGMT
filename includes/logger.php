@@ -135,22 +135,29 @@ function _log_count_entries($fh): int {
     return $n;
 }
 
-// Tip seq of the rotated generation, or 0 when there is none to continue.
-function _log_rot_tip_seq(string $rotPath): int {
+// Tip [hash, seq] of the rotated generation, or [GENESIS, 0] when there is
+// none to continue (missing, unreadable or unparseable).
+function _log_rot_tip(string $rotPath): array {
     if (!is_file($rotPath)) {
-        return 0;
+        return [APP_LOG_GENESIS, 0];
     }
     $fh = @fopen($rotPath, 'r');
     if ($fh === false) {
-        return 0;
+        return [APP_LOG_GENESIS, 0];
     }
     flock($fh, LOCK_SH);
     try {
-        return _log_tail_tip($fh)[1];
+        $tip = _log_tail_tip($fh);
     } finally {
         flock($fh, LOCK_UN);
         fclose($fh);
     }
+    return $tip[0] === '' ? [APP_LOG_GENESIS, 0] : $tip;
+}
+
+// Tip seq of the rotated generation, or 0 when there is none to continue.
+function _log_rot_tip_seq(string $rotPath): int {
+    return _log_rot_tip($rotPath)[1];
 }
 
 // Pure seq rule, unit-testable without handles: sequenced tip → +1; legacy
@@ -254,7 +261,13 @@ function app_log(string $level, string $event, array $ctx = []): bool {
         fclose($fh);
         return false;
     }
-    $rec['prev'] = $prev;
+    // A fresh generation links to the rotated one's tip (hash AND seq), so
+    // the chain runs across files: deleting app.log.1, or renaming app.log
+    // to fake a rotation and then editing it, breaks verification instead of
+    // restarting a clean chain at GENESIS.
+    $fresh = $prev === APP_LOG_GENESIS && $tipSeq === 0;
+    $rot = $fresh ? _log_rot_tip($path . '.1') : [APP_LOG_GENESIS, 0];
+    $rec['prev'] = $fresh ? $rot[0] : $prev;
     // Seq inputs stay lazy (ternaries): the full count runs only for legacy
     // tips, the rotation peek only for a fresh file — the common sequenced
     // path pays just the tail scan above.
@@ -262,7 +275,7 @@ function app_log(string $level, string $event, array $ctx = []): bool {
         $prev,
         $tipSeq,
         $tipSeq > 0 ? 0 : _log_count_entries($fh),
-        ($prev !== APP_LOG_GENESIS || $tipSeq > 0) ? 0 : _log_rot_tip_seq($path . '.1')
+        $rot[1]
     );
 
     $payload = json_encode($rec, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -381,13 +394,75 @@ function log_recent_entries(int $limit = 200, ?string $path = null): array {
     return ['total' => $total, 'entries' => $out];
 }
 
+// ── Plain error log (PHP's error_log target) ─────────────────────────────────
+// Not chained and never rotated by PHP itself: a noisy host (one warning per
+// connection) grows it without bound, and Settings used to file() the whole
+// thing into memory. Viewers read only the tail; the hourly cleanup trims it.
+
+/** Last $maxLines lines within the last $maxBytes. @return array{0:list<string>,1:bool} [lines oldest-first, cut] */
+function log_tail_lines(string $path, int $maxBytes = 262144, int $maxLines = 500): array {
+    $size = @filesize($path);
+    if ($size === false || $size === 0) {
+        return [[], false];
+    }
+    $fh = @fopen($path, 'r');
+    if ($fh === false) {
+        return [[], false];
+    }
+    $start = max(0, $size - $maxBytes);
+    fseek($fh, $start);
+    $data = (string)stream_get_contents($fh);
+    fclose($fh);
+    $lines = preg_split('/\r?\n/', $data) ?: [];
+    if ($start > 0) {
+        array_shift($lines); // first line is cut mid-way
+    }
+    $lines = array_values(array_filter($lines, static fn(string $l): bool => trim($l) !== ''));
+    $cut = $start > 0 || count($lines) > $maxLines;
+    return [array_slice($lines, -$maxLines), $cut];
+}
+
+// Keep error.log bounded: past $max bytes only the newest $keep bytes stay
+// (cut at a line boundary). Best-effort, never throws.
+function error_log_trim(?string $path = null, int $max = 5242880, int $keep = 1048576): bool {
+    $path ??= defined('ERROR_LOG_PATH') ? ERROR_LOG_PATH : '';
+    if ($path === '' || !is_file($path) || is_link($path)) {
+        return false;
+    }
+    clearstatcache(true, $path);
+    $size = (int)@filesize($path);
+    if ($size <= $max) {
+        return false;
+    }
+    $fh = @fopen($path, 'r+');
+    if ($fh === false) {
+        return false;
+    }
+    try {
+        flock($fh, LOCK_EX);
+        fseek($fh, -$keep, SEEK_END);
+        $tail = (string)stream_get_contents($fh);
+        $nl = strpos($tail, "\n");
+        $tail = $nl === false ? '' : substr($tail, $nl + 1);
+        ftruncate($fh, 0);
+        rewind($fh);
+        fwrite($fh, $tail);
+        fflush($fh);
+        flock($fh, LOCK_UN);
+    } finally {
+        fclose($fh);
+    }
+    return true;
+}
+
 // ── Chain verification ────────────────────────────────────────────────────────
 // Returns [valid(bool), checked(int), broken_line(int|null), reason(string|null)]
 // broken_line is the 1-based file line of the first bad entry.
 
 function verify_log_chain(?string $path = null): array {
     $path = $path ?? APP_LOG_PATH;
-    if (!is_file($path)) {
+    $rot = $path . '.1';
+    if (!is_file($path) && !is_file($rot)) {
         return [true, 0, null, null];
     }
     try {
@@ -395,52 +470,84 @@ function verify_log_chain(?string $path = null): array {
     } catch (Throwable) {
         return [false, 0, null, 'log key unavailable (AES_KEY_HEX invalid)'];
     }
-    $fh = fopen($path, 'r');
+    // The rotated generation is verified too: its first entry anchors to a
+    // generation that no longer exists (accepted as-is), everything after
+    // must chain. The live file must then continue from its tip.
+    $checked = 0;
+    $prev = null;
+    if (is_file($rot)) {
+        [$ok, $n, $broken, $reason, $tip] = _verify_log_file($rot, null);
+        if (!$ok) {
+            return [false, $n, $broken, basename($rot) . ': ' . $reason];
+        }
+        $checked = $n;
+        $prev = $tip;
+    }
+    if (!is_file($path)) {
+        return [true, $checked, null, null];
+    }
+    [$ok, $n, $broken, $reason] = _verify_log_file($path, $prev ?? APP_LOG_GENESIS, $prev !== null);
+    if (!$ok) {
+        return [false, $checked + $n, $broken, $reason];
+    }
+    return [true, $checked + $n, null, null];
+}
+
+// One file of the chain. $prev: the hash the first entry must link to, or
+// null to accept whatever it names (the oldest surviving generation).
+// $legacyGenesis: a live file written before cross-file linking starts at
+// GENESIS even though a rotated generation exists — still accepted.
+// Returns [valid, checked, broken_line, reason, tip_hash].
+function _verify_log_file(string $path, ?string $prev, bool $legacyGenesis = false): array {
+    $fh = @fopen($path, 'r');
     if ($fh === false) {
-        return [false, 0, null, 'unreadable'];
+        return [false, 0, null, 'unreadable', null];
     }
     // Shared lock: a concurrent rotation must not move the file mid-read.
     flock($fh, LOCK_SH);
-    $prev      = APP_LOG_GENESIS;
-    $n         = 0;
-    while (($line = fgets($fh)) !== false) {
-        $line = trim($line);
-        if ($line === '') {
-            continue;
+    $n = 0;
+    try {
+        while (($line = fgets($fh)) !== false) {
+            $line = trim($line);
+            if ($line === '') {
+                continue;
+            }
+            $n++;
+            $rec = json_decode($line, true);
+            // A non-string 'hash' (planted/corrupt line) must fail verification,
+            // not TypeError inside hash_equals() and 500 the integrity page.
+            if (!is_array($rec) || !isset($rec['hash'], $rec['prev']) || !is_string($rec['hash']) || !is_string($rec['prev'])) {
+                return [false, $n, $n, 'malformed entry', null];
+            }
+            if ($n === 1 && $prev === null) {
+                $prev = $rec['prev'];
+            } elseif ($n === 1 && $legacyGenesis && hash_equals(APP_LOG_GENESIS, $rec['prev'])) {
+                $prev = APP_LOG_GENESIS;
+            }
+            if (!hash_equals((string)$prev, $rec['prev'])) {
+                return [false, $n, $n, $n === 1 && $prev === APP_LOG_GENESIS
+                    ? 'previous log generation missing (app.log.1 deleted?)'
+                    : 'broken chain linkage', null];
+            }
+            $expected = $rec['hash'];
+            unset($rec['hash']);
+            $payload = json_encode($rec, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            // Entries may predate key separation (legacy raw-key HMAC) — accept
+            // either subkey so history stays verifiable across the transition.
+            $calc = hash_hmac('sha256', (string)$payload, _log_key());
+            if (!hash_equals($expected, $calc)) {
+                $calc = hash_hmac('sha256', (string)$payload, _log_key_legacy());
+            }
+            if (!hash_equals($expected, $calc)) {
+                return [false, $n, $n, 'hash mismatch (entry modified or forged)', null];
+            }
+            $prev = $expected;
         }
-        $n++;
-        $rec = json_decode($line, true);
-        // A non-string 'hash' (planted/corrupt line) must fail verification,
-        // not TypeError inside hash_equals() and 500 the integrity page.
-        if (!is_array($rec) || !isset($rec['hash'], $rec['prev']) || !is_string($rec['hash'])) {
-            flock($fh, LOCK_UN);
-            fclose($fh);
-            return [false, $n, $n, 'malformed entry'];
-        }
-        if (!hash_equals($prev, (string)$rec['prev'])) {
-            flock($fh, LOCK_UN);
-            fclose($fh);
-            return [false, $n, $n, 'broken chain linkage'];
-        }
-        $expected = $rec['hash'];
-        unset($rec['hash']);
-        $payload = json_encode($rec, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        // Entries may predate key separation (legacy raw-key HMAC) — accept
-        // either subkey so history stays verifiable across the transition.
-        $calc = hash_hmac('sha256', (string)$payload, _log_key());
-        if (!hash_equals($expected, $calc)) {
-            $calc = hash_hmac('sha256', (string)$payload, _log_key_legacy());
-        }
-        if (!hash_equals($expected, $calc)) {
-            flock($fh, LOCK_UN);
-            fclose($fh);
-            return [false, $n, $n, 'hash mismatch (entry modified or forged)'];
-        }
-        $prev = $expected;
+    } finally {
+        flock($fh, LOCK_UN);
+        fclose($fh);
     }
-    flock($fh, LOCK_UN);
-    fclose($fh);
-    return [true, $n, null, null];
+    return [true, $n, null, null, $prev];
 }
 
 // ── Truncation checkpoints ────────────────────────────────────────────────────

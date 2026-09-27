@@ -1,9 +1,11 @@
 # DeadDropMGMT — PHP-FPM variant shared by the nginx and Caddy stacks.
 # Same extensions and layout as the Apache image; only the front server differs.
-# The whole docroot stays in the image so a named volume can be populated from
-# it once and shared read-only with nginx/Caddy for static files.
+# The whole docroot stays in the image (and a pristine copy in /usr/src/ddmgmt)
+# so the shared named volume is refreshed from it on every start — see
+# docker/entrypoint.sh — and shared read-only with nginx/Caddy.
 
-FROM php:8.5-fpm
+# Pinned by digest (Dependabot bumps it), like the Apache image.
+FROM php:8.5-fpm@sha256:584e584083bada479f0ee733a3025722a68e366eb721e618d1b6a252e4ff45c5
 
 RUN apt-get update \
  && apt-get upgrade -y \
@@ -28,7 +30,10 @@ RUN chmod +x /usr/local/bin/entrypoint.sh \
  && cp /var/www/html/config.php.example /usr/local/share/config.php.template \
  && mkdir -p /var/www/html/logs /var/www/html/uploads /var/www/html/cache/osm_tiles /var/www/html/data/maps /var/www/html/tiles /config \
  && chown -R www-data:www-data /var/www/html/logs /var/www/html/uploads /var/www/html/cache /var/www/html/data /var/www/html/tiles /config \
- && chmod 755 /var/www/html
+ && chown root:root /var/www/html && chmod 755 /var/www/html \
+ # pristine code copy: the entrypoint refreshes the shared docroot volume from
+ # it on every start (Docker seeds a named volume only while it is empty)
+ && cp -a /var/www/html /usr/src/ddmgmt
 
 # Build provenance for Settings → Version (owners only). Produced on the
 # build host by tools/build_info.sh and passed through the compose files as

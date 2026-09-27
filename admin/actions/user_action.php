@@ -136,6 +136,13 @@ if ($action === 'change_password') {
         exit;
     }
 
+    if (!admin_self_reauth_ok($uid, post_string('current_password'))) {
+        $_SESSION['flash']    = t('admin.users.flash.reauth_failed');
+        $_SESSION['flash_ok'] = false;
+        header('Location: /admin/users.php');
+        exit;
+    }
+
     try {
         $db   = get_db();
         $stmt = $db->prepare('UPDATE users SET password_hash = ? WHERE id = ?');
@@ -171,6 +178,12 @@ if ($action === 'reset_2fa') {
     $uid = (int)($_POST['user_id'] ?? 0);
     if ($uid <= 0) {
         $_SESSION['flash']    = t('admin.common.invalid_request');
+        $_SESSION['flash_ok'] = false;
+        header('Location: /admin/users.php');
+        exit;
+    }
+    if (!admin_self_reauth_ok($uid, post_string('current_password'))) {
+        $_SESSION['flash']    = t('admin.users.flash.reauth_failed');
         $_SESSION['flash_ok'] = false;
         header('Location: /admin/users.php');
         exit;

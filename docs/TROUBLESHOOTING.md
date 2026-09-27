@@ -54,8 +54,8 @@ Work through the usual causes:
 
 1. **Everyone shares one IP.** Behind a reverse proxy or CDN the app sees the proxy's address for every visitor, so one
    person's failures lock out everybody. Set `DDMGMT_TRUST_PROXY=1` and, if the proxy connects from public addresses,
-   `DDMGMT_TRUSTED_PROXIES` (see the README's proxy-trust section). Only enable it when the proxy overwrites the forwarded
-   headers.
+   `DDMGMT_TRUSTED_PROXIES` (see the README's proxy-trust section). Behind Cloudflare also set
+   `DDMGMT_CLIENT_IP_HEADER=CF-Connecting-IP`; with a proxy that sends only `X-Real-IP`, set it to `X-Real-IP`.
 2. **One account is locked.** Repeated wrong passwords or 2FA codes exhaust that account's own budget even from a fresh IP.
    Wait out the window, or clear the counters:
 

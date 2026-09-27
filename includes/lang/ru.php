@@ -33,6 +33,9 @@ return [
     'admin.setupcheck.dir_ro'         => '{dir} недоступен для записи.',
     'admin.setupcheck.key_bad'        => 'Нет пригодного AES-ключа – задайте DDMGMT_AES_KEY_HEX из 64 hex-символов.',
     'admin.setupcheck.not_apache'     => 'Не Apache, поэтому .htaccess игнорируется – примените nginx-фрагмент из документации.',
+    'admin.setupcheck.db_default_pass' => 'Пароль базы данных – опубликованное значение по умолчанию из compose-файлов. Задайте DB_PASS в .env (и смените его в базе).',
+    'admin.setupcheck.db_down_public' => 'База данных недоступна. Подробности в журнале ошибок сервера; войдите как владелец для полной проверки.',
+    'admin.setupcheck.deny_missing'   => 'Нет файлов запрета доступа: {files} – эти папки могут быть доступны для скачивания. Восстановите их из релиза.',
     'admin.setupcheck.db_down'        => 'База данных недоступна: {error}',
     'admin.setupcheck.db_zone'        => 'Часовой пояс сессии {zone}, а не UTC – временные окна PHP и базы могут расходиться.',
     'admin.setupcheck.schema_missing' => 'Не хватает {n} из {m} таблиц – примените схему ниже.',
@@ -292,6 +295,7 @@ return [
     'admin.users.disable_2fa_confirm' => 'Отключить 2FA для аккаунта {username}?',
     'admin.users.disable_2fa_button'  => 'Отключить 2FA',
     'admin.users.new_password_placeholder' => 'Новый пароль (мин. 8 символов)',
+    'admin.users.current_password_placeholder' => 'Ваш текущий пароль',
     'admin.users.save_button' => 'Сохранить',
     'admin.users.no_data'     => 'НЕТ ДАННЫХ',
     'admin.users.couriers_section' => 'Курьеры ({n})',
@@ -394,6 +398,8 @@ return [
 
 
     'admin.edit.error.invalid_transition' => 'Доставленный заказ нельзя вернуть в статус «готовится».',
+    'admin.edit.error.stale' => 'Этот заказ тем временем изменился (доставлен, получен или удалён). Ничего не сохранено – обновите страницу.',
+    'admin.edit.error.decrypt_locked' => 'Не удаётся расшифровать местоположение этого заказа (неверный или сменённый ключ?). Редактирование заблокировано, чтобы не перезаписать сохранённые данные, – сначала исправьте ключ.',
     'admin.edit.success.saved'      => 'Изменения сохранены.',
     'admin.edit.error.save_failed'  => 'Ошибка сохранения — проверьте журнал ошибок.',
     'admin.edit.title_prefix' => 'Редактировать',
@@ -544,6 +550,8 @@ return [
     'admin.settings.log_verify_ok'       => 'Цепочка не нарушена — проверено записей: {n}',
     'admin.settings.log_verify_empty' => 'Пока нечего проверять — структурный журнал пуст. (Проверка целостности охватывает только структурный журнал, а не журнал ошибок выше.)',
     'admin.settings.log_verify_fail'     => 'НАРУШЕНИЕ ЦЕЛОСТНОСТИ в записи #{n}: {r}',
+    'admin.settings.log_verify_truncated' => 'ОШИБКА целостности: записи отсутствуют – журнал обрывается до последней контрольной точки в базе (запись #{n}).',
+    'admin.settings.log_verify_cont_unknown' => 'Проверка усечения недоступна: {r}',
     'admin.settings.log_empty' => 'Журнал пуст.',
     'admin.settings.js.empty_field'        => 'Поле не может быть пустым.',
     'admin.settings.js.range_error'        => 'Значение должно быть между {min} и {max}.',
@@ -582,6 +590,7 @@ return [
     'admin.users.flash.new_password_min8'      => 'Новый пароль должен содержать не менее 8 символов.',
     'admin.users.flash.password_changed'       => 'Пароль изменён.',
     'admin.users.flash.password_change_failed' => 'Не удалось изменить пароль.',
+    'admin.users.flash.reauth_failed' => 'Для изменения собственной учётной записи нужен текущий пароль – он не указан или неверен.',
     'admin.users.flash.twofa_reset'            => 'Двухфакторная аутентификация отключена для этого аккаунта.',
     'admin.users.flash.twofa_reset_failed'     => 'Не удалось сбросить 2FA.',
 

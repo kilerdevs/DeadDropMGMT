@@ -7,23 +7,36 @@
 	root * /var/www/html
 
 	# Map zone files are served by secret names only (zone_<id>_<token>.pmtiles);
-	# guessable legacy names and partial downloads never are.
+	# guessable legacy names, partial downloads and engine sidecars never are.
 	@zonelegacy path_regexp ^/tiles/zone_[0-9]+\.(pmtiles|part)$
 	respond @zonelegacy 403
-	@zonepart path_regexp ^/tiles/.*\.part$
+	@zonepart path_regexp ^/tiles/.*\.(part|plan|tiles|tmp)$
 	respond @zonepart 403
 
 	@blocked path /includes/* /logs/* /cron/* /tools/* /cache/* /data/* /docker/* /e2e/* /tests/* /backups/* /config.php /config.php.example /setup.sql /build-info.json /composer.* /package*.json /playwright.config.js /phpstan.neon /auto-update.* /Dockerfile* /docker-compose* /.htaccess /.ht*
 	respond @blocked 403
+	# Dotfiles and VCS metadata (.git/, .env, .github/, ...), except .well-known.
+	# (Go regexps have no lookahead, hence the separate exclusion.)
+	@dotfiles {
+		path_regexp /\.
+		not path /.well-known/*
+	}
+	respond @dotfiles 404
 
-	# Uploaded images must never reach PHP-FPM, whatever their name is.
-	@upload_php path /uploads/*.php /uploads/*.phtml /uploads/*.phar
+	# Uploaded images must never reach PHP-FPM, whatever their name is. A
+	# regexp: Caddy's path "*" does not cross "/", and photos are nested
+	# (uploads/<order>/<name>).
+	@upload_php path_regexp ^/uploads/.*\.(php[0-9]?|phtml|phar)$
 	respond @upload_php 403
+
+	# Static files and error pages never pass through PHP's header layer.
+	header X-Content-Type-Options "nosniff"
 
 	# Same capability-URL reasoning as the Apache/nginx notes: bearer links
 	# must not persist in caches.
 	@uploads path /uploads/*
 	header @uploads Cache-Control "private, no-store"
+	header @uploads Referrer-Policy "no-referrer"
 
 	request_body {
 		max_size 64MB

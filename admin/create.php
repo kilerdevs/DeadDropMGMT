@@ -25,12 +25,6 @@ $instructions = trim(post_string('instructions'));
 $raw_lat      = $_POST['lat'] ?? '';
 $raw_lng      = $_POST['lng'] ?? '';
 
-if ($location === '' && $instructions === '' && $raw_lat === '') {
-    $_SESSION['flash']    = t('admin.new_order.flash.missing_location');
-    $_SESSION['flash_ok'] = false;
-    header('Location: /admin/new_order.php#new-order');
-    exit;
-}
 
 // Auto-generate password if empty
 $generated_password = false;
@@ -61,32 +55,51 @@ if ($raw_lat !== '' && $raw_lng !== '' && is_numeric($raw_lat) && is_numeric($ra
     }
 }
 
+// Judged on the VALIDATED pin: a junk lat= used to satisfy this check and
+// create an order with no location at all.
+if ($location === '' && $instructions === '' && $lat === null) {
+    $_SESSION['flash']    = t('admin.new_order.flash.missing_location');
+    $_SESSION['flash_ok'] = false;
+    header('Location: /admin/new_order.php#new-order');
+    exit;
+}
+
 try {
     $token   = generate_order_token();
+    // The token itself is never stored: a keyed index for lookups plus an
+    // encrypted copy for the admin views (ADR-019). The location is bound to
+    // that index, so it only ever opens as THIS order's location.
+    $tokCols = token_columns($token);
     $enc     = encrypt_location_data([
         'text'         => $location,
         'lat'          => $lat,
         'lng'          => $lng,
         'instructions' => $instructions,
-    ]);
+        // Notes are drop hints the recipient sees after unlocking — as
+        // sensitive as the location, so they ride in the same ciphertext.
+        'notes'        => $notes,
+    ], $tokCols['token_hmac']);
     // Hash only — the pickup password is shown ONCE in the flash message and
     // never stored recoverably. Lost credentials are replaced, not recovered.
     $pw_hash = hash_password($password);
 
     $db   = get_db();
+    // Order row and photo rows commit together or not at all: a photo-row
+    // failure used to report "create failed" for an order that existed (its
+    // generated password never shown). Files saved for a rolled-back order
+    // are removed below.
+    $db->beginTransaction();
     $stmt = $db->prepare(
         'INSERT INTO orders
          (token_hmac, token_enc, token_iv, pickup_password_hash, location_encrypted, location_iv, notes, created_by)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
     );
-    // The token itself is never stored: a keyed index for lookups plus an
-    // encrypted copy for the admin views (ADR-019).
     $stmt->execute([
-        ...array_values(token_columns($token)),
+        ...array_values($tokCols),
         $pw_hash,
         $enc['ciphertext'],
         $enc['iv'],
-        $notes !== '' ? $notes : null,
+        null, // orders.notes is legacy plaintext storage — never written now
         // Config-based fallback owner has user_id 0 with no users row, and
         // the FK rejects 0 — so NULL is load-bearing here, not a lost trail:
         // audit() below records the actor's username + IP in audit_log.
@@ -102,7 +115,8 @@ try {
     $count = 0;
     $limit = max_photos_per_order();
     $files = ['name' => []];
-    if (!empty($_FILES['photos']['name'][0])) {
+    $saved = [];
+    if (isset($_FILES['photos']['name']) && is_array($_FILES['photos']['name']) && !empty($_FILES['photos']['name'][0])) {
         $files = $_FILES['photos'];
         $count = count($files['name']);
         for ($i = 0; $i < $count && $i < $limit; $i++) {
@@ -119,11 +133,12 @@ try {
                 // pre-escaping here would double-escape it in the flash.
                 $photo_errors[] = (string)$files['name'][$i];
             } else {
-                $db->prepare('INSERT INTO order_photos (order_id, filename) VALUES (?, ?)')
-                   ->execute([$order_id, $rel]);
+                $saved[] = $rel;
+                store_order_photo($db, $order_id, $rel);
             }
         }
     }
+    $db->commit();
 
     $msg = $generated_password
         ? t('admin.new_order.flash.created_with_pw', ['token' => $token, 'password' => $password])
@@ -140,7 +155,13 @@ try {
     }
     // A generated pickup password rides in this message: seal it at rest.
     flash_set($msg, true, $generated_password);
-} catch (Exception $e) {
+} catch (Throwable $e) {
+    if (isset($db) && $db->inTransaction()) {
+        $db->rollBack();
+    }
+    foreach ($saved ?? [] as $rel) {
+        discard_order_photo_file($rel);
+    }
     log_err('Create order error: ' . $e->getMessage());
     $_SESSION['flash']    = t('admin.new_order.flash.create_failed');
     $_SESSION['flash_ok'] = false;

@@ -16,10 +16,21 @@ $probe = setup_db_probe();
 if ($probe['owner_exists']) {
     require_owner();
 }
+// Unknowable owner status (database down, users table unreadable): this may
+// well be an installed app, so strangers get one generic row — never the raw
+// PDO error (host, user), versions or paths. The detail goes to the error log.
+$limited = !$probe['owner_exists'] && !($probe['owner_known'] ?? false) && !is_owner();
+if ($limited && !$probe['connected']) {
+    error_log('DeadDropMGMT setup check: database unreachable: ' . $probe['error']);
+}
 $setupMode = !$probe['owner_exists'];
 $setupTokenSet = _secret('DDMGMT_SETUP_TOKEN', '') !== '';
 
 // ── POST: apply schema ──────────────────────────────────────────────────────
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && $limited) {
+    http_response_code(403);
+    exit;
+}
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $flash = t('admin.common.invalid_request');
     $flashOk = false;
@@ -82,11 +93,13 @@ if ($flashMsg !== '') {
     }
 }
 
-$rows = array_merge(
-    setup_runtime_checks(),
-    setup_db_rows($probe),
-    setup_storage_checks()
-);
+$rows = $limited
+    ? [setup_row('db', 'database', 'fail', t('admin.setupcheck.db_down_public'))]
+    : array_merge(
+        setup_runtime_checks(),
+        setup_db_rows($probe),
+        setup_storage_checks()
+    );
 $csrf = generate_csrf();
 $stWord = ['ok' => t('admin.setupcheck.st_ok'), 'warn' => t('admin.setupcheck.st_warn'),
            'fail' => t('admin.setupcheck.st_fail'), 'info' => t('admin.setupcheck.st_info')];
@@ -135,7 +148,7 @@ $stWord = ['ok' => t('admin.setupcheck.st_ok'), 'warn' => t('admin.setupcheck.st
             </table>
         </div>
 
-        <?php if ($probe['connected'] && (is_owner() || $setupMode)): ?>
+        <?php if (!$limited && $probe['connected'] && (is_owner() || $setupMode)): ?>
         <form method="POST" action="/admin/setup_check.php" class="log-toolbar">
             <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
             <input type="hidden" name="action" value="apply_schema">

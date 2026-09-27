@@ -41,10 +41,16 @@ test('login, edit order, CSP-proof extend form, logout', async ({ browser }) => 
     // click, the retrying visibility absorbs loaded-server slowness.
     await expect(page.locator('span.token').first()).toContainText('E2EADMDELIV00001');
     // CSP-proof extend path: real POST forms (one per action on the page),
-    // zero inline handlers anywhere.
-    const extend = page.locator('form.extend-form');
+    // zero inline handlers anywhere. The forms live OUTSIDE the edit form
+    // (nested forms are dropped by the parser); each button must still
+    // resolve to its own extend.php form, not submit the edit form.
+    const extend = page.locator('button[form^="extend-"]');
     await expect(extend.first()).toBeVisible();
     expect(await extend.count()).toBeGreaterThan(0);
+    expect(await extend.first().evaluate((b) => b.form && b.form.getAttribute('action'))).toBe('/admin/extend.php');
+    // ...and the edit form must still own its Save button (an early </form>
+    // used to strand it outside any form).
+    expect(await page.locator('.form-actions button[type="submit"]').evaluate((b) => b.form && b.form.getAttribute('action'))).toContain('/admin/edit.php');
     expect(await page.locator('[onclick]').count()).toBe(0);
 
     const logout = page.locator('form[action="/admin/logout.php"]');

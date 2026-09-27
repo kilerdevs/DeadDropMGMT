@@ -13,26 +13,43 @@ if (PHP_SAPI !== 'cli') {
 // decrypts cleanly with the OLD key before rewriting anything.
 //
 // Usage:
-//   php tools/rotate_aes_key.php --old=<64hex> --new=<64hex> [--dry-run]
+//   printf '%s\n%s\n' "$OLD" "$NEW" | php tools/rotate_aes_key.php --keys-from-stdin [--dry-run]
+//   php tools/rotate_aes_key.php --old=<64hex> --new=<64hex> [--dry-run]   (discouraged)
 //
-// Both keys are explicit arguments on purpose — no ordering games with
-// config/env. Point DDMGMT_DB_* at your database (or let them come from
-// config.php). Wrap in a maintenance window: nothing should write while
-// rotating. See README "Rotating the AES key".
+// Both keys are explicit on purpose — no ordering games with config/env.
+// Prefer stdin: command-line arguments are visible to every local user in
+// the process list and land in shell history. Point DDMGMT_DB_* at your
+// database (or let them come from config.php). Every order and user row is
+// locked for the run (no concurrent writes can slip in under the old key);
+// still use a maintenance window. See README "Rotating the AES key".
+//
+// Only current-format data is rotated. Legacy AES-CBC rows, rows under the
+// raw master key and the retired pickup_password_enc column are REFUSED —
+// run tools/migrate_cbc_to_gcm.php, tools/separate_keys.php and
+// tools/purge_pickup_password_recovery.php first (a rotation must never be a
+// silent upgrade path for unauthenticated or mis-keyed data).
 
-$options = getopt('', ['old:', 'new:', 'dry-run']);
-$old = strtolower(trim($options['old'] ?? ''));
-$new = strtolower(trim($options['new'] ?? ''));
+$options = getopt('', ['old:', 'new:', 'keys-from-stdin', 'dry-run']);
 $dry = isset($options['dry-run']);
+if (isset($options['keys-from-stdin'])) {
+    $old = strtolower(trim((string)fgets(STDIN)));
+    $new = strtolower(trim((string)fgets(STDIN)));
+} else {
+    $old = strtolower(trim($options['old'] ?? ''));
+    $new = strtolower(trim($options['new'] ?? ''));
+    if ($old !== '' || $new !== '') {
+        fwrite(STDERR, "note: keys given as arguments are visible in the process list — prefer --keys-from-stdin\n");
+    }
+}
 
-foreach (['--old' => $old, '--new' => $new] as $flag => $hex) {
+foreach (['old key' => $old, 'new key' => $new] as $what => $hex) {
     if (!preg_match('/^[0-9a-f]{64}$/', $hex)) {
-        fwrite(STDERR, "$flag must be 64 hex chars (32 bytes)\n");
+        fwrite(STDERR, "$what must be 64 hex chars (32 bytes)\n");
         exit(1);
     }
 }
 if ($old === $new) {
-    fwrite(STDERR, "--old and --new are identical\n");
+    fwrite(STDERR, "old and new keys are identical\n");
     exit(1);
 }
 
@@ -41,47 +58,37 @@ $newKey = hex2bin($new);
 
 require_once dirname(__DIR__) . '/includes/kernel.php';
 
-// Same wire format as includes/crypto.php, but keyed explicitly — the app's
-// AES_KEY_HEX points at whichever key is currently deployed, not necessarily
-// old or new during the migration window. Since ADR-016 key separation the
-// runtime derives purpose subkeys via HKDF, so encryption targets the NEW
-// master's subkey for the given purpose; decryption tries the OLD master's
-// subkey first, then the raw OLD master (rows predating key separation).
+// Same wire format as includes/crypto.php (GCM, ciphertext||tag base64, hex
+// nonce; location values optionally "b1:"-bound to the order's token_hmac as
+// associated data), but keyed explicitly with each master's HKDF purpose
+// subkey — the app's AES_KEY_HEX points at whichever key is currently
+// deployed, not necessarily old or new during the migration window.
 function rot_hkdf(string $master, string $info): string {
     return hash_hkdf('sha256', $master, 32, $info, 'deaddrop-mgmt-hkdf-salt-v1');
 }
 
-function rot_decrypt(string $oldKey, ?string $info, string $ciphertext_b64, string $iv_hex): string|false {
+function rot_decrypt(string $master, string $info, string $ciphertext_b64, string $iv_hex, ?string $bind = null): string|false {
+    $aad = '';
+    if (str_starts_with($ciphertext_b64, LOCATION_BIND_PREFIX)) {
+        if ($bind === null || $bind === '') return false;
+        $ciphertext_b64 = substr($ciphertext_b64, strlen(LOCATION_BIND_PREFIX));
+        $aad = _location_aad($bind);
+    }
     $raw = base64_decode($ciphertext_b64, true);
-    if ($raw === false || strlen($iv_hex) % 2 !== 0) {
-        return false;
+    if ($raw === false || strlen($iv_hex) !== 24 || !ctype_xdigit($iv_hex) || strlen($raw) < 16) {
+        return false; // CBC (32-hex IV) and corrupt rows alike: refused
     }
-    $open = function (string $key) use ($raw, $iv_hex): string|false {
-        if (strlen($iv_hex) === 24) { // GCM: nonce + appended tag
-            if (strlen($raw) < 16) return false;
-            return openssl_decrypt(substr($raw, 0, -16), 'aes-256-gcm', $key,
-                OPENSSL_RAW_DATA, hex2bin($iv_hex), substr($raw, -16));
-        }
-        if (strlen($iv_hex) !== 32) return false; // legacy CBC
-        return openssl_decrypt($raw, 'aes-256-cbc', $key, OPENSSL_RAW_DATA, hex2bin($iv_hex));
-    };
-    if ($info !== null) {
-        $plain = $open(rot_hkdf($oldKey, $info));
-        if ($plain !== false) {
-            return $plain;
-        }
-    }
-    return $open($oldKey);
+    return openssl_decrypt(substr($raw, 0, -16), 'aes-256-gcm', rot_hkdf($master, $info),
+        OPENSSL_RAW_DATA, hex2bin($iv_hex), substr($raw, -16), $aad);
 }
 
-function rot_encrypt(string $newKey, ?string $info, string $plaintext): array {
-    // null info = legacy column no longer read by the runtime; keep raw keying.
-    $key  = $info !== null ? rot_hkdf($newKey, $info) : $newKey;
+function rot_encrypt(string $master, string $info, string $plaintext, ?string $bind = null): array {
+    $aad   = ($bind !== null && $bind !== '') ? _location_aad($bind) : '';
     $nonce = random_bytes(12);
     $tag   = '';
-    $ct    = openssl_encrypt($plaintext, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $nonce, $tag);
+    $ct    = openssl_encrypt($plaintext, 'aes-256-gcm', rot_hkdf($master, $info), OPENSSL_RAW_DATA, $nonce, $tag, $aad);
     if ($ct === false) throw new RuntimeException('encryption failed');
-    return ['ciphertext' => base64_encode($ct . $tag), 'iv' => bin2hex($nonce)];
+    return ['ciphertext' => ($aad !== '' ? LOCATION_BIND_PREFIX : '') . base64_encode($ct . $tag), 'iv' => bin2hex($nonce)];
 }
 
 $db = get_db();
@@ -97,53 +104,18 @@ if ($legacyTokens > 0) {
     fwrite(STDERR, "Plaintext order_token columns still exist — run tools/migrate_order_tokens.php first.\n");
     exit(1);
 }
+$legacyPw = (int)$db->query('SELECT COUNT(*) FROM orders WHERE pickup_password_enc IS NOT NULL')->fetchColumn();
+if ($legacyPw > 0) {
+    fwrite(STDERR, "Recoverable pickup-password copies still exist — run tools/purge_pickup_password_recovery.php first.\n");
+    exit(1);
+}
 
 $db->beginTransaction();
 $total = 0;
 $fail  = 0;
+$legacyHint = ' (legacy CBC / raw-master row? run tools/migrate_cbc_to_gcm.php and tools/separate_keys.php first)';
 
-// [table, pk, enc column, iv column, HKDF info, nullable-iv] — info strings
-// match includes/crypto.php purpose subkeys; null means the column is legacy
-// (unreadable by current runtime) and stays keyed with the raw master.
-$targets = [
-    ['orders', 'id', 'location_encrypted',  'location_iv',        'deaddrop:location-v1', false],
-    ['orders', 'id', 'pickup_password_enc', 'pickup_password_iv',  null,                   true],
-    ['users',  'id', 'totp_secret_enc',     'totp_secret_iv',      'deaddrop:totp-v1',     true],
-];
-
-foreach ($targets as [$table, $pk, $encCol, $ivCol, $info, $nullable]) {
-    $stmt = $db->query("SELECT $pk AS id, $encCol AS enc, $ivCol AS iv FROM $table WHERE $encCol IS NOT NULL");
-    $upd  = $db->prepare("UPDATE $table SET $encCol = ?, $ivCol = ? WHERE $pk = ?");
-    $n = 0;
-
-    foreach ($stmt->fetchAll() as $row) {
-        if ($row['enc'] === null || ($nullable && $row['iv'] === null)) continue;
-        $plain = rot_decrypt($oldKey, $info, $row['enc'], $row['iv']);
-        if ($plain === false) {
-            fwrite(STDERR, sprintf("FAIL %s#%d %s: cannot decrypt with OLD key — aborting\n", $table, $row['id'], $encCol));
-            $fail++;
-            continue;
-        }
-        if (!$dry) {
-            $e = rot_encrypt($newKey, $info, $plain);
-            $upd->execute([$e['ciphertext'], $e['iv'], $row['id']]);
-            // read-back sanity: the row must now decrypt with the NEW key
-            $chk = $db->prepare("SELECT $encCol AS enc, $ivCol AS iv FROM $table WHERE $pk = ?");
-            $chk->execute([$row['id']]);
-            $cur = $chk->fetch();
-            if (rot_decrypt($newKey, $info, $cur['enc'], $cur['iv']) !== $plain) {
-                fwrite(STDERR, sprintf("FAIL %s#%d %s: read-back verification failed\n", $table, $row['id'], $encCol));
-                $fail++;
-                continue;
-            }
-        }
-        $n++;
-    }
-    printf("%s %-20s %s rows\n", $dry ? '[dry-run]' : 'rotated ', "$table.$encCol", $n);
-    $total += $n;
-}
-
-// ── Order tokens (ADR-019) ───────────────────────────────────────────────────
+// ── Order tokens (ADR-019) — first: locations are bound to the index ────────
 // token_hmac is keyed by a subkey of the MASTER key, so rotating the master
 // changes every index. The only plaintext copy is orders.token_enc: each new
 // index is computed from it. Event and audit rows carry the OLD index and are
@@ -151,10 +123,13 @@ foreach ($targets as [$table, $pk, $encCol, $ivCol, $info, $nullable]) {
 // and lose their index (the order is gone — only the correlation is).
 $oldIndexKey = rot_hkdf($oldKey, 'deaddrop:token-index-v1');
 $newIndexKey = rot_hkdf($newKey, 'deaddrop:token-index-v1');
-$tokenMap    = [];
+$tokenMap    = [];   // old hmac => new state
+$newHmacById = [];   // order id => new hmac (location re-binding)
 $tokenCount  = 0;
 
-foreach ($db->query('SELECT id, token_hmac, token_enc, token_iv FROM orders')->fetchAll() as $row) {
+// FOR UPDATE on every order (and every user below): with next-key locking no
+// row can change or appear under the OLD key while this transaction runs.
+foreach ($db->query('SELECT id, token_hmac, token_enc, token_iv FROM orders FOR UPDATE')->fetchAll() as $row) {
     if ($row['token_enc'] === null || $row['token_iv'] === null) {
         fwrite(STDERR, sprintf("FAIL orders#%d token_enc: order has no token copy — aborting\n", $row['id']));
         $fail++;
@@ -171,13 +146,61 @@ foreach ($db->query('SELECT id, token_hmac, token_enc, token_iv FROM orders')->f
         $fail++;
         continue;
     }
+    $newHmac = hash_hmac('sha256', strtolower($plain), $newIndexKey);
     $tokenMap[(string)$row['token_hmac']] = [
         'id'   => (int)$row['id'],
-        'hmac' => hash_hmac('sha256', strtolower($plain), $newIndexKey),
+        'hmac' => $newHmac,
         'enc'  => $dry ? null : rot_encrypt($newKey, 'deaddrop:token-v1', $plain),
         'plain' => $plain,
     ];
+    $newHmacById[(int)$row['id']] = [(string)$row['token_hmac'], $newHmac];
     $tokenCount++;
+}
+
+// ── Encrypted columns ────────────────────────────────────────────────────────
+// [table, pk, enc column, iv column, HKDF info, nullable-iv, bound to token]
+// Locations are (re-)bound to the order's NEW token index on the way.
+$targets = [
+    ['orders', 'id', 'location_encrypted',  'location_iv',        'deaddrop:location-v1', false, true],
+    ['users',  'id', 'totp_secret_enc',     'totp_secret_iv',      'deaddrop:totp-v1',     true,  false],
+];
+
+foreach ($targets as [$table, $pk, $encCol, $ivCol, $info, $nullable, $bound]) {
+    $stmt = $db->query("SELECT $pk AS id, $encCol AS enc, $ivCol AS iv FROM $table WHERE $encCol IS NOT NULL FOR UPDATE");
+    $upd  = $db->prepare("UPDATE $table SET $encCol = ?, $ivCol = ? WHERE $pk = ?");
+    $n = 0;
+
+    foreach ($stmt->fetchAll() as $row) {
+        if ($row['enc'] === null || ($nullable && $row['iv'] === null)) continue;
+        [$oldBind, $newBind] = $bound ? ($newHmacById[(int)$row['id']] ?? [null, null]) : [null, null];
+        if ($bound && $newBind === null) {
+            fwrite(STDERR, sprintf("FAIL %s#%d %s: order token could not be re-indexed — aborting\n", $table, $row['id'], $encCol));
+            $fail++;
+            continue;
+        }
+        $plain = rot_decrypt($oldKey, $info, $row['enc'], (string)$row['iv'], $oldBind);
+        if ($plain === false) {
+            fwrite(STDERR, sprintf("FAIL %s#%d %s: cannot decrypt with OLD key%s — aborting\n", $table, $row['id'], $encCol, $legacyHint));
+            $fail++;
+            continue;
+        }
+        if (!$dry) {
+            $e = rot_encrypt($newKey, $info, $plain, $newBind);
+            $upd->execute([$e['ciphertext'], $e['iv'], $row['id']]);
+            // read-back sanity: the row must now decrypt with the NEW key
+            $chk = $db->prepare("SELECT $encCol AS enc, $ivCol AS iv FROM $table WHERE $pk = ?");
+            $chk->execute([$row['id']]);
+            $cur = $chk->fetch();
+            if (rot_decrypt($newKey, $info, $cur['enc'], $cur['iv'], $newBind) !== $plain) {
+                fwrite(STDERR, sprintf("FAIL %s#%d %s: read-back verification failed\n", $table, $row['id'], $encCol));
+                $fail++;
+                continue;
+            }
+        }
+        $n++;
+    }
+    printf("%s %-20s %s rows\n", $dry ? '[dry-run]' : 'rotated ', "$table.$encCol", $n);
+    $total += $n;
 }
 
 if (!$dry && $fail === 0) {

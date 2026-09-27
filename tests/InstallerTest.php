@@ -141,6 +141,7 @@ if (class_exists('ZipArchive')) {
     $z->addFromString($pkgTop . '/setup.sql', $setupSql);
     $z->addFromString($pkgTop . '/config.php.example', $cfgExample);
     $z->addFromString($pkgTop . '/includes/kernel.php', '<?php // marker');
+    $z->addFromString($pkgTop . '/uploads/.htaccess', 'Require all denied');
     $z->addFromString($pkgTop . '/install.php', 'decoy — the running installer must never overwrite itself');
     $z->close();
     T::ok('fixture zip built', is_file($zp));
@@ -199,12 +200,46 @@ T::ok('setup.sql landed', is_file($work . '/setup.sql'));
 T::ok('running installer survived (decoy skipped)', str_contains((string)file_get_contents($work . '/install.php'), 'INST_VERSION'));
 [$code, $tree2] = ix_run($work, ['action' => 'tree'], []);
 T::eq('tree: app present after extract', true, $tree2['present'] ?? null);
-// upgrade mode: pre-existing config.php survives with the flag
+// installed (config.php present) → locked: only probes + self-removal answer
 file_put_contents($work . '/config.php', 'sentinel');
-[$code, $dl2] = ix_run($work, [], ['action' => 'download', 'url' => $base . '/pkg.zip']);
-[$code, $ex2] = ix_run($work, [], ['action' => 'extract', 'keep_config' => '1']);
-T::eq('keep_config preserves config.php', 'sentinel', file_get_contents($work . '/config.php'));
+[$code, $treeL] = ix_run($work, ['action' => 'tree'], []);
+T::eq('tree: installed app reports locked', true, $treeL['locked'] ?? null);
+foreach ([['action' => 'download', 'url' => $base . '/pkg.zip'], ['action' => 'extract'], ['action' => 'upload'],
+          ['action' => 'fetch', 'url' => $base . '/ping.txt'], ['action' => 'tags', 'src' => $base . '/gh-tags.json'],
+          ['action' => 'dbtest', 'db_name' => 'x', 'db_user' => 'x'], ['action' => 'setup', 'db_name' => 'x', 'db_user' => 'x']] as $post) {
+    [$code, $lk] = ix_run($work, [], $post);
+    T::ok('locked: ' . $post['action'] . ' refused', ($lk['ok'] ?? true) === false && str_contains((string)($lk['error'] ?? ''), 'locked'));
+}
+T::eq('locked: config.php untouched', 'sentinel', file_get_contents($work . '/config.php'));
 @unlink($work . '/config.php');
+[$code, $dsn] = ix_run($work, [], ['action' => 'dbtest', 'db_host' => '127.0.0.1;unix_socket=/tmp/x', 'db_name' => 'x', 'db_user' => 'x']);
+T::ok('DSN injection through the host is refused', str_contains((string)($dsn['error'] ?? ''), 'plain host name'));
+file_put_contents($work . '/config.php', 'sentinel');
+// upgrade mode: owner proves filesystem access with INSTALL_UNLOCK; config.php
+// and runtime data survive, the release's .htaccess is merged in, lock returns
+file_put_contents($work . '/INSTALL_UNLOCK', '');
+@mkdir($work . '/uploads/7', 0777, true);
+file_put_contents($work . '/uploads/7/photo.jpg', 'user-data');
+[$code, $dl2] = ix_run($work, [], ['action' => 'download', 'url' => $base . '/pkg.zip']);
+T::eq('unlocked: download ok', true, $dl2['ok'] ?? false);
+[$code, $ex2] = ix_run($work, [], ['action' => 'extract', 'keep_config' => '1']);
+T::eq('unlocked: extract ok', true, $ex2['ok'] ?? false);
+T::eq('keep_config preserves config.php', 'sentinel', file_get_contents($work . '/config.php'));
+T::eq('upgrade keeps uploaded photos', 'user-data', @file_get_contents($work . '/uploads/7/photo.jpg'));
+T::ok('upgrade merges release uploads/.htaccess', is_file($work . '/uploads/.htaccess'));
+T::ok('upgrade re-locks (unlock file consumed)', !is_file($work . '/INSTALL_UNLOCK'));
+file_put_contents($work . '/INSTALL_UNLOCK', '');
+[$code, $reSetup] = ix_run($work, [], ['action' => 'setup', 'db_host' => '127.0.0.1', 'db_port' => '9', 'db_name' => 'x', 'db_user' => 'x']);
+T::ok('setup refuses an existing config.php', str_contains((string)($reSetup['error'] ?? ''), 'already exists'));
+T::eq('setup never runs over an existing config.php', 'sentinel', file_get_contents($work . '/config.php'));
+@unlink($work . '/INSTALL_UNLOCK');
+@unlink($work . '/config.php');
+// the source copy inside an installed app's tools/ never acts as an installer
+@mkdir($work . '/tools', 0777, true);
+copy($work . '/install.php', $work . '/tools/install.php');
+file_put_contents($work . '/tools/__runner.php', '<?php $_GET = ["action" => "tree"]; include __DIR__ . "/install.php";');
+exec(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($work . '/tools/__runner.php') . ' 2>&1', $embOut);
+T::ok('embedded tools/install.php refuses', str_contains(implode("\n", $embOut), 'source copy'));
 
 // ── 5. database: probe → full setup → verify ─────────────────────────────────
 $canDb = extension_loaded('pdo_mysql');
@@ -248,6 +283,10 @@ if (!$canDb) {
         $cfg = (string)file_get_contents($work . '/config.php');
         T::ok('config.php names the database', str_contains($cfg, "'$scratch'"));
         T::ok('config.php holds a fresh 64-hex key', preg_match('/[0-9a-f]{64}/', $cfg) === 1);
+        if (PHP_OS_FAMILY !== 'Windows') {
+            clearstatcache();
+            T::eq('config.php is not world-readable', 0, fileperms($work . '/config.php') & 0007);
+        }
         foreach (['logs','cache/osm_tiles','cache/sessions','tiles','data/maps','uploads'] as $d) {
             T::ok('dir created: ' . $d, is_dir($work . '/' . $d));
         }

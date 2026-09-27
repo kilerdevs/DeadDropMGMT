@@ -343,10 +343,11 @@ lives on another host, encrypt the connection by pointing `DDMGMT_DB_SSL_CA` at 
 certificate (optional client cert/key: `DDMGMT_DB_SSL_CERT`, `DDMGMT_DB_SSL_KEY`; certificate verification is on by
 default and only explicitly disableable via `DDMGMT_DB_SSL_VERIFY_CERT=0` — don't, outside throwaway labs).
 
-Behind a reverse proxy or CDN, set `DDMGMT_TRUST_PROXY=1` so rate limiting and the audit log see the real client address
-from `CF-Connecting-IP` / `X-Forwarded-For` / `X-Real-IP`. Without that flag the headers are ignored — otherwise any
-client could spoof its IP and sidestep the limiter. Only enable it when the proxy overwrites (not appends to) these
-headers.
+Behind a reverse proxy or CDN, set `DDMGMT_TRUST_PROXY=1` so rate limiting and the audit log see the real client address.
+Exactly **one** header is read: `DDMGMT_CLIENT_IP_HEADER`, default `X-Forwarded-For` (last hop — the one your proxy
+appended). Set it to `CF-Connecting-IP` behind Cloudflare, or `X-Real-IP` if your proxy sets only that. Other client-IP
+headers are ignored, because a proxy only rewrites the header it knows and would pass a client-forged one through.
+Without the flag every header is ignored — otherwise any client could spoof its IP and sidestep the limiter.
 
 The flag alone is not enough: headers are honored only when the **direct connection peer** (`REMOTE_ADDR`) matches
 `DDMGMT_TRUSTED_PROXIES` — a comma-separated list of IPs or CIDR ranges. Unset, it defaults to loopback and RFC1918 space
@@ -367,15 +368,23 @@ Rotate when the key may have been exposed (leaked backup, departed admin, incide
 the people whose locations you hold — yearly is a reasonable default. The bundled tool makes it mechanical:
 
 ```bash
-# rehearse first: verifies every row decrypts with the old key, writes nothing
-php tools/rotate_aes_key.php --old=<OLD_64HEX> --new=<NEW_64HEX> --dry-run
+# keys go in on stdin (arguments would be visible in the process list / shell history)
+read -rs OLD; read -rs NEW
 
-# apply: re-encrypts orders.locations, pickup passwords and TOTP secrets, re-encrypts
-# and re-indexes every order token (event and audit rows of deleted orders lose their
-# token index), verifies each row read-back under the new key, single transaction —
-# any undecryptable row aborts and rolls everything back
-php tools/rotate_aes_key.php --old=<OLD_64HEX> --new=<NEW_64HEX>
+# rehearse first: verifies every row decrypts with the old key, writes nothing
+printf '%s\n%s\n' "$OLD" "$NEW" | php tools/rotate_aes_key.php --keys-from-stdin --dry-run
+
+# apply: re-encrypts order locations (re-bound to the new token index) and TOTP
+# secrets, re-encrypts and re-indexes every order token (event and audit rows of
+# deleted orders lose their token index), verifies each row read-back under the new
+# key, locks every order/user row, single transaction — any undecryptable row aborts
+# and rolls everything back
+printf '%s\n%s\n' "$OLD" "$NEW" | php tools/rotate_aes_key.php --keys-from-stdin
 ```
+
+Only current-format data is rotated: legacy CBC rows, raw-master rows and recoverable pickup-password copies are refused —
+run `tools/migrate_cbc_to_gcm.php`, `tools/separate_keys.php` and `tools/purge_pickup_password_recovery.php` first.
+Locations written before row binding can be bound in place any time with `php tools/bind_locations.php`.
 
 Procedure:
 
@@ -409,8 +418,9 @@ values.
 | `DDMGMT_DB_USER` / `DDMGMT_DB_PASS` | `root` / *(empty)* | Database credentials |
 | `DDMGMT_DB_SSL_CA` / `_CERT` / `_KEY` | *(unset)* | TLS for a remote database |
 | `DDMGMT_DB_SSL_VERIFY_CERT` | `1` | Set `0` only in throwaway labs |
-| `DDMGMT_TRUST_PROXY` | `0` | Honor `X-Forwarded-*` / `CF-Connecting-IP` from a trusted peer |
+| `DDMGMT_TRUST_PROXY` | `0` | Honor `X-Forwarded-Proto` and the client-IP header from a trusted peer |
 | `DDMGMT_TRUSTED_PROXIES` | loopback + RFC1918 | Comma-separated IPs / CIDRs allowed to set proxy headers |
+| `DDMGMT_CLIENT_IP_HEADER` | `X-Forwarded-For` | The one header carrying the client IP: `X-Forwarded-For`, `CF-Connecting-IP` or `X-Real-IP` |
 | `DDMGMT_SETUP_TOKEN` | *(unset)* | When set, creating the first owner requires this token; when unset the first visitor claims the instance (logged as a warning) |
 | `DDMGMT_PROXY_HEAL` | `1` | `0` disables all *automatic* OSM proxy discovery — first-run seeding and replacing failed proxies (the Auto-discover button still works) |
 | `DDMGMT_PSEUDO_CRON` | `1` | `0` disables the page-visit pseudo-cron (for installs that run real cron) |
@@ -465,6 +475,12 @@ locked-down `php.ini`. Everything that would normally lean on Docker, cron or pr
 2. **Package** — pick a release; the installer downloads it itself (resumable, verified) over a direct connection. No proxy support by design: a host that cannot reach GitHub gets the manual-upload button instead.
 3. **Database + site setup** — create the empty database and user in the hosting panel first (the installer has no such privilege there), enter them, hit *Test connection*, then *Install now*: it writes `config.php` with a fresh random AES key, creates the storage dirs and imports the schema without the privileged statements.
 4. **Finish** — verify, then delete the installer (one click; it removes itself).
+
+The installer has no login, so until step 3 finishes it is open to anyone who finds it — run it straight through. Once
+`config.php` exists it **locks itself**: only the read-only server check and self-removal still answer, and setup never
+overwrites an existing `config.php`. To **upgrade** later, create an empty file named `INSTALL_UNLOCK` next to the
+installer (FTP / file manager) — that proves you control the files — then download + extract; `uploads/`, `tiles/`,
+`data/`, `cache/`, `logs/` and `backups/` are merged, never replaced, and the unlock file is removed afterwards.
 
 No shell, no phpMyAdmin import, no hand-written config. Without the `zip` extension the installer falls back to a manual upload-and-extract path instead of failing.
 
@@ -561,11 +577,11 @@ Server-local files (`config.php`, `includes/`, `logs/`, `uploads/`) are never se
 | SQL injection | PDO prepared statements throughout — zero string interpolation in SQL | S1–S5 | A1–A2 |
 | Password storage | bcrypt cost=12 via `password_hash()` / `password_verify()` | S5 | A4 |
 | Account takeover | TOTP 2FA (RFC 6238) — self-service per account, secret GCM-encrypted at rest. Passwordless accounts are claimed only with a single-use enrollment secret, never by username alone. Per-account attempt budgets on login and 2FA; password / 2FA resets end all of the account's sessions; hard 12-hour session ceiling | S5 | A1, A2 |
-| Location data at rest | AES-256-GCM (authenticated), random nonce per record; keys are HKDF purpose-subkeys of the master key — locations, TOTP secrets, reveal payloads, one-time session messages, the order-token index and copy, and the log chain each use their own (ADR-016). Legacy CBC rows and raw-master rows are rejected at runtime — migrate with `tools/migrate_cbc_to_gcm.php` then `tools/separate_keys.php`. Master key lives only in `config.php`, env (`DDMGMT_AES_KEY_HEX`) or the `/config/aes_key_hex` file — never in the DB | S1, S4 | A4 |
+| Location data at rest | Location text, pin, instructions **and order notes** travel in one AES-256-GCM (authenticated) blob, random nonce per record (notes of orders saved before this lived in a plaintext column until their next save). **Drop photos are not encrypted on disk** — they are re-encoded, EXIF-stripped files under unguessable names, deleted with the order and by panic wipe; keys are HKDF purpose-subkeys of the master key — locations, TOTP secrets, reveal payloads, one-time session messages, the order-token index and copy, and the log chain each use their own (ADR-016). Legacy CBC rows and raw-master rows are rejected at runtime — migrate with `tools/migrate_cbc_to_gcm.php` then `tools/separate_keys.php`. Master key lives only in `config.php`, env (`DDMGMT_AES_KEY_HEX`) or the `/config/aes_key_hex` file — never in the DB | S1, S4 | A4 |
 | Order tokens at rest | Lookups go through `orders.token_hmac`: HMAC-SHA256 of the (lower-cased) token under its own HKDF subkey, unique-indexed. Events and the audit trail keep only that index. The admin panel's display copy is AES-256-GCM under a second subkey. A database dump therefore contains no usable token and cannot be used to test candidate tokens offline. Existing installs upgrade with `tools/migrate_order_tokens.php` (ADR-019) | S3 | A4 |
-| Pickup password guessing | Dual budget enforced together: IP-based limiter (**fail-closed**: if the limiter DB is down, pickup and login are denied, not waved through) **and** a per-session failure bucket (5 failures per window, its own constant — not tied to the IP attempt count) — whoever trips either is blocked; ≥64-bit generated passphrases (6 words + 4-digit + symbol), hash-only at rest, equalized-cost responses for unknown tokens | S2 | A1 |
+| Pickup password guessing | Per-order budget (10 wrong passwords per window per token, from any address — a leaked link plus rotating IPs buys no more) plus a dual budget enforced together: IP-based limiter (IPv6 clients counted per /64) (**fail-closed**: if the limiter DB is down, pickup and login are denied, not waved through) **and** a per-session failure bucket (5 failures per window, its own constant — not tied to the IP attempt count) — whoever trips either is blocked; ≥64-bit generated passphrases (6 words + 4-digit + symbol), hash-only at rest, equalized-cost responses for unknown tokens | S2 | A1 |
 | Rate-limit bypass via spoofed `X-Forwarded-For` | Proxy headers are honored only when `DDMGMT_TRUST_PROXY=1` (opt-in for reverse-proxy/CDN installs) **and** the direct peer matches `DDMGMT_TRUSTED_PROXIES` (default: loopback + RFC1918); header values are validated as literal IPs and `REMOTE_ADDR` is the default source of truth | S2 | A1 |
-| Token enumeration | 16-char alphanumeric random tokens (~95 bits); unknown-token answers burn the same bcrypt cost and return the same body as wrong passwords when a credential was submitted; receipt requires the delivered state atomically; expired-but-not-yet-swept orders are treated as gone | S3 | A1 |
+| Token enumeration | 16-char alphanumeric random tokens (~83 bits effective — lookups are case-insensitive, so 36 symbols per position); unknown-token answers burn the same bcrypt cost and return the same body as wrong passwords when a credential was submitted; receipt requires the delivered state atomically; expired-but-not-yet-swept orders are treated as gone | S3 | A1 |
 | Session fixation / theft | `session_regenerate_id(true)` on login; `httponly`, `samesite=Strict`, `secure` when HTTPS | S5 | A1, A2 |
 | CSRF | 32-byte random token in session (64 hex chars), `hash_equals()` on every POST — public unlock forms included; single-use rotation, with a same-origin live-token endpoint so long-lived admin pages never go stale | S5, S7 | A2 |
 | XSS | `htmlspecialchars(..., ENT_QUOTES, 'UTF-8')` on all user-derived output; strict CSP with nonces | S5 | A1, A2 |
@@ -631,7 +647,7 @@ The public Content-Security-Policy allows exactly one external origin: `frame-sr
 | OSM tile hosts | Admin map tiles, cache misses only | This server's IP (or a pool proxy's) |
 | Protomaps (`build.protomaps.com`, `build-metadata.protomaps.dev`) | Self-hosted map zone downloads and freshness checks | This server's IP, or a pool proxy's — per the route you consent to per download |
 | GitHub releases (`github.com/protomaps/go-pmtiles`) | First use of the `pmtiles` CLI | This server's IP |
-| Public proxy lists (`raw.githubusercontent.com`), anonymity judges and public-IP lookup services | When the owner clicks **Auto-discover**; **automatically on the first run** (OSM proxy routing is on by default and an empty pool fails closed, so a first pool is discovered in the background); and when a discovered pool proxy has failed and is replaced (at most once per 10 minutes). Set `DDMGMT_PROXY_HEAL=0` or turn routing off in Settings to prevent the automatic runs | This server's IP — see below |
+| Public proxy lists (`raw.githubusercontent.com`), anonymity judges and public-IP lookup services | When the owner clicks **Auto-discover**; **automatically once the owner turns routing on** (an empty pool fails closed, so a first pool is discovered in the background); and when a discovered pool proxy has failed and is replaced (at most once per 10 minutes). Set `DDMGMT_PROXY_HEAL=0` or turn routing off in Settings to prevent the automatic runs | This server's IP — see below |
 
 <details>
 <summary><b>Proxy auto-discovery sources</b> — what each list contributes and how candidates are vetted</summary>
@@ -653,7 +669,7 @@ All fetched from GitHub raw by the server (never the browser) when the owner cli
 
 **Failed proxies are replaced automatically.** While routing is enabled, a discovered pool entry that fails (seen by live traffic or by the stale re-probe below) is confirmed dead with a fresh probe, deleted, and replaced by a newly discovered proxy chosen by exactly the Auto-discover criteria (answers a real HTTPS OSM tile in under 3 s; anonymity check for unrated HTTP proxies). The work runs in a detached CLI job (`cron/proxy_heal.php`, also called from the cleanup cron), under a lock, at most once per 10 minutes — never inside a page request. Safeguards: **nothing is deleted until a replacement exists** (an outage where every proxy "fails" and discovery finds nothing leaves the pool untouched, and the pool never shrinks); a proxy that answers the confirmation probe is kept; entries you added by hand (`manual`) are never deleted automatically; with routing disabled nothing happens. Each swap is written to the audit log (`proxy_replace`). Because this reuses discovery, it makes the same outbound connections as the Auto-discover button.
 
-**First run: routing is on and the pool is filled automatically.** OSM proxy routing is enabled by default for new installs. The pool starts empty and an empty pool fails closed, so on the first run the same job discovers a first pool and stores everything Auto-discover would (`proxy_seed` in the audit log) — started at container boot, by the first page visit's pseudo-cron, or by the first OSM request, whichever comes first, with the same lock and cooldown. Until it finishes (typically a minute or two) OSM-backed map views answer `502` rather than reach OSM from the server's own address; if discovery finds nothing (no outbound network) it retries after the cooldown. Existing installs keep whatever the owner set. To opt out: turn routing off in Settings, or set `DDMGMT_PROXY_HEAL=0` (routing on + empty pool then simply stays failed-closed until you add proxies).
+**Turning routing on fills the pool automatically.** OSM proxy routing is **off** by default for new installs (opt-in: it downloads third-party proxy lists and probes hundreds of unknown hosts; list entries pointing at loopback, private or reserved addresses are discarded). Once the owner enables it, the pool starts empty and an empty pool fails closed, so on the first run the same job discovers a first pool and stores everything Auto-discover would (`proxy_seed` in the audit log) — started at container boot, by the first page visit's pseudo-cron, or by the first OSM request, whichever comes first, with the same lock and cooldown. Until it finishes (typically a minute or two) OSM-backed map views answer `502` rather than reach OSM from the server's own address; if discovery finds nothing (no outbound network) it retries after the cooldown. Existing installs keep whatever the owner set. To opt out: turn routing off in Settings, or set `DDMGMT_PROXY_HEAL=0` (routing on + empty pool then simply stays failed-closed until you add proxies).
 
 **Stale entries are re-probed automatically.** A manually added proxy is only format-checked at insert, so a typo'd-but-well-formed URL would sit at `new` forever. Every cleanup pass (hourly pseudo-cron, or real cron) re-probes the 3 stalest entries — never checked, or not checked in 7 days — against a real OSM tile and updates their status, so the pool display reflects reality even for proxies live traffic never exercises.
 
@@ -837,7 +853,8 @@ DeadDropMGMT/
 ├── tests/                    Zero-dependency suite (see Tests above)
 ├── e2e/                      Playwright specs, seed script, offline map fixture
 ├── tools/                    CLI maintenance: key rotation/separation,
-│                             CBC→GCM and order-token migrations, recovery purge, mutation probe,
+│                             CBC→GCM and order-token migrations, location row binding
+│                             (bind_locations.php), recovery purge, mutation probe,
 │                             build_info.sh (version provenance for image builds),
 │                             install.php (one-file web installer for shell-less shared hosting),
 │                             install.min.php (its minified upload build — generated, CI-rebuilt),

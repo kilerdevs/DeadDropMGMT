@@ -107,6 +107,23 @@ T::eq('tile files counted apart from photos', 1, $tw['tiles']);
 T::eq('photo count unaffected by tiles', 0, $tw['files']);
 T::ok('tile cache root kept', is_dir($tileRoot));
 
+// Database dumps in backups/ hold every order the wipe just deleted: they
+// die too; the directory's deny file stays.
+$bkDir = dirname(__DIR__) . '/backups';
+@mkdir($bkDir, 0770, true);
+$bkHt = is_file("$bkDir/.htaccess");
+if (!$bkHt) {
+    file_put_contents("$bkDir/.htaccess", "Require all denied\n");
+}
+file_put_contents("$bkDir/pre-t_panic.sql", 'dump');
+$bw = do_panic_wipe();
+T::ok('database dumps destroyed', !is_file("$bkDir/pre-t_panic.sql"));
+T::ok('backups deny file kept', is_file("$bkDir/.htaccess"));
+T::eq('dumps counted as destroyed files', 1, $bw['files']);
+if (!$bkHt) {
+    @unlink("$bkDir/.htaccess");
+}
+
 // Partial failure must be OBSERVABLE: an undeletable file is reported, not
 // hidden behind a success message; and the retry finishes the job.
 // As root (some CI images, containers) mode bits do not apply — unlink

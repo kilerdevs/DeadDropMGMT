@@ -10,6 +10,13 @@ const INST_MASTER_ZIP = 'https://github.com/kilerdevs/DeadDropMGMT/archive/refs/
 const INST_TAGS_API = 'https://api.github.com/repos/kilerdevs/DeadDropMGMT/tags';
 const INST_TABLES = ['users','orders','order_photos','osm_proxies','map_zones','order_events','rate_limits','audit_log','settings','log_checkpoints'];
 const INST_DIRS = ['logs','cache','cache/osm_tiles','cache/sessions','tiles','data/maps','uploads'];
+// Runtime-data dirs: an upgrade merges the release's files (.htaccess) into
+// them and never deletes what is already there (photos, zones, sessions).
+const INST_KEEP = ['uploads','tiles','data','cache','logs','backups'];
+// Upgrade/re-run proof of filesystem access (Nextcloud CAN_INSTALL-style):
+// once config.php exists every state-changing action needs this empty file
+// next to the installer, created by the owner via FTP / file manager.
+const INST_UNLOCK = 'INSTALL_UNLOCK';
 
 // Cheap hosts disableini_set/ini_get/disk_free_space via disable_functions —
 // and on PHP 8 calling one throws Error, which @ cannot suppress. So every
@@ -59,6 +66,13 @@ function base(): string { return rtrim(str_replace('\\', '/', __DIR__), '/'); }
 function dl_paths(): array {
     $b = base();
     return [$b . '/.__install_dl.zip', $b . '/.__install_src'];
+}
+function inst_installed(): bool { return is_file(base() . '/config.php'); }
+function inst_unlocked(): bool { return is_file(base() . '/' . INST_UNLOCK); }
+// The copy every release ships in tools/ is source, not a deployable
+// installer: served from there it would see no config.php and act "fresh".
+function inst_embedded(): bool {
+    return basename(base()) === 'tools' && is_file(dirname(base()) . '/includes/kernel.php');
 }
 function pq(string $v): string { // php-quote for config patching
     return str_replace(['\\', "'"], ['\\\\', "\\'"], $v);
@@ -264,13 +278,17 @@ function ix_sock_hop(string $url, string $method, int $timeout = 25): array {
             while (true) {
                 $i = strpos($buf, "\r\n");
                 if ($i === false) {
+                    if (strlen($buf) > 4096) { $close(); return ['error' => 'corrupt chunk framing']; }
                     $more = ix_read_until($s, $deadline, function (string $b): ?string { return $b !== '' ? $b : null; }, 65536);
                     if (!is_string($more)) { $close(); return ['error' => 'truncated chunked body']; }
                     $buf .= $more;
                     continue;
                 }
-                if (preg_match('/^([0-9a-fA-F]+)(;[^\r]*)?$/', substr($buf, 0, $i), $m) !== 1) { $close(); return ['error' => 'corrupt chunk framing']; }
+                if (preg_match('/^([0-9a-fA-F]{1,8})(;[^\r]*)?$/', substr($buf, 0, $i), $m) !== 1) { $close(); return ['error' => 'corrupt chunk framing']; }
                 $size = hexdec($m[1]);
+                // Checked BEFORE buffering: an announced size past the body
+                // cap would otherwise be read in full first.
+                if ($size > IX_MAX_BODY) { $close(); return ['error' => 'body exceeds 16 MB cap']; }
                 $buf = substr($buf, $i + 2);
                 if ($size === 0) break;
                 while (strlen($buf) < $size + 2) {
@@ -424,8 +442,25 @@ function ix_schema_apply(PDO $pdo, array $stmts): array {
     return ['applied' => $n, 'error' => '', 'statement' => ''];
 }
 
-// ── action dispatch ──────────────────────────────────────────────────────────
+// ── lock ─────────────────────────────────────────────────────────────────────
+// The installer has no accounts, so the filesystem is its only authority:
+// before config.php exists it is open (as every web installer is — finish it
+// promptly); after, only the read-only probes and self-removal answer unless
+// the owner drops INSTALL_UNLOCK beside it. Re-running setup over an existing
+// config.php is never allowed (a fresh AES key would orphan all data).
+if (inst_embedded()) {
+    http_response_code(403);
+    header('Content-Type: text/plain; charset=utf-8');
+    echo "This is the installer's source copy inside an installed app. Copy install.php into an empty hosting directory to install.\n";
+    exit;
+}
 $action = (string)($_GET['action'] ?? $_POST['action'] ?? '');
+if ($action !== '' && inst_installed() && !inst_unlocked()
+    && !in_array($action, ['check', 'tree', 'remove'], true)) {
+    http_response_code(403);
+    jer('locked: config.php exists, so this app is already installed. To upgrade, create an empty file named '
+        . INST_UNLOCK . ' next to this installer (FTP / file manager) and retry; it is removed after the extract.');
+}
 if ($action !== '') {
     unlimit();
     if ($action === 'check') {
@@ -437,7 +472,8 @@ if ($action !== '') {
     if ($action === 'tags') {
         $src = trim((string)($_POST['src'] ?? ''));
         if ($src === '') $src = INST_TAGS_API;
-        if (!preg_match('#^https?://#i', $src) && !str_starts_with($src, 'file://')) jer('not an http(s) URL');
+        // file:// is the offline test hook — CLI only, never a web-reachable local file read.
+        if (!preg_match('#^https?://#i', $src) && !(PHP_SAPI === 'cli' && str_starts_with($src, 'file://'))) jer('not an http(s) URL');
         $r = http_fetch($src);
         if (isset($r['error'])) jer('version list failed: ' . $r['error']);
         if ($r[0] !== 200) jer('version source answered HTTP ' . $r[0] . ' — paste a zip URL manually.');
@@ -453,7 +489,7 @@ if ($action !== '') {
     }
     if ($action === 'tree') { // already-extracted app present?
         jout(['ok' => true, 'present' => is_file(base() . '/setup.sql') && is_file(base() . '/includes/kernel.php'),
-            'has_config' => is_file(base() . '/config.php')]);
+            'has_config' => inst_installed(), 'locked' => inst_installed() && !inst_unlocked()]);
     }
     if ($action === 'download') {
         // One single request: GitHub's archive endpoint (codeload) ignores
@@ -530,15 +566,23 @@ if ($action !== '') {
             if ($keepCfg && $e === 'config.php') { $skipped++; continue; }
             if ($e === basename(__FILE__)) { $skipped++; continue; } // never overwrite the running installer
             $dst = base() . '/' . $e;
+            if (in_array($e, INST_KEEP, true) && is_dir($dst) && !is_link($dst)) {
+                if (!merge_tree($from . '/' . $e, $dst)) { rmdir_r($src); jer('cannot merge ' . $e . ' — permissions?'); }
+                $moved++;
+                continue;
+            }
             rmdir_r($dst);
             if (!@rename($from . '/' . $e, $dst)) { rmdir_r($src); jer('cannot move ' . $e . ' into place — permissions?'); }
             $moved++;
         }
         rmdir_r($src); @unlink($zip);
+        @unlink(base() . '/' . INST_UNLOCK); // upgrade done: re-lock
         jout(['ok' => true, 'moved' => $moved, 'entries' => $n, 'kept_config' => $keepCfg,
             'log' => "extracted $n entries, placed $moved top-level items" . ($keepCfg ? ' (existing config.php kept)' : '')]);
     }
     if ($action === 'dbtest' || $action === 'setup') {
+        if ($action === 'setup' && inst_installed())
+            jer('config.php already exists — setup never overwrites it (a fresh AES key would make all encrypted data unreadable). Delete config.php by hand only to start over.');
         if (!class_exists('PDO') || !extension_loaded('pdo_mysql')) {
             jer('database step needs pdo_mysql (missing here) — enable it in the panel, then re-run this step only.');
         }
@@ -548,6 +592,9 @@ if ($action !== '') {
         $user = trim((string)($_POST['db_user'] ?? ''));
         $pass = (string)($_POST['db_pass'] ?? '');
         if ($name === '' || $user === '') jer('database name and user are required');
+        // The host lands in the PDO DSN verbatim: ';unix_socket=…' or
+        // ';dbname=…' riding in it would rewrite the connection string.
+        if (preg_match('/^[A-Za-z0-9.\-]+$|^\[?[0-9A-Fa-f:.]+\]?$/', $h) !== 1) jer('database host must be a plain host name or IP address');
         if (!preg_match('/^[0-9A-Za-z_$]+$/', $name)) jer('database name must be plain [A-Za-z0-9_$] (panel-prefixed names are fine)');
         try {
             $pdo = new PDO("mysql:host=$h;port=$port;dbname=$name;charset=utf8mb4", $user, $pass,
@@ -596,6 +643,9 @@ if ($action !== '') {
         $cfgHead = "<?php\n// Generated by DeadDropMGMT web installer " . INST_VERSION . ' on ' . gmdate('Y-m-d H:i:s') . " UTC.\n";
         if (@file_put_contents(base() . '/config.php', $cfgHead . substr($tpl, 5)) === false)
             jer('cannot write config.php — directory not writable?');
+        // DB password + AES key inside: not for other accounts on a shared
+        // host (the default umask usually leaves it world-readable).
+        @chmod(base() . '/config.php', 0640);
         $log[] = 'config.php written (AES key generated fresh)';
         // 3. schema
         $stmts = ix_schema_statements((string)file_get_contents(base() . '/setup.sql'));
@@ -635,6 +685,23 @@ if ($action !== '') {
         jer('could not delete itself — remove ' . basename($me) . ' via FTP/file manager.');
     }
     jer('unknown action');
+}
+// Move every file of $from into $to, overwriting same-named files (the
+// release's .htaccess) but never deleting anything already in $to.
+function merge_tree(string $from, string $to): bool {
+    if (!is_dir($to) && !@mkdir($to, 0755, true)) return false;
+    foreach (scandir($from) as $e) {
+        if ($e === '.' || $e === '..') continue;
+        $s = $from . '/' . $e;
+        $d = $to . '/' . $e;
+        if (is_dir($s) && !is_link($s)) {
+            if (is_link($d) || is_file($d)) return false; // never follow or clobber a non-dir
+            if (!merge_tree($s, $d)) return false;
+        } elseif (is_dir($d) || !@rename($s, $d)) {
+            return false;
+        }
+    }
+    return true;
 }
 function rmdir_r(string $p): void {
     if (is_link($p) || is_file($p)) { @unlink($p); return; }
@@ -790,7 +857,7 @@ function loadTree(){
 get("tree").then(function(r){
 if(!r.ok)return;
 $("treeinfo").innerHTML=r.present
-?'<p class="hint">App files already present in this directory'+(r.has_config?" <b>and config.php exists</b> (upgrade mode — your config is kept).":" (no config.php yet).")+" You may skip straight to extraction or setup.</p>"
+?'<p class="hint">App files already present in this directory'+(r.has_config?" <b>and config.php exists</b> (upgrade mode — your config is kept).":" (no config.php yet).")+" You may skip straight to extraction or setup.</p>"+(r.locked?'<p class="hint"><b>Locked:</b> this app is installed. To upgrade, create an empty file named <code>INSTALL_UNLOCK</code> next to this installer via FTP / file manager, then reload. Otherwise delete the installer.</p>':"")
 :'<p class="hint">No app files here yet — download the release package below.</p>';
 if(r.present){$("dlbtns").classList.remove("hidden");$("b1").classList.remove("hidden")}
 log("tree probe: app files "+(r.present?"present":"absent")+", config.php "+(r.has_config?"present":"absent"),"info");

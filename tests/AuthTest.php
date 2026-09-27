@@ -175,6 +175,20 @@ $_SESSION = [];
 T::ok('72-byte password is accepted', password_length_ok(str_repeat('a', 72)));
 T::ok('73-byte password is refused (bcrypt would truncate)', !password_length_ok(str_repeat('a', 73)));
 
+// Self-service changes re-prove the current password (hijacked owner session
+// must not strip 2FA / swap the password); other accounts need no re-auth.
+$db->prepare("DELETE FROM rate_limits WHERE scope = 'admin_reauth'")->execute();
+$_SESSION = ['user_id' => $ownerId, 'user_role' => 'owner'];
+T::ok('own account: wrong current password refused', !admin_self_reauth_ok($ownerId, 'wrong'));
+T::ok('own account: missing current password refused', !admin_self_reauth_ok($ownerId, ''));
+T::ok('own account: correct current password accepted', admin_self_reauth_ok($ownerId, 'CorrectHorse1!'));
+T::ok('another account: owner recovery path needs no re-auth', admin_self_reauth_ok($courierId, ''));
+$db->prepare("DELETE FROM rate_limits WHERE scope = 'admin_reauth'")->execute();
+$_SESSION = [];
+// The IP-limiting switch only covers public budgets; authentication ones stay.
+T::ok('rate-limit switch covers the public budget', rl_scope_switchable('public'));
+T::ok('rate-limit switch never disables 2FA budgets', !rl_scope_switchable('admin_2fa_acct'));
+
 // Cleanup
 $_POST = [];
 $db->prepare('DELETE FROM users WHERE id = ?')->execute([$pendingId]);

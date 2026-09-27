@@ -1,5 +1,6 @@
 config.php
-logs/
+logs/*
+!logs/.htaccess
 uploads/
 cache/osm_tiles/
 cache/sessions/

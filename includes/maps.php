@@ -917,7 +917,7 @@ function maps_fetch_file(string $url, string $dest, ?string $proxy): array {
         curl_setopt($ch, CURLOPT_RANGE, $have . '-');
     }
     if ($proxy !== null) {
-        curl_setopt($ch, CURLOPT_PROXY, $proxy);
+        curl_setopt($ch, CURLOPT_PROXY, proxy_curl_url($proxy));
     }
     $ok = curl_exec($ch);
     $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -1230,7 +1230,9 @@ function maps_zone_refresh(int $id): bool {
 
 // Best pool proxy URL for a long download (same ok → new → dead ordering as
 // osm_fetch), or null when none is usable. Never falls back to direct here.
-function maps_pick_proxy(): ?string {
+// $forCli: the Go pmtiles CLI takes the proxy via HTTP(S)_PROXY, which has no
+// SOCKS4 support — such entries would only make the download fail.
+function maps_pick_proxy(bool $forCli = false): ?string {
     $pool = osm_proxy_pool();
     if (!$pool) {
         return null;
@@ -1248,9 +1250,13 @@ function maps_pick_proxy(): ?string {
         return ((int)($a['latency_ms'] ?? PHP_INT_MAX)) <=> ((int)($b['latency_ms'] ?? PHP_INT_MAX));
     });
     foreach ($pool as $px) {
-        if (($px['last_status'] ?? '') !== 'fail') {
-            return (string)$px['url'];
+        if (($px['last_status'] ?? '') === 'fail') {
+            continue;
         }
+        if ($forCli && str_starts_with((string)$px['url'], 'socks4')) {
+            continue;
+        }
+        return (string)$px['url'];
     }
     return null;
 }
@@ -1788,7 +1794,7 @@ function maps_process_one(array $zone): array {
     };
 
     $viaProxy = ((int)($zone['via_proxy'] ?? 1)) === 1;
-    $proxy = $viaProxy ? maps_pick_proxy() : null;
+    $proxy = $viaProxy ? maps_pick_proxy(maps_engine() !== 'php') : null;
     if ($viaProxy && $proxy === null) {
         $mark('failed', ['error' => 'code:proxy_empty']);
         return [false, 'code:proxy_empty'];

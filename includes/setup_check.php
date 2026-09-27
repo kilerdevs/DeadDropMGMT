@@ -92,14 +92,29 @@ function setup_storage_checks(): array {
         ? setup_row('aes_key', 'AES-256-GCM key', 'ok')
         : setup_row('aes_key', 'AES key', 'fail', t('admin.setupcheck.key_bad'));
     $out[] = setup_webserver_row($_SERVER['SERVER_SOFTWARE'] ?? '');
+    // The compose files' published fallbacks: fine while the database has no
+    // exposed port, but anyone reading this repo knows them.
+    // constant(): the value is deployment data, not the template's literal.
+    $dbPass = defined('DB_PASS') ? (string)constant('DB_PASS') : '';
+    if (in_array($dbPass, ['deaddrop-db', 'deaddrop-root'], true)) {
+        $out[] = setup_row('db_pass', 'database password', 'warn', t('admin.setupcheck.db_default_pass'));
+    }
     return $out;
 }
 
 // .htaccess protects includes/, logs/, setup.sql and friends — but only on
 // Apache. Anywhere else the owner must apply the nginx snippet (docs/).
-function setup_webserver_row(string $software): array {
-    if (is_file(dirname(__DIR__) . '/.htaccess') && stripos($software, 'apache') !== false) {
-        return setup_row('htaccess', '.htaccess', 'ok');
+// The root file's directory rules need mod_rewrite, so every private folder
+// also carries its own deny file; a missing one is reported by name.
+const SETUP_DENY_FILES = ['includes/.htaccess', 'logs/.htaccess', 'tools/.htaccess', 'cron/.htaccess',
+    'data/.htaccess', 'cache/.htaccess', 'backups/.htaccess'];
+function setup_webserver_row(string $software, ?string $root = null): array {
+    $root ??= dirname(__DIR__);
+    if (is_file($root . '/.htaccess') && stripos($software, 'apache') !== false) {
+        $missing = array_values(array_filter(SETUP_DENY_FILES, static fn(string $f): bool => !is_file($root . '/' . $f)));
+        return $missing === []
+            ? setup_row('htaccess', '.htaccess', 'ok')
+            : setup_row('htaccess', '.htaccess', 'warn', t('admin.setupcheck.deny_missing', ['files' => implode(', ', $missing)]));
     }
     if (stripos($software, 'apache') !== false) {
         return setup_row('htaccess', '.htaccess', 'warn', t('admin.setupcheck.dir_ro', ['dir' => '.htaccess']));
@@ -119,7 +134,8 @@ function setup_db_probe(): array {
         );
     } catch (PDOException $e) {
         return ['connected' => false, 'error' => $e->getMessage(), 'pdo' => null,
-                'zone' => null, 'tables' => [], 'engines' => [], 'owner_exists' => false];
+                'zone' => null, 'tables' => [], 'engines' => [], 'owner_exists' => false,
+                'owner_known' => false];
     }
     $zone = null;
     try {
@@ -128,6 +144,7 @@ function setup_db_probe(): array {
     }
     $tables = [];
     $engines = [];
+    $tablesRead = false;
     try {
         $rows = $pdo->query(
             'SELECT TABLE_NAME, ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE()'
@@ -136,16 +153,22 @@ function setup_db_probe(): array {
             $tables[] = $r['TABLE_NAME'];
             $engines[$r['TABLE_NAME']] = strtoupper((string)$r['ENGINE']);
         }
+        $tablesRead = true;
     } catch (Throwable) {
     }
+    // owner_known: the answer is positively established — the count ran, or
+    // the users table verifiably does not exist yet (fresh install). A failed
+    // query is NOT "no owner": the page would go public on an installed app.
     $owner = false;
+    $known = $tablesRead && !in_array('users', $tables, true);
     try {
         $owner = (int)$pdo->query("SELECT COUNT(*) FROM users WHERE role = 'owner'")->fetchColumn() > 0;
+        $known = true;
     } catch (Throwable) {
     }
     return ['connected' => true, 'error' => '', 'pdo' => $pdo,
             'zone' => is_string($zone) ? $zone : null, 'tables' => $tables,
-            'engines' => $engines, 'owner_exists' => $owner];
+            'engines' => $engines, 'owner_exists' => $owner, 'owner_known' => $known];
 }
 
 // Rows for the Database section from a probe above.

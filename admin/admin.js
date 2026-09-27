@@ -74,7 +74,9 @@
         btn.addEventListener('click', function () {
             var token = btn.dataset.token || '';
             var code  = btn.dataset.code  || i18n.copy_no_password || '(none)';
-            var url   = window.location.protocol + '//' + window.location.host + '/?token=' + token;
+            // Token in the FRAGMENT: browsers never send it to the server, so
+            // it cannot land in web-server access logs (a ?query would).
+            var url   = window.location.protocol + '//' + window.location.host + '/#token=' + token;
             var text  = (i18n.copy_link_label || 'Delivery link: ') + url + '\n' + (i18n.copy_password_label || 'Pickup password: ') + code + '\n\n' + (i18n.copy_warning || '');
 
             function showOk() {

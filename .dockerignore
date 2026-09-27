@@ -8,6 +8,8 @@ tests/*
 !tests/schema_loader.php
 config.php
 logs/*
+# logs/.htaccess ships: it keeps logs/ closed on hosts without mod_rewrite.
+!logs/.htaccess
 uploads/*
 # ... but the uploads/.htaccess IS load-bearing (PHP-execution block,
 # image-only allow-list, no-store on capability URLs): uploads/ must stay
@@ -28,3 +30,9 @@ Dockerfile*
 .env
 
 build-info.json
+# Ops leftovers on the build host never ship: pre-upgrade DB dumps written by
+# auto-update.sh (every order, hashes, audit data) would otherwise be baked
+# into an image layer on the very next build.
+backups/*
+!backups/.htaccess
+auto-update.*

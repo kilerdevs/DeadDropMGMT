@@ -114,7 +114,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $raw_token = trim(post_string('order_token'));
         $password  = post_string('pickup_password');
 
-        if (strlen($raw_token) !== 16 || !ctype_alnum($raw_token)) {
+        // Per-ORDER budget for password guesses, next to the per-IP one: a
+        // leaked link plus rotating addresses (an IPv6 prefix, a proxy pool)
+        // must not buy unlimited guesses at one pickup password. Keyed on
+        // the token whether or not it exists, so the lock cannot tell real
+        // tokens from unknown ones.
+        $tokHit = null;
+        $tokSubject = '';
+        if ($password !== '' && strlen($raw_token) === 16 && ctype_alnum($raw_token)) {
+            $tokSubject = 't:' . substr(hash('sha256', token_index($raw_token)), 0, 30);
+            $tokHit = rl_hit('pickup_token', PICKUP_TOKEN_MAX, null, $tokSubject);
+        }
+        if ($tokHit !== null && $tokHit['blocked']) {
+            $blocked       = true;
+            $cooldown_secs = $tokHit['remaining'];
+        } elseif (strlen($raw_token) !== 16 || !ctype_alnum($raw_token)) {
             $error = t('public.index.error.not_found');
         } else {
             try {
@@ -153,13 +167,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         // guesser holding ONE valid pickup a free reset for
                         // every attempt against someone else's order.
                         rl_refund('public');
+                        // The right password for THIS order: its own
+                        // guess budget may start over.
+                        rl_reset('pickup_token', $tokSubject);
+                        // Fresh session ID before any capability lands in
+                        // it: a planted (fixated) ID must not share the reveal
+                        // or the single-use receipt with whoever planted it.
+                        // Not for a logged-in admin in the same browser: that
+                        // ID was already regenerated at login (nothing planted),
+                        // and changing it would trip the single-active-session
+                        // check and log the admin out.
+                        if (!is_admin_logged_in()) {
+                            session_regenerate_id(true);
+                        }
                         if ($order['status'] === 'preparing') {
                             log_event('unlock_success', (int)$order['id'], $raw_token);
                             $_SESSION['reveal'] = ['type' => 'preparing', 'ts' => time()];
                             header('Location: /');
                             exit;
                         } else {
-                            $dec = decrypt_location_data($order['location_encrypted'], $order['location_iv']);
+                            $dec = decrypt_location_data($order['location_encrypted'], $order['location_iv'], $order['token_hmac']);
                             if ($dec === false) {
                                 log_err('Decryption failed for order #' . (int)$order['id']);
                                 $error = t('public.index.error.server_decrypt');
@@ -180,7 +207,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                         'lat'          => $dec['lat'],
                                         'lng'          => $dec['lng'],
                                         'instructions' => (string)($dec['instructions'] ?? ''),
-                                        'notes'        => trim($order['notes'] ?? ''),
+                                        'notes'        => trim(order_notes_plain($order, $dec)),
                                         'expires'      => $order['expires_at'] ? (int)strtotime($order['expires_at']) : 0,
                                         'photos'       => $ps->fetchAll(),
                                         'token'        => $raw_token,

@@ -1987,3 +1987,17 @@ tr[data-status="failed"] .mz-status { color: #f44336; }
 }
 
 .photo-delete-btn:hover { color: var(--error); }
+
+/* Plain-text map credit (replaces MapLibre's HTML attribution control). */
+.map-attrib {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    z-index: 2;
+    padding: 1px 6px;
+    font-size: 10px;
+    line-height: 1.5;
+    color: #333;
+    background: rgba(255, 255, 255, 0.75);
+    pointer-events: none;
+}

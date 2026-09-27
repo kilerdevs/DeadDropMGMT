@@ -230,9 +230,14 @@ $_SESSION = [];
 // ── Rate limiter: disabled short-circuit + fail-closed branches ─────────────
 set_setting('rate_limit_enabled', '0');
 T::eq('rl_status disabled short-circuit',
-      ['blocked' => false, 'remaining' => 0, 'count' => 0], rl_status('cov'));
+      ['blocked' => false, 'remaining' => 0, 'count' => 0], rl_status('public'));
 T::eq('rl_hit disabled short-circuit',
-      ['blocked' => false, 'remaining' => 0, 'count' => 0], rl_hit('cov'));
+      ['blocked' => false, 'remaining' => 0, 'count' => 0], rl_hit('public'));
+// The switch is the public IP budget only: account / login / 2FA budgets
+// keep counting (they used to be switched off with it).
+$covHit = rl_hit('admin_2fa_acct', null, null, 'u:cov-switch');
+T::ok('switch leaves account budgets on', $covHit['count'] >= 1);
+get_db()->exec("DELETE FROM rate_limits WHERE ip_address = 'u:cov-switch'");
 set_setting('rate_limit_enabled', '1');
 
 // Counter unreadable → status reports BLOCKED (fail closed)

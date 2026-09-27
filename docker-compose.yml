@@ -9,7 +9,7 @@ name: deaddrop
 
 services:
   db:
-    image: mariadb:11
+    image: mariadb:11@sha256:79d59758afc91b89b120b0a8904d637f5a3b3e1c4900f29b740d6d46c72fef68
     restart: unless-stopped
     environment:
       MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASS:-deaddrop-root}

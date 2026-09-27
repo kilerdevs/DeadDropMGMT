@@ -197,6 +197,25 @@ file_put_contents($live, $keep); // restore for later suites
 T::ok('writer recovers after repair',
       app_log('info', 'logger_test_recovered', ['msg' => 'again']) === true);
 
+// Rotation END-TO-END: the fresh generation's first entry links to the
+// rotated tip, so the two files verify as a single chain.
+$liveRot = $live . '.1';
+if (!is_file($liveRot)) {
+    [, $nBefore] = verify_log_chain($live);
+    rename($live, $liveRot);
+    T::ok('app_log starts a fresh generation after rotation',
+          app_log('info', 'logger_test_rot', ['msg' => 'fresh']) === true);
+    $firstFresh = json_decode((string)(file($live, FILE_IGNORE_NEW_LINES)[0] ?? ''), true);
+    $fhR = fopen($liveRot, 'r');
+    [$rotTip] = _log_tail_tip($fhR);
+    fclose($fhR);
+    T::eq('fresh generation links to the rotated tip', $rotTip, $firstFresh['prev'] ?? null);
+    T::eq('live + rotated verify as one chain', [true, $nBefore + 1, null, null], verify_log_chain($live));
+    // Back to one file for later suites (the link keeps the joined chain valid).
+    file_put_contents($live, file_get_contents($liveRot) . file_get_contents($live));
+    unlink($liveRot);
+}
+
 // ── Sequence numbers ────────────────────────────────────────────────────────
 T::eq('sequenced tip increments', 8, _log_compute_seq('abc', 7, 0, 0));
 T::eq('legacy tip takes position after count', 6, _log_compute_seq('abc', 0, 5, 0));
@@ -359,12 +378,70 @@ if (!@rename($ra, $ra . '.1')) {
     fflush($fhA);
     flock($fhA, LOCK_UN);
     fclose($fhA);
-    $fresh = mk_chain_rec(APP_LOG_GENESIS, ['ts' => '2026-08-26T00:00:10.000Z', 'level' => 'info',
+    // B starts the new generation continuing the seq AND the chain: its first
+    // entry links to the rotated tip, so the two files verify as one chain.
+    $fresh = mk_chain_rec($late['hash'], ['ts' => '2026-08-26T00:00:10.000Z', 'level' => 'info',
         'event' => 't_fresh', 'msg' => 'new', 'seq' => 4]);
-    write_chain($ra, [$fresh]); // B starts the new generation continuing the seq
+    write_chain($ra, [$fresh]);
     T::eq('old generation valid after raced append', [true, 3, null, null], verify_log_chain($ra . '.1'));
-    T::eq('new generation valid', [true, 1, null, null], verify_log_chain($ra));
+    T::eq('both generations verify as one chain', [true, 4, null, null], verify_log_chain($ra));
+    // Legacy generations (written before cross-file linking) restart at
+    // GENESIS: still accepted while the rotated file is there.
+    $legacy = mk_chain_rec(APP_LOG_GENESIS, ['ts' => '2026-08-26T00:00:10.000Z', 'level' => 'info',
+        'event' => 't_fresh', 'msg' => 'new', 'seq' => 4]);
+    write_chain($ra, [$legacy]);
+    T::eq('legacy GENESIS-started generation accepted', [true, 4, null, null], verify_log_chain($ra));
+    // Editing the rotated generation is now caught (it used to go unchecked:
+    // `mv app.log app.log.1` + edits passed as a clean rotation).
+    $rotLines = file($ra . '.1', FILE_IGNORE_NEW_LINES);
+    $rotLines[1] = str_replace('"t_', '"x_', $rotLines[1]);
+    file_put_contents($ra . '.1', implode("\n", $rotLines) . "\n");
+    [$okRot, , , $whyRot] = verify_log_chain($ra);
+    T::ok('edited rotated generation fails verification', !$okRot && str_contains((string)$whyRot, 'race.log.1'));
+    // Deleting the rotated generation is caught through the link.
+    write_chain($ra, [$fresh]);
+    @unlink($ra . '.1');
+    [$okGone, , , $whyGone] = verify_log_chain($ra);
+    T::ok('deleted rotated generation is detected', !$okGone && str_contains((string)$whyGone, 'previous log generation missing'));
 }
+
+// ── Plain error log: tail reader + size trim ────────────────────────────────
+$el = $tmpDir . '/error.log';
+T::eq('tail of a missing file is empty', [[], false], log_tail_lines($tmpDir . '/nope.log'));
+file_put_contents($el, '');
+T::eq('tail of an empty file is empty', [[], false], log_tail_lines($el));
+file_put_contents($el, "one\n\ntwo\nthree\n");
+T::eq('short file: all non-blank lines, not cut', [['one', 'two', 'three'], false], log_tail_lines($el));
+T::eq('line cap keeps the newest', [['two', 'three'], true], log_tail_lines($el, 262144, 2));
+[$tl, $tcut] = log_tail_lines($el, 9);
+T::ok('byte window drops the partial first line', $tcut && $tl === ['three']);
+T::ok('small error log is not trimmed', error_log_trim($el, 1024, 512) === false);
+file_put_contents($el, str_repeat("0123456789abcdef\n", 200)); // 3400 bytes
+T::ok('oversized error log is trimmed', error_log_trim($el, 1024, 512) === true);
+clearstatcache(true, $el);
+T::ok('trim keeps at most the tail budget', filesize($el) <= 512 && filesize($el) > 0);
+T::ok('trim cuts at a line boundary', str_starts_with((string)file_get_contents($el), '0123456789abcdef'));
+T::ok('missing path is never trimmed', error_log_trim($tmpDir . '/nope.log') === false);
+@symlink($el, $tmpDir . '/link.log');
+T::ok('symlinked log is never trimmed', !is_link($tmpDir . '/link.log') || error_log_trim($tmpDir . '/link.log', 1, 1) === false);
+
+// ── Generation verification edge cases ──────────────────────────────────────
+$gv = $tmpDir . '/gen.log';
+$g1 = mk_chain_rec($genesis, ['ts' => '2026-08-26T00:00:01.000Z', 'level' => 'info', 'event' => 't_gen', 'msg' => 'a', 'seq' => 1]);
+$g2 = mk_chain_rec($g1['hash'], ['ts' => '2026-08-26T00:00:02.000Z', 'level' => 'info', 'event' => 't_gen', 'msg' => 'b', 'seq' => 2]);
+write_chain($gv . '.1', [$g1]);
+T::eq('rotated generation alone (no live file) verifies', [true, 1, null, null], verify_log_chain($gv));
+write_chain($gv, [$g2]);
+T::eq('live file chained to the rotated tip', [true, 2, null, null], verify_log_chain($gv));
+file_put_contents($gv . '.1', "{not json\n");
+[$okM, , , $whyM] = verify_log_chain($gv);
+T::ok('malformed rotated generation fails with its name', !$okM && str_contains((string)$whyM, 'gen.log.1'));
+$g2b = mk_chain_rec(str_repeat('f', 64), ['ts' => '2026-08-26T00:00:02.000Z', 'level' => 'info', 'event' => 't_gen', 'msg' => 'b', 'seq' => 2]);
+write_chain($gv . '.1', [$g1]);
+write_chain($gv, [$g2b]);
+[$okL, , , $whyL] = verify_log_chain($gv);
+T::ok('live file not linked to the rotated tip fails', !$okL && $whyL === 'broken chain linkage');
+@unlink($gv); @unlink($gv . '.1');
 
 // ── Audit trail ───────────────────────────────────────────────────────────────
 $_SESSION = [];

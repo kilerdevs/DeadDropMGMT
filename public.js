@@ -22,6 +22,21 @@
         });
     }
 
+    // ── Delivery link: #token=… pre-fill ─────────────────────────────────────
+    // Links carry the token in the URL fragment (never sent to the server, so
+    // never in access logs). Copy it into the form, then drop it from the
+    // address bar and history.
+    var hm = /^#token=([A-Za-z0-9]{16})$/.exec(window.location.hash || '');
+    var tokField = document.getElementById('order_token');
+    if (hm && tokField) {
+        tokField.value = hm[1];
+        var pw = document.getElementById('pickup_password');
+        if (pw) { pw.focus(); }
+        if (window.history && typeof window.history.replaceState === 'function') {
+            window.history.replaceState(null, '', window.location.pathname + window.location.search);
+        }
+    }
+
     // ── Order expiry countdown ────────────────────────────────────────────────
     var el = document.getElementById('expiry-countdown');
     if (el) {

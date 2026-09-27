@@ -68,6 +68,12 @@ foreach ($targets as [$table, $pk, $encCol, $ivCol, $encryptFn]) {
     $n   = 0;
 
     foreach ($stmt->fetchAll() as $row) {
+        // Row-bound location values only ever exist under the purpose
+        // subkey — already current.
+        if ($encryptFn === 'encrypt_location' && str_starts_with((string)$row['enc'], LOCATION_BIND_PREFIX)) {
+            $skipped++;
+            continue;
+        }
         // Already under the purpose subkey? (idempotent re-run / fresh install)
         $plain = $encryptFn === 'encrypt_location'
             ? decrypt_location($row['enc'], $row['iv'])

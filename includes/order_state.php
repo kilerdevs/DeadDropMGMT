@@ -191,7 +191,8 @@ function cleanup_expired_orders(int $batch = 200): int {
 // keys are matched — analytics rows sometimes carry only the token index (no
 // id). $token_index is the order's token_hmac, never the token itself.
 // A flow's own post-delete log_event() (e.g. 'received') lands AFTERWARDS,
-// so the deletion itself stays on record as a single terminal row.
+// so the deletion itself stays on record as a single ANONYMOUS terminal row
+// (no token index, IP or user agent — see log_event()'s $anonymous).
 function _delete_order_events(PDO $db, int $order_id, ?string $token_index): void {
     $db->prepare('DELETE FROM order_events WHERE order_id = ? OR token_hmac = ?')
        ->execute([$order_id, $token_index]);

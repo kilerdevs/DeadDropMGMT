@@ -58,6 +58,120 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   stubs, live-TLS proofs through both tunnel types).
 
 ### Fixed
+- **Owner self-service needs the current password.** Changing one's own
+  password or removing one's own 2FA from Users now re-proves the current
+  password (budgeted), so a hijacked owner session cannot strip 2FA.
+- **The "IP-based attempt limiting" switch only covers public budgets.**
+  Login, 2FA, account, per-order pickup and resource budgets stay on.
+- **Setup check no longer goes public when the database is down.** Strangers
+  get one generic row unless "no owner yet" is positively established; the
+  raw PDO error goes to the error log.
+- **Locations are bound to their order** (AES-GCM associated data =
+  token index, `b1:` values): a location copied onto another order's row no
+  longer opens. Existing rows re-bind on save or via
+  `tools/bind_locations.php`; a display token copy is checked against its
+  row's index.
+- **Delivery links carry the token in the URL fragment** (`/#token=…`), so it
+  never reaches access logs; the Docker Apache/nginx logs record paths
+  without query strings, and the post-delete "received" event is anonymous.
+- **Public session ID is regenerated on unlock**, and over HTTPS the cookie
+  is `__Host-ddmgmt` (no planting from sibling subdomains).
+- **Key rotation tool**: keys via `--keys-from-stdin` (arguments warn), all
+  order/user rows locked for the run, locations re-bound to the new index,
+  and legacy CBC / raw-master / recoverable-password rows are refused instead
+  of silently upgraded.
+- **Token entropy claim corrected**: case-insensitive lookups make it ≈82.7
+  bits, not 95.3.
+- **Network hardening**: chunked responses with absurd sizes or endless size
+  lines fail closed (app and installer); PMTiles root/inflated-directory/
+  entry-count/tile-length caps; per-account geocode budget, reverse lookups
+  rounded to ~1 km; SOCKS proxies resolve DNS remotely under cURL
+  (`socks5h`/`socks4a`), and the Go CLI is never handed a SOCKS4 proxy.
+- **Order editor**: the rotated CSRF token reaches every form after a failed
+  autosave; a save that matched no row (order delivered/picked up/deleted
+  meanwhile) says so instead of "saved"; a photo whose row cannot be written
+  is deleted instead of orphaned.
+- **Order creation is atomic** (order + photos in one transaction, files of a
+  rolled-back order removed, `Throwable` caught), and a junk `lat=` no longer
+  bypasses the location-required check.
+- **error.log is bounded**: Settings reads only its tail, the hourly cleanup
+  trims it past 5 MiB.
+- **Mutation probe works on a throwaway copy** — weakened guards never touch
+  the checkout, even when a run is interrupted.
+- **Server config parity**: Caddy denies dotfiles and nested
+  `uploads/**/*.php`; nginx/Caddy send `nosniff` on static files and
+  `Referrer-Policy` on uploads.
+- **Setup check warns about the published default DB password.**
+- **Base and service images pinned by digest** (Dependabot now also covers
+  the compose files); nginx moved off the end-of-life 1.27 line.
+- **Installer**: the database host is validated (no DSN injection) and
+  `config.php` is written `0640`.
+- **CVE-2026-85061 (MapLibre GL ≤ 6.4.0, DOM.sanitize bypass) mitigated**:
+  MapLibre's attribution control (the sanitizer path) is disabled on both
+  maps; the credit is rendered as plain text. Upgrading needs the ESM-only
+  6.x line, tracked separately.
+- **CVE-2025-69993 (Leaflet ≤ 1.9.4 tooltip HTML)**: zone names are passed to
+  `bindTooltip` as text nodes.
+- **Login / 2FA limits could be raced.** The attempt was counted only after
+  the bcrypt check, so parallel sessions all passed the same count. Both
+  steps now spend atomically first and refund on success.
+- **Per-account login budget bypass.** Collation-equal spellings (`ówner`,
+  full-width, zero-width joiners) matched the account but hashed to fresh
+  budgets; login now refuses names outside the account charset.
+- **Pickup passwords: per-order budget.** 10 wrong passwords per window per
+  token from any address (a leaked link plus rotating IPs buys no more), and
+  IPv6 clients are counted per /64 in every IP budget.
+- **Proxy credentials leaked to couriers** through the OSM status caption
+  (`via` / `skipped`) and into the audit log; both are redacted to
+  `scheme://host:port`.
+- **Proxy discovery probed internal hosts.** Third-party list entries naming
+  loopback, RFC1918, link-local or reserved addresses are discarded.
+- **Tile-cache timing leak between accounts.** Street-level tiles (z13+) are
+  cached per account, so a courier can no longer probe which areas others
+  viewed.
+- **Zone engine sidecars were downloadable** (`.plan` carries the proxy URL):
+  `.plan` / `.tiles` / `.tmp` are denied in `tiles/` on Apache, nginx, Caddy.
+- **Log integrity**: the Settings check now reports truncation against the
+  DB checkpoint (it computed but never showed it); the rotated `app.log.1`
+  is verified too, and a new generation links to the rotated tip — deleting
+  or editing the rotated file, or faking a rotation, now fails verification.
+- **Editing an undecryptable order destroyed its location**: autosave
+  re-encrypted the "[decryption error]" placeholder over recoverable
+  ciphertext. Such orders are now read-only with an explanation.
+- **Order edit page: nested forms.** The extend-expiry forms sat inside the
+  edit form, so "+Nh" submitted the edit form and Save was orphaned; they now
+  join their own forms via `form=`. The Copy button no longer submits.
+- **Order notes stored in plaintext.** Notes now ride in the encrypted
+  location blob (legacy rows move on their next save); the README no longer
+  implies photos are encrypted on disk.
+- **Panic wipe** also destroys `backups/` dumps; the overwrite helper
+  `fsync`s before unlinking (new `config.php` files; existing ones keep theirs).
+- **nginx / Caddy stacks never received new code** (Docker seeds a named
+  volume once): the FPM entrypoint refreshes the code on every start, keeping
+  runtime data; the web container now mounts the photo volume (photos 404ed).
+- **Docker images**: the docroot is root-owned (was `www-data`); build-host
+  `backups/` and `auto-update.*` are no longer baked into images.
+- **Security — web installer stayed live after install (critical).** It has
+  no login, and every action (upload/extract a zip, rewrite `config.php`,
+  fetch any URL) kept answering once the app was installed — remote code
+  execution and takeover for anyone who found the file. Now it locks as soon
+  as `config.php` exists: only the read-only check/tree probes and
+  self-removal answer; upgrades need an `INSTALL_UNLOCK` file created by the
+  owner beside the installer (consumed after the extract); setup never
+  overwrites an existing `config.php`; the source copy under an installed
+  app's `tools/` refuses to run; `file://` version lists are CLI-only.
+- **Installer upgrade deleted user data.** Extract replaced every top-level
+  folder, so an "upgrade mode" run wiped `uploads/`, `tiles/`, `data/`,
+  `cache/`. Runtime folders (`uploads`, `tiles`, `data`, `cache`, `logs`,
+  `backups`) are now merged: the release's `.htaccess` lands, nothing is
+  removed.
+- **Private folders were public on Apache without mod_rewrite.** Every
+  directory rule lived inside `<IfModule mod_rewrite.c>`, so such hosts
+  served `logs/` (session IDs in `error.log`), `tools/` (the installer) and
+  `backups/`. They now carry their own `Require all denied`; sensitive root
+  files are denied by a `FilesMatch` outside the rewrite block; dotfiles
+  (`.git/`, `.env`) 404. Setup check names any missing per-folder deny file
+  instead of reporting "ok" for a bare root `.htaccess`.
 - Restricted shared hosting no longer takes the app down or wedges the queue:
   a denied `SET time_zone` degrades to the server-default zone instead of 503
   on every page; `set_time_limit()` moved inside the worker try (a disabled
@@ -76,6 +190,14 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   `docs/nginx-deaddrop.conf` mirroring `.htaccess` exactly.
 
 ### Changed
+- **Breaking — client IP header.** With `DDMGMT_TRUST_PROXY=1` exactly one
+  header is read: `DDMGMT_CLIENT_IP_HEADER` (default `X-Forwarded-For`, last
+  hop). `CF-Connecting-IP` / `X-Real-IP` were tried first and could be forged
+  through a proxy that does not set them; behind Cloudflare set
+  `DDMGMT_CLIENT_IP_HEADER=CF-Connecting-IP`.
+- **OSM proxy routing is off by default** for new installs (opt-in: it
+  downloads public proxy lists and probes hundreds of unknown hosts).
+  Existing installs keep their stored setting.
 - Settings → Maps: **every zone has its own colour**, on the OSM zone map and
   as a swatch in the zone list, so a rectangle can be matched to its row at a
   glance (stable per zone; eight-colour palette, blue left for the rectangle

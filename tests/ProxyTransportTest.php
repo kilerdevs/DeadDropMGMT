@@ -62,6 +62,11 @@ T::ok('chunked split feed waits', $step1 !== null && $step1[2] === false);
 $step2 = $step1 !== null ? proxy_chunked_feed($step1[1] . "lo\r\n0\r\n\r\n") : null;
 T::eq('chunked split feed completes', ['hello', '', true], $step2 ?? ['', '', false]);
 T::ok('chunked garbage fails closed', proxy_chunked_feed("zz\r\nhello\r\n") === null);
+// Hostile framing is refused up front instead of buffered until the deadline.
+T::ok('absurd chunk size fails closed', proxy_chunked_feed("7fffffffffff\r\nx") === null);
+T::ok('chunk over the per-chunk cap fails closed', proxy_chunked_feed(dechex(PROXY_CHUNK_MAX + 1) . "\r\nx") === null);
+T::ok('endless size line fails closed', proxy_chunked_feed(str_repeat('a', PROXY_CHUNK_LINE_MAX + 1)) === null);
+T::ok('partial size line still waits for more', is_array(proxy_chunked_feed('5')));
 $fields = proxy_head_fields("HTTP/1.1 200 OK\r\nContent-Length: 5\r\ncontent-length: 9\r\nX-A: b");
 T::eq('first duplicate header wins, names lowercase', ['content-length' => '5', 'x-a' => 'b'], $fields);
 $pt = proxy_parse_target('https://a.tile.openstreetmap.org/13/4051/2749.png');

@@ -21,8 +21,8 @@ function get_string(string $key, string $default = ''): string {
 // ── Client IP resolution (used by rate limiting, audit log) ────────────────
 // Lives OUTSIDE config.php on purpose: operators customize their config and
 // a typo there must not be able to silently weaken who counts as a trusted
-// proxy. Proxy headers (CF-Connecting-IP, X-Forwarded-For, X-Real-IP) are
-// trusted ONLY when BOTH hold: the deployment opts in (DDMGMT_TRUST_PROXY=1)
+// proxy. The one proxy header named by DDMGMT_CLIENT_IP_HEADER (default
+// X-Forwarded-For; or CF-Connecting-IP / X-Real-IP) is trusted ONLY when BOTH hold: the deployment opts in (DDMGMT_TRUST_PROXY=1)
 // AND the DIRECT PEER (REMOTE_ADDR) matches DDMGMT_TRUSTED_PROXIES. Without
 // the flag nothing but the TCP peer address is believed. With the flag but an
 // unlisted peer (app directly reachable, flag left over from another
@@ -47,35 +47,44 @@ function get_client_ip(): string {
             }
             return $peer;
         }
-        $candidates = [
-            'HTTP_CF_CONNECTING_IP',
-            'HTTP_X_FORWARDED_FOR',
-            'HTTP_X_REAL_IP',
-        ];
-        foreach ($candidates as $key) {
-            if (!empty($_SERVER[$key])) {
-                $raw = trim((string)$_SERVER[$key]);
-                // Multi-hop XFF: a proxy that APPENDS leaves earlier entries
-                // client-controlled, so "first entry" is then attacker-chosen.
-                // The peer (trusted — checked above) appends its entry LAST,
-                // so the last hop is the only one the client cannot forge:
-                // under an overwriting proxy there is a single entry anyway
-                // (first == last), under an appending proxy the last entry is
-                // what the peer actually saw. Single-entry headers are
-                // untouched by this.
-                if ($key === 'HTTP_X_FORWARDED_FOR' && str_contains($raw, ',')) {
-                    static $multihop_warned = false;
-                    if (!$multihop_warned) {
-                        $multihop_warned = true;
-                        log_warn('xff_multihop', ['msg' => 'X-Forwarded-For carries multiple hops; last entry used (peer-appended) — verify the proxy appends rather than passing client input through']);
-                    }
-                    $hops = array_map('trim', explode(',', $raw));
-                    $raw  = end($hops);
+        // ONE header, named by the operator (DDMGMT_CLIENT_IP_HEADER,
+        // default X-Forwarded-For). Trying several in turn was spoofable: a
+        // proxy only rewrites the header it knows, so a client-sent
+        // CF-Connecting-IP / X-Real-IP passed straight through a plain
+        // nginx/Caddy and won over the proxy's own X-Forwarded-For.
+        $name = strtolower(trim(_secret('DDMGMT_CLIENT_IP_HEADER', 'X-Forwarded-For')));
+        $key = ['x-forwarded-for' => 'HTTP_X_FORWARDED_FOR', 'cf-connecting-ip' => 'HTTP_CF_CONNECTING_IP',
+                'x-real-ip' => 'HTTP_X_REAL_IP'][$name] ?? null;
+        if ($key === null) {
+            static $bad_header_warned = false;
+            if (!$bad_header_warned) {
+                $bad_header_warned = true;
+                log_warn('client_ip_header_unknown', ['msg' => 'DDMGMT_CLIENT_IP_HEADER must be X-Forwarded-For, CF-Connecting-IP or X-Real-IP; using REMOTE_ADDR']);
+            }
+            return $peer;
+        }
+        if (!empty($_SERVER[$key])) {
+            $raw = trim((string)$_SERVER[$key]);
+            // Multi-hop XFF: a proxy that APPENDS leaves earlier entries
+            // client-controlled, so "first entry" is then attacker-chosen.
+            // The peer (trusted — checked above) appends its entry LAST,
+            // so the last hop is the only one the client cannot forge:
+            // under an overwriting proxy there is a single entry anyway
+            // (first == last), under an appending proxy the last entry is
+            // what the peer actually saw. Single-entry headers are
+            // untouched by this.
+            if ($key === 'HTTP_X_FORWARDED_FOR' && str_contains($raw, ',')) {
+                static $multihop_warned = false;
+                if (!$multihop_warned) {
+                    $multihop_warned = true;
+                    log_warn('xff_multihop', ['msg' => 'X-Forwarded-For carries multiple hops; last entry used (peer-appended) — verify the proxy appends rather than passing client input through']);
                 }
-                $ip = trim(explode(',', $raw)[0]);
-                if (filter_var($ip, FILTER_VALIDATE_IP)) {
-                    return $ip;
-                }
+                $hops = array_map('trim', explode(',', $raw));
+                $raw  = end($hops);
+            }
+            $ip = trim(explode(',', $raw)[0]);
+            if (filter_var($ip, FILTER_VALIDATE_IP)) {
+                return $ip;
             }
         }
     }

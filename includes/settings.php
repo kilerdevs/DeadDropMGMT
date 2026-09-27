@@ -116,16 +116,18 @@ function compliance_note_enabled(): bool {
 }
 
 // Route admin-panel OpenStreetMap traffic (tiles, geocoding) through the
-// osm_proxies pool. On by default: the server's own address should not reach
-// OSM unless the owner chooses that. An empty pool fails closed, so the
-// healer (includes/proxy.php) discovers a first pool automatically on the
-// first run — until it has, OSM-backed maps answer 502 rather than leak.
+// osm_proxies pool. OFF by default (opt-in): enabling it makes the server
+// download third-party public proxy lists and probe hundreds of unknown
+// hosts, which an owner must choose knowingly. Once on, an empty pool fails
+// closed, so the healer (includes/proxy.php) discovers a first pool
+// automatically — until it has, OSM-backed maps answer 502 rather than leak.
+// (Installs that stored '1' keep routing; setup.sql never overwrites values.)
 //
 // Routing works with or without cURL now (the pure-PHP transport speaks
 // every proxy scheme); the setting is honoured wherever outbound HTTPS
 // exists. An empty pool still fails closed — see osm_fetch().
 function osm_proxy_enabled(): bool {
-    return get_setting('osm_proxy_enabled', '1') === '1';
+    return get_setting('osm_proxy_enabled', '0') === '1';
 }
 
 function extend_hours_options(): array {

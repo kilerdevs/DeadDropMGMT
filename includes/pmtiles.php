@@ -35,6 +35,11 @@ const PMTILES_TYPE_MVT = 1;
 // so spans stay small enough to redo cheaply).
 const PMTILES_MERGE_GAP = 65536;
 const PMTILES_SPAN_MAX = 8388608;
+// Hostile-upstream bounds (a planet URL is an env override away from any
+// server): root directory per spec, inflated directory bytes, entry count.
+const PMTILES_ROOT_MAX = 16384;
+const PMTILES_DIR_INFLATED_MAX = 33554432; // 32 MiB
+const PMTILES_DIR_ENTRIES_MAX = 1000000;
 // Planet metadata is JSON kilobytes; anything past the cap is corruption.
 const PMTILES_META_MAX = 1048576;
 // Covering-set ceiling: a bbox × zoom that resolves to more tiles would OOM
@@ -229,7 +234,7 @@ function pmtiles_range_curl(string $url, int $off, int $len, ?string $proxy, int
         },
     ]);
     if ($proxy !== null) {
-        curl_setopt($ch, CURLOPT_PROXY, $proxy);
+        curl_setopt($ch, CURLOPT_PROXY, proxy_curl_url($proxy));
     }
     $body = curl_exec($ch);
     $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -300,6 +305,11 @@ function pmtiles_build_plan(string $url, ?string $proxy, float $minLon, float $m
     if ($hdr === null) {
         return [null, 'bad header'];
     }
+    // The spec keeps header + root directory inside the first 16 KiB; a
+    // bigger claim is a hostile or broken upstream, never a real archive.
+    if ($hdr['rootLen'] <= 0 || $hdr['rootLen'] > PMTILES_ROOT_MAX) {
+        return [null, 'bad root directory'];
+    }
     [$rootRaw, $err] = pmtiles_http_range($url, $hdr['rootOff'], $hdr['rootLen'], $proxy, $timeout);
     if ($rootRaw === null) {
         return [null, 'root directory: ' . $err];
@@ -359,7 +369,7 @@ function pmtiles_build_plan(string $url, ?string $proxy, float $minLon, float $m
             }
             continue; // tile absent upstream (ocean, unmapped) — extracts skip it
         }
-        if ($e['len'] <= 0) {
+        if ($e['len'] <= 0 || $e['len'] > PMTILES_SPAN_MAX) {
             return [null, 'bad tile entry'];
         }
         if ($e['off'] < 0 || $e['off'] + $e['len'] > $hdr['tileLen']) {
@@ -817,8 +827,9 @@ function pmtiles_parse_header(string $b): ?array {
  */
 function pmtiles_parse_dir(string $raw, int $comp): ?array {
     if ($comp === PMTILES_COMP_GZIP) {
-        $d = @gzdecode($raw);
-        if (!is_string($d)) {
+        // Bounded: an 8 MiB leaf of gzip bomb must not inflate into GBs.
+        $d = @gzdecode($raw, PMTILES_DIR_INFLATED_MAX + 1);
+        if (!is_string($d) || strlen($d) > PMTILES_DIR_INFLATED_MAX) {
             return null;
         }
         $raw = $d;
@@ -827,7 +838,7 @@ function pmtiles_parse_dir(string $raw, int $comp): ?array {
     }
     $pos = 0;
     $n = pmtiles_vint_decode($raw, $pos);
-    if ($n === null || $n < 0 || $n > 5000000) {
+    if ($n === null || $n < 0 || $n > PMTILES_DIR_ENTRIES_MAX) {
         return null;
     }
     $ids = [];

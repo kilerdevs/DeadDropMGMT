@@ -19,9 +19,9 @@ set_security_headers(false);
 // Set-Cookie clobbers the brand-new auth cookie — an instant post-login
 // logout for fast typists. Reads (the readonly CSRF check below) still
 // work; nothing here writes session state, so no cookie ever needs sending.
-$pollSid = (string)($_COOKIE[SESSION_NAME] ?? '');
+$pollSid = (string)($_COOKIE[session_cookie_name()] ?? '');
 if ($pollSid !== '' && preg_match('/^[a-zA-Z0-9,-]{22,256}$/', $pollSid) === 1) {
-    session_name(SESSION_NAME);
+    session_name(session_cookie_name());
     session_id($pollSid);
 }
 ini_set('session.use_cookies', '0');

@@ -34,6 +34,33 @@ function osm_proxy_pool(): array {
 // Accepts "host:port", "http(s)://host:port", "socks4/5/5h://host:port" and
 // optional "user:pass@" credentials. Returns null when the input is not
 // usable.
+// cURL resolves the TARGET hostname locally for socks5:// and socks4://, so
+// every OSM / protomaps lookup would hit this server's resolver in the clear
+// — the opposite of routing through a proxy. The "h"/"a" variants resolve at
+// the proxy, like the bundled socket engine always does.
+function proxy_curl_url(string $url): string {
+    if (str_starts_with($url, 'socks5://')) return 'socks5h://' . substr($url, 9);
+    if (str_starts_with($url, 'socks4://')) return 'socks4a://' . substr($url, 9);
+    return $url;
+}
+
+// scheme://host:port only — never the userinfo. For anything that leaves the
+// owner-only proxy settings: the courier-visible status caption, the audit log.
+function osm_proxy_redact(string $url): string {
+    $p = parse_url($url);
+    if (!is_array($p) || empty($p['host'])) return '(proxy)';
+    $host = str_contains($p['host'], ':') && !str_starts_with($p['host'], '[') ? '[' . $p['host'] . ']' : $p['host'];
+    return ($p['scheme'] ?? 'http') . '://' . $host . (isset($p['port']) ? ':' . $p['port'] : '');
+}
+
+// True only for a proxy URL whose host is a literal, globally routable IP.
+// Discovered (third-party list) entries must pass this; owner-added manual
+// proxies may still live on the LAN.
+function osm_proxy_host_public(string $url): bool {
+    $host = trim((string)parse_url($url, PHP_URL_HOST), '[]');
+    return filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== false;
+}
+
 function osm_proxy_normalize(string $raw): ?string {
     $raw = trim($raw);
     if ($raw === '' || strlen($raw) > 255) return null;
@@ -165,14 +192,25 @@ function proxy_head_split(string $buf): ?array {
 // One step of a chunked body: [decoded new bytes, still-unparsed buffer, done].
 // Null means corrupt framing (a hostile proxy speaking garbage fails closed).
 /** @return ?array{string,string,bool} */
+// Bounds for hostile framing: a size line has no business being longer than
+// a few KiB, and no sane server sends multi-MiB chunks. Without them a peer
+// announcing "7fffffffffff" made the caller buffer (and re-copy) whatever it
+// sent until the deadline — memory exhaustion even for streamed downloads.
+const PROXY_CHUNK_LINE_MAX = 4096;
+const PROXY_CHUNK_MAX      = 8388608; // 8 MiB
+
 function proxy_chunked_feed(string $buf): ?array {
     $out = '';
     while (true) {
         $i = strpos($buf, "\r\n");
-        if ($i === false) return [$out, $buf, false];
+        if ($i === false) {
+            return strlen($buf) > PROXY_CHUNK_LINE_MAX ? null : [$out, $buf, false];
+        }
         $line = substr($buf, 0, $i);
-        if (preg_match('/^([0-9a-fA-F]+)(;[^\r]*)?$/', $line, $m) !== 1) return null;
+        if (strlen($line) > PROXY_CHUNK_LINE_MAX) return null;
+        if (preg_match('/^([0-9a-fA-F]{1,8})(;[^\r]*)?$/', $line, $m) !== 1) return null;
         $size = hexdec($m[1]);
+        if ($size > PROXY_CHUNK_MAX) return null;
         $buf = substr($buf, $i + 2);
         if ($size === 0) return [$out, '', true]; // trailers ignored: nothing after the body is trusted
         if (strlen($buf) < $size + 2) return [$out, $line . "\r\n" . $buf, false];
@@ -658,7 +696,7 @@ function osm_fetch_via(string $url, ?string $proxy, int $timeout = 5, int $maxBy
             CURLOPT_SSL_VERIFYPEER => true,
         ]);
         if ($proxy !== null) {
-            curl_setopt($ch, CURLOPT_PROXY, $proxy);
+            curl_setopt($ch, CURLOPT_PROXY, proxy_curl_url($proxy));
         }
 
         $body = curl_exec($ch);
@@ -854,7 +892,7 @@ function osm_fetch(string $url, int $maxBytes = 2097152): string|false {
         osm_proxy_mark((int)$px['id'], $result !== false, $ms);
         if ($result !== false) {
             osm_last_via_set([
-                'via'        => $px['url'],
+                'via'        => osm_proxy_redact($px['url']),
                 'latency_ms' => $ms,
                 'failed'     => false,
                 'attempts'   => $attempts,
@@ -865,7 +903,7 @@ function osm_fetch(string $url, int $maxBytes = 2097152): string|false {
             }
             return $result;
         }
-        $skipped[] = $px['url'];
+        $skipped[] = osm_proxy_redact($px['url']);
     }
     osm_last_via_set(['via' => null, 'failed' => true, 'attempts' => $attempts, 'skipped' => $skipped]);
     if ($skipped) {
@@ -1076,6 +1114,9 @@ function proxy_discover(int $max_test = 400, int $timeout_s = 4, ?float $budget_
         }
 
         $record = function (string $norm) use ($src, &$candidates): void {
+            // A list line is attacker-controlled: never let one point the
+            // prober at loopback, RFC1918, link-local or reserved space.
+            if (!osm_proxy_host_public($norm)) return;
             // first source wins, but a rated listing outranks an unrated one
             if (!isset($candidates[$norm])) {
                 $candidates[$norm] = ['rated' => $src['rated'], 'source' => $src['name']];
@@ -1197,7 +1238,7 @@ function proxy_multi_probe(array $proxies, string $url, int $timeout_s, int $con
         $ch = curl_init($url);
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_PROXY          => $pxUrl,
+            CURLOPT_PROXY          => proxy_curl_url($pxUrl),
             CURLOPT_TIMEOUT        => $timeout_s,
             CURLOPT_CONNECTTIMEOUT => $connect_s,
             CURLOPT_USERAGENT      => 'DeadDropMGMT/1.0',
@@ -1419,8 +1460,8 @@ function proxy_sock_open_from(mixed $s, array $px, array $t, float $deadline): ?
 //   - Only while routing is enabled, and only entries that discovery itself
 //     could have added: `manual` entries are the owner's own choice (maybe
 //     their own server) and are never deleted automatically.
-//   - The same job seeds the pool: routing is on by default and an empty pool
-//     fails closed, so on the first run (or after the pool was emptied) it
+//   - The same job seeds the pool: once the owner turns routing on, an empty
+//     pool fails closed, so on the first run (or after the pool was emptied) it
 //     runs discovery and stores everything the Auto-discover button would.
 //   - DDMGMT_PROXY_HEAL=0 turns all of it off (replacement and seeding) for
 //     deployments that must never start discovery on their own.
@@ -1545,7 +1586,7 @@ function osm_proxy_heal_pseudo_cron(?callable $discover = null, ?callable $probe
     }
 }
 
-// Routing is on by default, but a host that can never build a pool (outbound
+// Once routing is on, a host that can never build a pool (outbound
 // connections blocked, every list unreachable, a wall-clock limit too short to
 // finish a pass) would answer 502 on every map view forever. After a few
 // empty-pool discoveries in a row, switch routing off — loudly: audit +

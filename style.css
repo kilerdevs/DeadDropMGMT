@@ -743,3 +743,17 @@ input::placeholder { color: var(--text-muted); font-size: 13px; }
 .lb-close { top: 16px; right: 16px; }
 .lb-prev  { left: 16px; top: 50%; transform: translateY(-50%); }
 .lb-next  { right: 16px; top: 50%; transform: translateY(-50%); }
+
+/* Plain-text map credit (replaces MapLibre's HTML attribution control). */
+.map-attrib {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    z-index: 2;
+    padding: 1px 6px;
+    font-size: 10px;
+    line-height: 1.5;
+    color: #333;
+    background: rgba(255, 255, 255, 0.75);
+    pointer-events: none;
+}

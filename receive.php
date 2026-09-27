@@ -107,7 +107,7 @@ if ($step === 2 && $error === '') {
             if (!$deleted) {
                 $error = t('public.receive.error.invalid_state');
             } else {
-                log_event('received', null, $raw_token);
+                log_event('received', null, null, true); // counted, never linkable
             }
         } catch (Exception $e) {
             log_err('Receive step2: ' . $e->getMessage());

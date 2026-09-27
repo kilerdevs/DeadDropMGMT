@@ -189,4 +189,21 @@ foreach ($orderIds as $oidDel) {
 foreach (glob_list($tmpdir . '/*') as $f) { @unlink($f); }
 @rmdir($tmpdir);
 
+// A saved photo whose row cannot be written is removed, never orphaned.
+$orphanDir = dirname(__DIR__) . '/uploads/999999';
+@mkdir($orphanDir, 0777, true);
+$orphanRel = '999999/' . bin2hex(random_bytes(14)) . '.jpg';
+file_put_contents(dirname(__DIR__) . '/uploads/' . $orphanRel, 'x');
+$threw = false;
+try {
+    store_order_photo(get_db(), 999999, $orphanRel); // no such order: FK refuses
+} catch (Throwable $e) {
+    $threw = true;
+}
+T::ok('photo row for a missing order is refused', $threw);
+T::ok('its file is removed with it', !is_file(dirname(__DIR__) . '/uploads/' . $orphanRel));
+discard_order_photo_file('../../config.php');
+T::ok('discard never touches paths outside the photo pattern', is_file(dirname(__DIR__) . '/config.php'));
+@rmdir($orphanDir);
+
 exit(T::done());

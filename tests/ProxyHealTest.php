@@ -211,12 +211,24 @@ $started = 0;
 T::ok('empty pool: fetch fails closed', osm_fetch('http://127.0.0.1:1/x', 1024) === false);
 osm_last_via_stage(null);
 T::eq('empty pool: fetch kicked the seeding job', 1, $started);
-T::ok('routing defaults to ON when no setting exists',
+// Opt-in: routing means downloading third-party lists and probing hundreds
+// of unknown hosts, which a fresh install must never start on its own.
+T::ok('routing defaults to OFF when no setting exists',
       (function () use ($db): bool {
           $db->exec("DELETE FROM settings WHERE key_name = 'osm_proxy_enabled'");
           $c = &_settings_store(); $c = null;
-          return osm_proxy_enabled() === true;
+          return osm_proxy_enabled() === false;
       })());
+// A list line is attacker-controlled: only globally routable literal IPs
+// may become probe targets.
+foreach (['http://127.0.0.1:3128', 'socks5://10.0.0.5:1080', 'http://192.168.1.1:8080', 'http://169.254.169.254:80',
+          'http://[::1]:3128', 'http://[fd00::1]:3128', 'http://0.0.0.0:80', 'http://proxy.example:3128'] as $bad) {
+    T::ok('discovery rejects non-public host ' . $bad, !osm_proxy_host_public($bad));
+}
+T::ok('discovery accepts a public IPv4 proxy', osm_proxy_host_public('http://8.8.8.8:3128'));
+T::ok('discovery accepts a public IPv6 proxy', osm_proxy_host_public('http://[2001:4860:4860::8888]:3128'));
+T::eq('credentials never leave the owner view', 'http://203.0.113.9:3128', osm_proxy_redact('http://user:secret@203.0.113.9:3128'));
+T::eq('redaction keeps IPv6 brackets', 'socks5://[2001:db8::1]:1080', osm_proxy_redact('socks5://u:p@[2001:db8::1]:1080'));
 set_setting('osm_proxy_enabled', '1');
 
 // ── osm_fetch kicks the healer when the pool fails ───────────────────────────

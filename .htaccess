@@ -25,11 +25,16 @@ ErrorDocument 503 /error/503.php
     AddType font/woff2                .woff2
 </IfModule>
 
-# Protect sensitive files from direct access
-<FilesMatch "^(config\.php)$">
+# Protect sensitive files from direct access. Kept OUTSIDE <IfModule
+# mod_rewrite.c>: hosts without mod_rewrite skip that block entirely.
+<FilesMatch "^(config\.php|config\.php\.example|setup\.sql|build-info\.json|composer\.(json|lock)|package(-lock)?\.json|playwright\.config\.js|phpstan\.neon|\.php-cs-fixer\.php|auto-update\.(sh|log)|Dockerfile[^/]*|docker-compose[^/]*\.yml|INSTALL_UNLOCK|\.__install_dl\.zip(\.part)?)$">
     # Apache 2.4 authz (Order/Allow/Deny is deprecated mod_access_compat syntax)
     Require all denied
 </FilesMatch>
+# Dotfiles and VCS metadata (.git/, .env, .github/, ...) — except .well-known.
+<IfModule mod_alias.c>
+    RedirectMatch 404 "(?:^|/)\.(?!well-known/)[^/]+(/|$)"
+</IfModule>
 
 # Protect directories that should never be web-accessible
 <IfModule mod_rewrite.c>
@@ -38,7 +43,8 @@ ErrorDocument 503 /error/503.php
     # Block access to includes/ directory
     RewriteRule ^includes/ - [F,L]
 
-    # Block access to logs/ directory
+    # Block access to logs/ directory (logs/.htaccess denies it too, so it
+    # stays closed without mod_rewrite)
     RewriteRule ^logs/ - [F,L]
 
     # Block access to the tile cache: tiles are served exclusively through

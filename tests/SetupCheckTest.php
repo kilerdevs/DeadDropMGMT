@@ -53,6 +53,9 @@ foreach (SETUP_TABLES as $tbl) {
 }
 T::eq('probe sees InnoDB everywhere locally', [], $nonInno);
 T::ok('owner_exists is a bool', is_bool($probe['owner_exists']));
+// The page only goes public on a POSITIVELY established "no owner"; a live
+// probe with a readable users table always knows.
+T::eq('live probe knows the owner status', true, $probe['owner_known'] ?? null);
 
 $rows = setup_db_rows($probe);
 T::eq('live probe first row is ok', 'ok', $rows[0]['status']);
@@ -103,6 +106,16 @@ T::eq('apache + htaccess is ok', 'ok', setup_webserver_row('Apache/2.4.58')['sta
 T::eq('nginx warns with the snippet note', 'warn', setup_webserver_row('nginx/1.24.0')['status']);
 T::ok('nginx detail names the docs', str_contains(setup_webserver_row('nginx/1.24.0')['detail'], 'nginx'));
 T::eq('unknown server warns', 'warn', setup_webserver_row('')['status']);
+$sdRoot = sys_get_temp_dir() . '/sc_deny_' . getmypid();
+@mkdir($sdRoot, 0777, true);
+file_put_contents($sdRoot . '/.htaccess', '');
+$sdRow = setup_webserver_row('Apache/2.4.58', $sdRoot);
+T::eq('apache without per-folder deny files warns', 'warn', $sdRow['status']);
+T::ok('missing deny files are named', str_contains($sdRow['detail'], 'logs/.htaccess'));
+foreach (SETUP_DENY_FILES as $f) { @mkdir(dirname($sdRoot . '/' . $f), 0777, true); file_put_contents($sdRoot . '/' . $f, ''); }
+T::eq('apache with every deny file is ok', 'ok', setup_webserver_row('Apache/2.4.58', $sdRoot)['status']);
+foreach (SETUP_DENY_FILES as $f) { @unlink($sdRoot . '/' . $f); @rmdir(dirname($sdRoot . '/' . $f)); }
+@unlink($sdRoot . '/.htaccess'); @rmdir($sdRoot);
 
 // ── session path helper: no-op where the configured path works ─────────────
 $before = (string)@ini_get('session.save_path');

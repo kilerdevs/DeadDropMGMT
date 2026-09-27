@@ -128,7 +128,9 @@ T::ok('zone editor draws with pointer events', str_contains($set, "addEventListe
 T::ok('zone editor no longer relies on Leaflet mouse events',
       !preg_match("/mzMap\.on\('mouse(down|move|up)'/", $set) && !str_contains($set, "h.on('mousedown'"));
 T::ok('existing zone rectangles get a permanent name label',
-      str_contains($set, 'bindTooltip(b.name, { permanent: true') && str_contains($set, "className: 'mz-zone-label'"));
+      str_contains($set, 'bindTooltip(mzLbl, { permanent: true') && str_contains($set, "className: 'mz-zone-label'"));
+// The label is a text node: Leaflet renders string tooltip content as HTML.
+T::ok('zone name label is set as text, never as HTML', str_contains($set, 'mzLbl.textContent = b.name'));
 T::ok('zone labels re-sync after the status poll re-renders rows',
       str_contains($set, "typeof mzSyncZoneLayers === 'function'"));
 

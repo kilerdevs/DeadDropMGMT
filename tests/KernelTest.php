@@ -102,7 +102,7 @@ $others = array_merge(
     array_values(array_filter(glob($root . '/tools/*.php') ?: [], $noKernel)),
     [$root . '/docker/e2e_journey.php'],
 );
-T::ok('non-admin entry points scanned', count($others) === 11);
+T::ok('non-admin entry points scanned', count($others) === 12);
 
 // ── CLI-only scripts refuse every non-CLI SAPI, and the web server config
 // keeps developer/ops material off the wire (Apache .htaccess, nginx, Caddy).

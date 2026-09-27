@@ -431,13 +431,11 @@ function s_label(array $s, string $key): string {
         $app_view  = log_recent_entries(200);
         $app_shown = count($app_view['entries']);
 
-        $log_all   = [];
-        $log_total = 0;
-        if (is_file(ERROR_LOG_PATH) && filesize(ERROR_LOG_PATH) > 0) {
-            $log_all   = file(ERROR_LOG_PATH, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-            $log_total = count($log_all);
-        }
-        $log_lines = array_reverse($log_all); // newest first, file line numbers preserved
+        // Tail only (the file is unbounded between cleanup trims): the newest
+        // 500 lines, numbered from the end of the file.
+        [$log_all, $log_cut] = is_file(ERROR_LOG_PATH) ? log_tail_lines(ERROR_LOG_PATH) : [[], false];
+        $log_total = count($log_all);
+        $log_lines = array_reverse($log_all); // newest first
         ?>
         <div class="divider"></div>
         <div class="section-label"><?= htmlspecialchars(t('admin.settings.app_log_section'), ENT_QUOTES, 'UTF-8') ?></div>
@@ -465,7 +463,7 @@ function s_label(array $s, string $key): string {
 
         <div class="section-label"><?= t('admin.settings.error_log_section') ?></div>
         <div class="log-toolbar">
-            <span class="td-muted"><?= tn('admin.settings.log_line', $log_total, ['n' => number_format($log_total)]) ?></span>
+            <span class="td-muted"><?= tn('admin.settings.log_line', $log_total, ['n' => number_format($log_total)]) ?><?php if ($log_cut): ?> &middot; <?= htmlspecialchars(t('admin.settings.log_showing_latest', ['n' => $log_total]), ENT_QUOTES, 'UTF-8') ?><?php endif; ?></span>
             <div class="log-toolbar-actions">
                 <?php if ($log_total > 0): ?>
                 <a class="action-btn" href="/admin/download_log.php"><?= t('admin.settings.download_log_button') ?></a>
@@ -516,6 +514,8 @@ function s_label(array $s, string $key): string {
         'log_verify_ok'     => t('admin.settings.log_verify_ok'),
         'log_verify_fail'   => t('admin.settings.log_verify_fail'),
         'log_verify_empty'  => t('admin.settings.log_verify_empty'),
+        'log_verify_truncated'    => t('admin.settings.log_verify_truncated'),
+        'log_verify_cont_unknown' => t('admin.settings.log_verify_cont_unknown'),
         'mz_queued_kicked'  => t('admin.maps.queued_kicked'),
         'mz_queued_cron'    => t('admin.maps.queued_cron'),
         'mz_confirm_delete' => t('admin.maps.confirm_delete'),
@@ -1072,7 +1072,11 @@ function s_label(array $s, string $key): string {
                         var el = e.tooltip.getElement();
                         if (el) el.classList.add('mz-c' + (b.id % MZ_PALETTE.length));
                     });
-                    r.bindTooltip(b.name, { permanent: true, direction: 'center', className: 'mz-zone-label' });
+                    // A DOM node, never the raw string: Leaflet renders string
+                    // tooltip content as HTML (CVE-2025-69993, no fixed release).
+                    var mzLbl = document.createElement('span');
+                    mzLbl.textContent = b.name;
+                    r.bindTooltip(mzLbl, { permanent: true, direction: 'center', className: 'mz-zone-label' });
                 }
                 return r;
             });
@@ -1339,16 +1343,24 @@ function s_label(array $s, string $key): string {
                 .then(function (r) { return r.json(); })
                 .then(function (j) {
                     if (j.csrf) csrf = j.csrf;
-                    if (j.valid && !j.checked) {
-                        // Nothing chained yet: "intact — 0 verified" read as a pass
-                        // on the error log above, which this check never covers.
-                        vResult.textContent = I.log_verify_empty;
-                    } else if (j.valid) {
-                        vResult.textContent = I.log_verify_ok.replace('{n}', j.checked);
-                    } else {
+                    if (!j.valid) {
                         vResult.textContent = (I.log_verify_fail
                             .replace('{n}', j.broken_line || '?')
                             .replace('{r}', j.reason || '')) + ' (' + j.checked + ')';
+                    } else if (j.continuity === 'truncated') {
+                        // A chain that verifies can still have lost its tail (or the
+                        // whole file): only the DB checkpoint can tell.
+                        vResult.textContent = I.log_verify_truncated
+                            .replace('{n}', j.continuity_anchor_seq || '?');
+                    } else if (!j.checked) {
+                        // Nothing chained yet: "intact — 0 verified" read as a pass
+                        // on the error log above, which this check never covers.
+                        vResult.textContent = I.log_verify_empty;
+                    } else {
+                        vResult.textContent = I.log_verify_ok.replace('{n}', j.checked)
+                            + (j.continuity === 'error'
+                                ? ' · ' + I.log_verify_cont_unknown.replace('{r}', j.continuity_detail || '')
+                                : '');
                     }
                 })
                 .catch(function () { vResult.textContent = I.connection_error; })
