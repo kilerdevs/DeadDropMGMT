@@ -434,14 +434,16 @@ function ix_sock_hop(string $url, array $proxy, string $method): array {
                 $buf = substr($buf, $size + 2);
             }
         } else {
-            // Expected length, or -1 for close-delimited (int sentinel, not
-            // null — keeps the checks below branch-simple for static analysis).
-            $want = isset($fields['content-length']) && preg_match('/^\d+$/', $fields['content-length']) === 1 ? (int)$fields['content-length'] : -1;
+            // Sized (Content-Length) vs close-delimited (EOF ends it): an
+            // explicit boolean keeps both the runtime and static analysis
+            // branch-simple.
+            $sized = isset($fields['content-length']) && preg_match('/^\d+$/', $fields['content-length']) === 1;
+            $want = $sized ? (int)$fields['content-length'] : 0;
             $buf = $rest;
             while (true) {
                 if ($buf !== '') {
                     $take = $buf;
-                    if ($want >= 0) {
+                    if ($sized) {
                         $need = $want - strlen($body);
                         if ($need <= 0) break;
                         $take = substr($buf, 0, $need);
@@ -449,27 +451,27 @@ function ix_sock_hop(string $url, array $proxy, string $method): array {
                     $body .= $take;
                     if (strlen($body) > IX_MAX_BODY) { $close(); return ['error' => 'body exceeds 16 MB cap']; }
                     $buf = substr($buf, strlen($take));
-                    if ($want >= 0 && strlen($body) >= $want) break;
+                    if ($sized && strlen($body) >= $want) break;
                 }
-                if ($want >= 0 && strlen($body) >= $want) break;
+                if ($sized && strlen($body) >= $want) break;
                 $rset = [$s]; $w = null; $e = null;
                 $left = $deadline - microtime(true);
-                if ($left <= 0) { $close(); return $want < 0 ? [$code, $fields, $body] : ['error' => 'body shortfall (declared ' . $want . ', got ' . strlen($body) . ')']; }
+                if ($left <= 0) { $close(); return $sized ? ['error' => 'body shortfall (declared ' . $want . ', got ' . strlen($body) . ')'] : [$code, $fields, $body]; }
                 $n = @stream_select($rset, $w, $e, (int)$left, (int)(($left - (int)$left) * 1000000));
                 if ($n !== 1) {
                     $close();
-                    if ($want < 0) return [$code, $fields, $body]; // close-delimited: EOF ends it
+                    if (!$sized) return [$code, $fields, $body]; // close-delimited: EOF ends it
                     return ['error' => 'body shortfall (declared ' . $want . ', got ' . strlen($body) . ')'];
                 }
                 $chunk = @fread($s, 65536);
                 if (!is_string($chunk) || $chunk === '') {
                     $close();
-                    if ($want < 0) return [$code, $fields, $body];
+                    if (!$sized) return [$code, $fields, $body];
                     return ['error' => 'body shortfall (declared ' . $want . ', got ' . strlen($body) . ')'];
                 }
                 $buf .= $chunk;
             }
-            if ($want >= 0 && strlen($body) !== $want) { $close(); return ['error' => 'body length mismatch']; }
+            if ($sized && strlen($body) !== $want) { $close(); return ['error' => 'body length mismatch']; }
         }
         $close();
         return [$code, $fields, $body];
