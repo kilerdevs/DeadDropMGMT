@@ -645,4 +645,10 @@ T::ok('failed streams download reports false', !$ok && !is_file($dlDir . '/nope.
 @unlink($dest);
 @rmdir($dlDir);
 
+// DEBUG ONLY (throwaway branch): unmask the coverage-runner's post-floor
+// "Fatal error" by dumping any late uncaught throwable with its trace.
+set_exception_handler(static function (Throwable $e): void {
+    fwrite(STDOUT, 'DBGSHUTDOWN ' . get_class($e) . ': ' . $e->getMessage() . "\n" . $e->getTraceAsString() . "\n");
+});
+
 exit(T::done());
