@@ -9,6 +9,14 @@ All notable changes to DeadDropMGMT are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Test harness: servers spawned by the suites (`php -S`, proxy stubs) were
+  started through `sh -c`, so `proc_terminate()` killed only the shell and the
+  server lived on, holding its port — later suites then hit those orphans
+  (intermittent `ProxyClientTest` / `Verify2faTest` failures). Commands now
+  `exec` into the server, `ProxyClientTest` takes an OS-assigned port, and the
+  proxy-transport blocks that follow heavy relaying use fresh stubs.
+
 ## [1.6.0] - 2026-09-27
 
 ### Added

@@ -16,7 +16,7 @@ $null = DIRECTORY_SEPARATOR === '\\' ? 'NUL' : '/dev/null';
 $cmd  = escapeshellarg(PHP_BINARY)
     . ' -d session.save_path=' . escapeshellarg(ini_get('session.save_path'))
     . " -S 127.0.0.1:$port -t " . escapeshellarg($root);
-$proc = proc_open($cmd, [['pipe', 'r'], ['file', $null, 'w'], ['file', $null, 'w']], $pipes);
+$proc = proc_open(t_exec_cmd($cmd), [['pipe', 'r'], ['file', $null, 'w'], ['file', $null, 'w']], $pipes);
 if (!is_resource($proc)) {
     fwrite(STDERR, "cannot spawn built-in server\n");
     exit(1);

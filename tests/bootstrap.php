@@ -138,6 +138,14 @@ osm_proxy_heal_spawner(static fn(): bool => false);
 // where a shutdown-only cleanup fires after the LAST suite — so state a suite
 // leaves behind (settings, proxies, forced host answers, env vars) leaks into
 // the next one. Call the handle just before `exit(T::done())`.
+// proc_open() with a command STRING runs it through `sh -c`: proc_terminate()
+// then signals only that shell and the real server (php -S, a stub) is
+// orphaned — still bound to its port, where a later suite's requests can land
+// on it. "exec" makes the shell replace itself, so the handle IS the server.
+function t_exec_cmd(string $cmd): string {
+    return DIRECTORY_SEPARATOR === '\\' ? $cmd : 'exec ' . $cmd;
+}
+
 function t_teardown(callable $fn): callable {
     $done = false;
     $once = static function () use (&$done, $fn): void {

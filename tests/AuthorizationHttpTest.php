@@ -18,7 +18,7 @@ $cmd  = escapeshellarg(PHP_BINARY)
 // Portable null device (same pattern as PublicFlow/StateRace): hardcoded NUL
 // would create a stray ./NUL file on Linux and stop suppressing output.
 $null = DIRECTORY_SEPARATOR === '\\' ? 'NUL' : '/dev/null';
-$proc = proc_open($cmd, [['pipe', 'r'], ['file', $null, 'w'], ['file', $null, 'w']], $p);
+$proc = proc_open(t_exec_cmd($cmd), [['pipe', 'r'], ['file', $null, 'w'], ['file', $null, 'w']], $p);
 register_shutdown_function(function () use ($proc): void {
     // Portable teardown: taskkill is Windows-only — on Linux an orphaned
     // php -S keeps the output pipe open and hangs the whole job.

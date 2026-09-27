@@ -35,7 +35,7 @@ for ($t = 0; $t < 10 && $port === 0; $t++) {
     $cmd = escapeshellarg(PHP_BINARY)
         . ' -d session.save_path=' . escapeshellarg(ini_get('session.save_path'))
         . " -S 127.0.0.1:$cand -t " . escapeshellarg($root);
-    $try = proc_open($cmd, [['pipe', 'r'], ['file', $null, 'w'], ['file', $null, 'w']], $pipes);
+    $try = proc_open(t_exec_cmd($cmd), [['pipe', 'r'], ['file', $null, 'w'], ['file', $null, 'w']], $pipes);
     if (!is_resource($try)) {
         continue;
     }

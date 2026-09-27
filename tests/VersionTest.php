@@ -56,7 +56,7 @@ $cmd  = escapeshellarg(PHP_BINARY)
       . ' -d session.save_path=' . escapeshellarg(ini_get('session.save_path'))
       . " -S 127.0.0.1:$port -t " . escapeshellarg($root);
 $null = DIRECTORY_SEPARATOR === '\\' ? 'NUL' : '/dev/null';
-$proc = proc_open($cmd, [['pipe', 'r'], ['file', $null, 'w'], ['file', $null, 'w']], $p);
+$proc = proc_open(t_exec_cmd($cmd), [['pipe', 'r'], ['file', $null, 'w'], ['file', $null, 'w']], $p);
 $teardown = t_teardown(function () use ($proc, $file): void {
     putenv('DDMGMT_BUILD_INFO_FILE');
     @unlink($file);

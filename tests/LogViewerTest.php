@@ -43,7 +43,7 @@ $cmd = escapeshellarg(PHP_BINARY)
     . ' -d session.save_path=' . escapeshellarg(ini_get('session.save_path'))
     . " -S 127.0.0.1:$port -t " . escapeshellarg(dirname(__DIR__));
 $null = DIRECTORY_SEPARATOR === '\\' ? 'NUL' : '/dev/null';
-$proc = proc_open($cmd, [['pipe', 'r'], ['file', $null, 'w'], ['file', $null, 'w']], $p);
+$proc = proc_open(t_exec_cmd($cmd), [['pipe', 'r'], ['file', $null, 'w'], ['file', $null, 'w']], $p);
 $prevShow = get_setting('show_error_log', '0');
 $teardown = t_teardown(function () use ($proc, $prevShow): void {
     $st = proc_get_status($proc);

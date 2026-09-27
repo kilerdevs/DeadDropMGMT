@@ -53,7 +53,7 @@ $cmd = escapeshellarg(PHP_BINARY)
     . ' -d session.save_path=' . escapeshellarg(ini_get('session.save_path'))
     . " -S 127.0.0.1:$port -t " . escapeshellarg($root);
 $null = DIRECTORY_SEPARATOR === '\\' ? 'NUL' : '/dev/null';
-$proc = proc_open($cmd, [['pipe', 'r'], ['file', $null, 'w'], ['file', $null, 'w']], $p);
+$proc = proc_open(t_exec_cmd($cmd), [['pipe', 'r'], ['file', $null, 'w'], ['file', $null, 'w']], $p);
 // Array-shaped POSTs to the login form count as failed attempts for the IP
 // limiter: give the suite a big budget and leave no limiter rows behind, or a
 // second run (and every later suite's login) would be locked out.

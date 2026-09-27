@@ -432,7 +432,7 @@ $boot = static function (string $script, callable $argsFn, callable $ready) use 
             $cmd .= ' ' . escapeshellarg((string)$a);
         }
         $errLog = $stubDir . '/' . pathinfo($script, PATHINFO_FILENAME) . '_' . $cand . '.err';
-        $try = proc_open($cmd, [['pipe', 'r'], ['file', $null, 'w'], ['file', $errLog, 'w']], $pipes);
+        $try = proc_open(t_exec_cmd($cmd), [['pipe', 'r'], ['file', $null, 'w'], ['file', $errLog, 'w']], $pipes);
         if (!is_resource($try)) {
             continue;
         }
@@ -463,7 +463,9 @@ T::ok('origin stub serves', $originPort > 0);
 $originBase = "http://127.0.0.1:$originPort";
 
 $connectLog = $stubDir . '/connect.log';
-$connectPort = $boot($stubDir . '/connect.php', static fn(int $cand): array => [$cand, $connectLog, '0', '', $stubAllow], static function (int $port) use ($originPort): bool {
+// Booted through a closure: blocks that follow a lot of relaying take a FRESH
+// single-threaded stub (see the SOCKS note further down).
+$bootConnect = static fn(): int => $boot($stubDir . '/connect.php', static fn(int $cand): array => [$cand, $connectLog, '0', '', $stubAllow], static function (int $port) use ($originPort): bool {
     $s = @fsockopen('127.0.0.1', $port, $errno, $errstr, 2);
     if (!is_resource($s)) return false;
     stream_set_timeout($s, 5);
@@ -472,11 +474,12 @@ $connectPort = $boot($stubDir . '/connect.php', static fn(int $cand): array => [
     fclose($s);
     return is_string($data) && str_contains($data, '01234567');
 });
+$connectPort = $bootConnect();
 T::ok('CONNECT proxy stub serves', $connectPort > 0);
 $connectPx = "http://127.0.0.1:$connectPort";
 
 $socksLog = $stubDir . '/socks.log';
-$socksPort = $boot($stubDir . '/socks5.php', static fn(int $cand): array => [$cand, $socksLog, '0', '', '', $stubAllow], static function (int $port) use ($originPort): bool {
+$bootSocks = static fn(): int => $boot($stubDir . '/socks5.php', static fn(int $cand): array => [$cand, $socksLog, '0', '', '', $stubAllow], static function (int $port) use ($originPort): bool {
     $s = @fsockopen('127.0.0.1', $port, $errno, $errstr, 2);
     if (!is_resource($s)) return false;
     stream_set_timeout($s, 5);
@@ -491,6 +494,7 @@ $socksPort = $boot($stubDir . '/socks5.php', static fn(int $cand): array => [$ca
     fclose($s);
     return $rep === "\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00";
 });
+$socksPort = $bootSocks();
 T::ok('SOCKS5 stub serves', $socksPort > 0);
 $socksPx = "socks5://127.0.0.1:$socksPort";
 
@@ -556,7 +560,9 @@ T::eq('socks5h behaves the same', $BODY, $res['body']);
 $slog = (string)@file_get_contents($socksLog);
 T::ok('SOCKS asked for a domain, never an IP (remote DNS)', str_contains($slog, 'ATYP=3'));
 T::ok('...and never resolved locally first', !str_contains($slog, 'ATYP=1'));
-[$rb, $re] = pmtiles_http_range($originBase . '/tile', 4, 4, $socksPx, 10);
+// Fresh stub: the shared one just relayed a live TLS tile and, being
+// single-threaded, can still be draining it (intermittent timeout).
+[$rb, $re] = pmtiles_http_range($originBase . '/tile', 4, 4, 'socks5://127.0.0.1:' . $bootSocks(), 10);
 T::eq('pmtiles range through SOCKS5', ['4567', ''], [$rb, $re]);
 // The full production path, curl-less: real planet header through the
 // loopback SOCKS stub — remote DNS, tunnel, system-CA verification,
@@ -617,8 +623,12 @@ T::eq('streams probe: dead proxy is [0,0]', [0, 0], $probe['http://127.0.0.1:9']
 T::eq('streams probe: garbage proxy is [0,0]', [0, 0], $probe['bogus://x']);
 $probeTls = proxy_multi_probe_streams([$socksPx], $liveTile, 12, 5);
 T::eq('streams probe reaches HTTPS through SOCKS', 200, $probeTls[$socksPx][0] ?? 0);
-$both = proxy_multi_probe([$connectPx, 'http://127.0.0.1:9'], $originBase . '/tile', 4, 3);
-T::eq('dispatcher covers every input', [200, 0], [$both[$connectPx][0] ?? -1, $both['http://127.0.0.1:9'][0] ?? -1]);
+// Fresh CONNECT stub: the shared one has relayed several probes by now, and a
+// single-threaded stub still draining one of them timed this out (flaky on
+// slow runners — seen on PHP 8.2 CI and locally).
+$dispatchPx = 'http://127.0.0.1:' . $bootConnect();
+$both = proxy_multi_probe([$dispatchPx, 'http://127.0.0.1:9'], $originBase . '/tile', 4, 3);
+T::eq('dispatcher covers every input', [200, 0], [$both[$dispatchPx][0] ?? -1, $both['http://127.0.0.1:9'][0] ?? -1]);
 
 // ── the curl-less branch of the shared fetcher ──────────────────────────────
 // A fresh SOCKS stub: the shared one above has tunnelled live TLS by now,
@@ -631,9 +641,19 @@ $freshSocksPort = $boot($stubDir . '/socks5.php', static fn(int $cand): array =>
     return true;
 });
 $freshSocksPx = "socks5://127.0.0.1:$freshSocksPort";
+$freshConnectPx = 'http://127.0.0.1:' . $bootConnect();
+// Stubs booted after the shutdown handler above snapshotted $procs (the
+// dispatcher and no-cURL ones) must die too: a surviving single-threaded
+// stub keeps its port and can answer a later suite's requests.
+$lateProcs = array_slice($procs, count($stubProcs));
+register_shutdown_function(static function () use ($lateProcs, $kill): void {
+    foreach ($lateProcs as $p) {
+        $kill($p);
+    }
+});
 host_override(['curl' => false]);
 T::eq('no-cURL direct fetch still works', $BODY, osm_fetch_via($originBase . '/tile', null, 10));
-T::eq('no-cURL proxied fetch works', $BODY, osm_fetch_via($originBase . '/tile', $connectPx, 10));
+T::eq('no-cURL proxied fetch works', $BODY, osm_fetch_via($originBase . '/tile', $freshConnectPx, 10));
 T::eq('no-cURL SOCKS fetch works', $BODY, osm_fetch_via($originBase . '/tile', $freshSocksPx, 10));
 T::ok('no-cURL routing stays honoured', osm_proxy_enabled() === (get_setting('osm_proxy_enabled', '1') === '1'));
 host_override(null, true);
