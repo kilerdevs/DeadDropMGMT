@@ -7,7 +7,8 @@ require_once __DIR__ . '/bootstrap.php';
 // HTTP would) against a LOCAL stub server, so no internet is needed: version
 // list → download → extract → dbtest → setup → self-delete. The fixture zip
 // carries a minimal setup.sql (all 10 managed tables) and a minimal
-// config.php.example (the 6 anchors the installer patches).
+// config.php.example (the 6 anchors the installer patches). The installer is
+// direct-only: proxy actions (discover/judge) must not exist.
 
 function ix_tmp(string $prefix): string {
     $d = sys_get_temp_dir() . '/' . $prefix . getmypid();
@@ -133,16 +134,6 @@ $cfgExample = implode("\n", [
 ]);
 file_put_contents($stub . '/gh-tags.json', json_encode([['name' => 'v9.9.9', 'zipball_url' => $base . '/pkg.zip']]));
 file_put_contents($stub . '/ping.txt', 'pong');
-file_put_contents($stub . '/proxifly.json', json_encode([
-    ['protocol' => 'socks5', 'ip' => '127.0.0.1', 'port' => '1080'],
-    ['protocol' => 'http', 'anonymity' => 'elite', 'ip' => '127.0.0.1', 'port' => '8080'],
-    ['protocol' => 'http', 'anonymity' => 'transparent', 'ip' => '1.2.3.4', 'port' => '80'],
-]));
-file_put_contents($stub . '/plain.txt', "127.0.0.1:8080\nnot-a-proxy\n");
-file_put_contents($stub . '/judge-clean.txt', '{"headers":{"Host":"example"}}');
-file_put_contents($stub . '/proxifly2.json', json_encode([
-    ['protocol' => 'http', 'anonymity' => 'elite', 'ip' => '127.0.0.1', 'port' => '8080'],
-]));
 if (class_exists('ZipArchive')) {
     $z = new ZipArchive();
     $zp = $stub . '/pkg.zip';
@@ -170,59 +161,33 @@ foreach ($check['rows'] as $r) {
 [$code, $tree] = ix_run($work, ['action' => 'tree'], []);
 T::eq('tree: empty workdir', false, $tree['present'] ?? null);
 
-// ── 2. versions + probe + discovery (all through the route) ─────────────────
-[$code, $tags] = ix_run($work, [], ['action' => 'tags', 'src' => $base . '/gh-tags.json', 'proxy_type' => 'none']);
+// ── 2. versions + direct probe (no proxies: direct-only installer) ──────────
+[$code, $tags] = ix_run($work, [], ['action' => 'tags', 'src' => $base . '/gh-tags.json']);
 T::eq('tags exit 0', 0, $code);
 T::eq('tags list the fixture version', 'v9.9.9', $tags['tags'][0]['tag'] ?? null);
 T::ok('tags report a transport', isset($tags['via']) && in_array($tags['via'], ['curl', 'streams', 'sockets'], true));
-[$code, $fetch] = ix_run($work, [], ['action' => 'fetch', 'url' => $base . '/ping.txt', 'proxy_type' => 'none']);
+[$code, $fetch] = ix_run($work, [], ['action' => 'fetch', 'url' => $base . '/ping.txt']);
 T::eq('fetch 200 + 4 bytes', [200, 4], [$fetch['code'] ?? 0, $fetch['bytes'] ?? -1]);
-[$code, $badFetch] = ix_run($work, [], ['action' => 'fetch', 'url' => 'http://127.0.0.1:9/unreachable', 'proxy_type' => 'none']);
+[$code, $badFetch] = ix_run($work, [], ['action' => 'fetch', 'url' => 'http://127.0.0.1:9/unreachable']);
 T::eq('unreachable host is JSON, not a fatal', false, $badFetch['ok'] ?? true);
 T::ok('unreachable host names a reason', ($badFetch['error'] ?? '') !== '');
 // Timeout pin honored: unroutable TEST-NET address with timeout=2 must fail
 // in ~2s, not the ~10s default connect window (wide margin for slow CI).
-[$code, $tFetch] = ix_run($work, [], ['action' => 'fetch', 'url' => 'http://192.0.2.1/unroutable', 'proxy_type' => 'none', 'timeout' => '2']);
+[$code, $tFetch] = ix_run($work, [], ['action' => 'fetch', 'url' => 'http://192.0.2.1/unroutable', 'timeout' => '2']);
 T::eq('unroutable host fails', false, $tFetch['ok'] ?? true);
 T::ok('timeout pin honored (ms=' . ($tFetch['ms'] ?? -1) . ')', ($tFetch['ms'] ?? 999999) < 8000);
-[$code, $disc] = ix_run($work, [], ['action' => 'discover', 'src' => $base . '/proxifly.json', 'proxy_type' => 'none']);
-T::eq('discover keeps socks5 + elite, drops transparent', 2, count($disc['candidates'] ?? []));
-T::ok('discover normalizes to scheme://ip:port', str_starts_with(($disc['candidates'][0]['url'] ?? ''), 'socks5://'));
-T::ok('discover flags rated entries', ($disc['candidates'][0]['rated'] ?? false) === true);
-// Unrated HTTP through a dead proxy: judge unreachable → kept but unverified.
-// Needs the HTTP stub (file:// must never travel a proxy — the installer
-// refuses that combination so verdicts stay honest).
-if ($server === null) {
-    T::ok('SKIP proxy-verdict asserts (no HTTP stub here)', true);
-} else {
-    [$code, $disc2] = ix_run($work, [], ['action' => 'discover', 'src' => $base . '/plain.txt', 'proxy_type' => 'none',
-        'judges' => json_encode([$base . '/judge-clean.txt']), 'our_ip' => '9.9.9.9']);
-    T::eq('plain-list candidate kept', 'http://127.0.0.1:8080', $disc2['candidates'][0]['url'] ?? null);
-    T::eq('plain-list candidate unrated', false, $disc2['candidates'][0]['rated'] ?? null);
-    T::eq('unreachable judge leaves it unverified', false, $disc2['candidates'][0]['judged'] ?? null);
-    [$code, $jUnk] = ix_run($work, [], ['action' => 'judge', 'px' => 'http://127.0.0.1:9',
-        'judges' => json_encode([$base . '/judge-clean.txt']), 'our_ip' => '9.9.9.9']);
-    T::eq('judge through dead proxy is unknown', 'unknown', $jUnk['state'] ?? null);
-    // Rated outranks unrated for the same entry (app parity): plain first,
-    // then rated proxifly for the identical norm.
-    $multiSrc = json_encode([
-        ['url' => $base . '/plain.txt', 'name' => 'plain', 'type' => 'plain', 'proto' => 'http', 'rated' => false],
-        ['url' => $base . '/proxifly2.json', 'name' => 'ratedup', 'type' => 'proxifly', 'rated' => true],
-    ]);
-    [$code, $disc3] = ix_run($work, [], ['action' => 'discover', 'src' => $multiSrc, 'proxy_type' => 'none',
-        'judges' => json_encode([$base . '/judge-clean.txt']), 'our_ip' => '9.9.9.9']);
-    T::eq('rated source upgrades the duplicate', true, $disc3['candidates'][0]['rated'] ?? null);
-    T::eq('upgraded entry keeps rated source name', 'ratedup', $disc3['candidates'][0]['source'] ?? null);
-}
-[$code, $jBad] = ix_run($work, [], ['action' => 'judge', 'px' => 'not-a-proxy']);
-T::eq('judge refuses garbage', false, $jBad['ok'] ?? true);
+// Deleted proxy surface stays deleted: unknown action, never a fatal.
+[$code, $gone1] = ix_run($work, [], ['action' => 'discover']);
+T::eq('discover action gone', false, $gone1['ok'] ?? true);
+[$code, $gone2] = ix_run($work, [], ['action' => 'judge', 'px' => 'http://127.0.0.1:9']);
+T::eq('judge action gone', false, $gone2['ok'] ?? true);
 
 // ── 3. download (zip ok, non-zip rejected) ───────────────────────────────────
-[$code, $dl] = ix_run($work, [], ['action' => 'download', 'url' => $base . '/pkg.zip', 'proxy_type' => 'none']);
+[$code, $dl] = ix_run($work, [], ['action' => 'download', 'url' => $base . '/pkg.zip']);
 T::eq('download exit 0', 0, $code);
 T::eq('downloaded size matches fixture', filesize($stub . '/pkg.zip'), $dl['size'] ?? -1);
 T::ok('download reports a transport', isset($dl['via']));
-[$code, $dlBad] = ix_run($work, [], ['action' => 'download', 'url' => $base . '/ping.txt', 'proxy_type' => 'none']);
+[$code, $dlBad] = ix_run($work, [], ['action' => 'download', 'url' => $base . '/ping.txt']);
 T::eq('non-zip download refused', false, $dlBad['ok'] ?? true);
 T::eq('refused download keeps the good package', filesize($stub . '/pkg.zip'), @filesize($work . '/.__install_dl.zip') ?: -1);
 
@@ -236,7 +201,7 @@ T::ok('running installer survived (decoy skipped)', str_contains((string)file_ge
 T::eq('tree: app present after extract', true, $tree2['present'] ?? null);
 // upgrade mode: pre-existing config.php survives with the flag
 file_put_contents($work . '/config.php', 'sentinel');
-[$code, $dl2] = ix_run($work, [], ['action' => 'download', 'url' => $base . '/pkg.zip', 'proxy_type' => 'none']);
+[$code, $dl2] = ix_run($work, [], ['action' => 'download', 'url' => $base . '/pkg.zip']);
 [$code, $ex2] = ix_run($work, [], ['action' => 'extract', 'keep_config' => '1']);
 T::eq('keep_config preserves config.php', 'sentinel', file_get_contents($work . '/config.php'));
 @unlink($work . '/config.php');

@@ -64,36 +64,32 @@ function pq(string $v): string { // php-quote for config patching
     return str_replace(['\\', "'"], ['\\\\', "\\'"], $v);
 }
 
-// ── HTTP fetch with optional proxy + manual redirect loop ────────────────────
-// Transports tried in order, first success wins (every hop re-tried on the
-// next transport when one fails, so a host without cURL still downloads via
-// the bundled socket engine):
-//   curl    — everything incl. SOCKS5 with remote DNS (fast path)
+// ── direct HTTP fetch with manual redirect loop ──────────────────────────────
+// No proxy support by design: the installer downloads from GitHub over a
+// plain direct connection. A host that cannot reach GitHub at all gets the
+// manual-upload button instead. Transports tried in order, first success wins
+// (every hop re-tried on the next transport when one fails, so a host without
+// cURL still downloads via the bundled socket engine):
+//   curl    — direct HTTP(S) (fast path)
 //   streams — local files only (test hooks)
-//   sockets — proxy.php's no-cURL engine (raw sockets: CONNECT tunnel,
-//             SOCKS4/5/5h with remote DNS, chunked decoding), ported below
+//   sockets — the no-cURL engine (raw sockets: direct HTTP(S), chunked
+//             decoding), ported from includes/proxy.php's direct path
 // Returns [status, headers, body, 'via' => transport] or ['error' => msg].
-function transport_order(string $url, array $proxy): array {
+function transport_order(string $url): array {
     $order = [];
     if (function_exists('curl_init')) $order[] = 'curl';
     // streams serves local files only (see stream_hop); all HTTP(S) rides
     // curl or the socket engine.
-    if (str_starts_with($url, 'file://') && $proxy['type'] === 'none'
+    if (str_starts_with($url, 'file://')
         && filter_var(eini('allow_url_fopen'), FILTER_VALIDATE_BOOLEAN)) {
         $order[] = 'streams';
     }
     if (function_exists('stream_socket_client')) $order[] = 'sockets';
     return $order;
 }
-function http_fetch(string $url, array $proxy, string $method = 'GET', ?string $only = null, int $timeout = 25): array {
-    // Local files never travel a proxy — routing one there would either fail
-    // or, worse, silently succeed direct (cURL ignores proxies for file://)
-    // and produce false verdicts in judge/discover test hooks.
-    if (str_starts_with($url, 'file://') && $proxy['type'] !== 'none') {
-        return ['error' => 'proxies do not apply to file:// URLs'];
-    }
-    $timeout = max(2, min(60, $timeout)); // app parity: probes default 4-8s
-    $order = transport_order($url, $proxy);
+function http_fetch(string $url, string $method = 'GET', ?string $only = null, int $timeout = 25): array {
+    $timeout = max(2, min(60, $timeout)); // short probes, capped for slow hosts
+    $order = transport_order($url);
     if ($only !== null) {
         // Diagnostics pin (fetch action): force one engine to prove it.
         if (!in_array($only, ['curl', 'streams', 'sockets'], true)) return ['error' => 'unknown transport'];
@@ -105,8 +101,8 @@ function http_fetch(string $url, array $proxy, string $method = 'GET', ?string $
     foreach ($order as $t) {
         $u = $url;
         for ($hop = 0; $hop < 8; $hop++) {
-            $r = $t === 'curl' ? curl_hop($u, $proxy, $method, $timeout)
-                : ($t === 'streams' ? stream_hop($u, $proxy, $method) : ix_sock_hop($u, $proxy, $method, $timeout));
+            $r = $t === 'curl' ? curl_hop($u, $method, $timeout)
+                : ($t === 'streams' ? stream_hop($u, $method) : ix_sock_hop($u, $method, $timeout));
             if (isset($r['error'])) {
                 $last = $t . ': ' . $r['error'];
                 break;
@@ -118,7 +114,7 @@ function http_fetch(string $url, array $proxy, string $method = 'GET', ?string $
             }
             return [$code, $hdrs, $body, 'via' => $t];
         }
-        if (!isset($r['error'])) $last = $t . ': too many redirects (8) — proxy loop?';
+        if (!isset($r['error'])) $last = $t . ': too many redirects (8)';
     }
     return ['error' => $last];
 }
@@ -136,7 +132,7 @@ function hdrs_parse(string $raw): array {
     }
     return $out;
 }
-function curl_hop(string $url, array $proxy, string $method, int $timeout = 25): array {
+function curl_hop(string $url, string $method, int $timeout = 25): array {
     $ch = curl_init($url);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true, CURLOPT_HEADER => true, CURLOPT_TIMEOUT => $timeout,
@@ -144,20 +140,6 @@ function curl_hop(string $url, array $proxy, string $method, int $timeout = 25):
         CURLOPT_SSL_VERIFYPEER => true, CURLOPT_HTTPHEADER => ['Accept: */*'],
     ]);
     if ($method === 'HEAD') curl_setopt($ch, CURLOPT_NOBODY, true);
-    if ($proxy['type'] === 'http') {
-        curl_setopt($ch, CURLOPT_PROXY, $proxy['host'] . ':' . $proxy['port']);
-        curl_setopt($ch, CURLOPT_PROXYTYPE, CURLPROXY_HTTP);
-        // Never-matching bypass list: the explicit route always wins. Without
-        // this a host-level NO_PROXY (common in docker) silently bypasses the
-        // pool proxy — a fail-open leak. '.invalid' can never suffix-match a
-        // real target ('*' would mean the opposite: proxy off everywhere).
-        curl_setopt($ch, CURLOPT_NOPROXY, '.invalid');
-    } elseif ($proxy['type'] === 'socks5') {
-        curl_setopt($ch, CURLOPT_PROXY, $proxy['host'] . ':' . $proxy['port']);
-        curl_setopt($ch, CURLOPT_PROXYTYPE, CURLPROXY_SOCKS5_HOSTNAME); // remote DNS: no leak
-        curl_setopt($ch, CURLOPT_NOPROXY, '.invalid');
-    }
-    if ($proxy['user'] !== '') curl_setopt($ch, CURLOPT_PROXYUSERPWD, $proxy['user'] . ':' . $proxy['pass']);
     $raw = curl_exec($ch);
     if ($raw === false) { $e = curl_error($ch); curl_close($ch); return ['error' => 'cURL: ' . $e]; }
     $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -165,59 +147,24 @@ function curl_hop(string $url, array $proxy, string $method, int $timeout = 25):
     curl_close($ch);
     return [$code, hdrs_parse(substr($raw, 0, $hsz)), substr($raw, $hsz)];
 }
-function stream_hop(string $url, array $proxy, string $method): array {
+function stream_hop(string $url, string $method): array {
     // Local files only. HTTP(S) always rides curl or the socket engine now:
     // file_get_contents cannot report status codes without the
     // $http_response_header variable, which PHP 8.5 deprecated (any read of
     // it warns — and a warning byte breaks the JSON contract). The socket
     // engine parses heads itself, so nothing is lost.
-    if ($proxy['type'] !== 'none') return ['error' => 'proxies do not apply to file:// URLs'];
     if (!str_starts_with($url, 'file://')) return ['error' => 'plain-streams HTTP retired — trying next transport'];
     $body = @file_get_contents($url);
     if ($body === false) return ['error' => 'local file unreadable'];
     return [200, [], (string)$body];
 }
 
-// ── No-cURL socket engine (ported from includes/proxy.php) ───────────────────
-// Same battle-tested fallback the app uses for OSM traffic: raw sockets,
-// HTTP-proxy forwarding, CONNECT tunnel for https, SOCKS4/5/5h handshake with
-// remote DNS (target hostname resolved AT the proxy, never locally), chunked
-// decoding, redirect-following by the caller. Adapted: GET-only, installer
-// error convention, no PHP 8-only syntax (this file stays 7.x-parseable),
-// 16 MB body cap (release zips are ~4 MB). Never throws.
+// ── No-cURL socket engine (direct HTTPS, ported from includes/proxy.php) ────
+// Same battle-tested fallback the app uses for direct traffic: raw sockets,
+// TLS handshake, chunked decoding, redirect-following by the caller. Adapted:
+// GET-only, installer error convention, no PHP 8-only syntax (this file stays
+// 7.x-parseable), 16 MB body cap (release zips are ~4 MB). Never throws.
 const IX_MAX_BODY = 16777216;
-function ix_norm(string $raw): ?string {
-    $raw = trim($raw);
-    if ($raw === '' || strlen($raw) > 255) return null;
-    if (!str_contains($raw, '://')) $raw = 'http://' . $raw;
-    $p = parse_url($raw);
-    if (!is_array($p) || empty($p['host']) || empty($p['port'])) return null;
-    $host = strtolower(trim((string)$p['host'], '[]'));
-    if (!filter_var($host, FILTER_VALIDATE_IP) && !filter_var($host, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME)) return null;
-    $port = (int)$p['port'];
-    if ($port < 1 || $port > 65535) return null;
-    if (!in_array(strtolower($p['scheme'] ?? 'http'), ['http', 'https', 'socks4', 'socks5', 'socks5h'], true)) return null;
-    $url = strtolower($p['scheme']) . '://';
-    if (!empty($p['user'])) {
-        $url .= rawurlencode(rawurldecode($p['user']));
-        if (isset($p['pass'])) $url .= ':' . rawurlencode(rawurldecode($p['pass']));
-        $url .= '@';
-    }
-    if (filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false) $host = '[' . $host . ']';
-    return $url . $host . ':' . $port;
-}
-function ix_parse_proxy(array $proxy): ?array {
-    if ($proxy['type'] === 'none') return null;
-    if ($proxy['host'] === '' || $proxy['port'] < 1) return null;
-    $auth = $proxy['user'] !== '' ? $proxy['user'] . ':' . $proxy['pass'] . '@' : '';
-    $norm = ix_norm($proxy['type'] . '://' . $auth . $proxy['host'] . ':' . $proxy['port']);
-    if ($norm === null) return null;
-    $p = parse_url($norm);
-    $host = strtolower(trim((string)$p['host'], '[]'));
-    return ['scheme' => strtolower($p['scheme']), 'host' => $host,
-        'dial' => filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false ? '[' . $host . ']' : $host,
-        'port' => (int)$p['port'], 'user' => rawurldecode((string)($p['user'] ?? '')), 'pass' => rawurldecode((string)($p['pass'] ?? ''))];
-}
 function ix_parse_target(string $url): ?array {
     $p = parse_url($url);
     if (!is_array($p) || isset($p['user'])) return null;
@@ -261,136 +208,37 @@ function ix_read_until($sock, float $deadline, callable $done, int $cap) {
         $buf .= $chunk;
     }
 }
-function ix_read_n($sock, int $n, float $deadline): ?string {
-    $buf = '';
-    while (strlen($buf) < $n) {
-        $left = $deadline - microtime(true);
-        if ($left <= 0) return null;
-        $r = [$sock]; $w = null; $e = null;
-        if (@stream_select($r, $w, $e, (int)$left, (int)(($left - (int)$left) * 1000000)) !== 1) return null;
-        $chunk = @fread($sock, $n - strlen($buf));
-        if (!is_string($chunk) || $chunk === '') return null;
-        $buf .= $chunk;
-    }
-    return $buf;
-}
-function ix_enable_tls($sock, int $secs = 5): bool {
-    $prev = function_exists('ini_get') ? @ini_get('default_socket_timeout') : null;
-    if (function_exists('ini_set')) @ini_set('default_socket_timeout', (string)max(1, $secs));
-    @stream_set_timeout($sock, max(1, $secs));
-    try {
-        return (bool)@stream_socket_enable_crypto($sock, true, STREAM_CRYPTO_METHOD_TLS_CLIENT);
-    } catch (Throwable $t) {
-        return false;
-    } finally {
-        if (is_string($prev) && function_exists('ini_set')) @ini_set('default_socket_timeout', $prev);
-    }
-}
-function ix_sock_open(?array $px, array $t, float $deadline): ?array {
+function ix_sock_open(array $t, float $deadline) {
     if (!function_exists('stream_socket_client')) return null;
     $ctx = function_exists('stream_context_create')
         ? @stream_context_create(['ssl' => ['peer_name' => $t['host'], 'verify_peer' => true, 'verify_peer_name' => true]])
         : null;
-    if ($px === null) {
-        $left = $deadline - microtime(true);
-        if ($left <= 0) return null;
-        $s = @stream_socket_client(($t['tls'] ? 'tls' : 'tcp') . '://' . $t['dial'] . ':' . $t['port'],
-            $eno, $estr, max(0.5, min(15.0, $left)), STREAM_CLIENT_CONNECT, $ctx ?: null);
-        return is_resource($s) ? [$s, false] : null;
-    }
     $left = $deadline - microtime(true);
     if ($left <= 0) return null;
-    $s = @stream_socket_client('tcp://' . $px['dial'] . ':' . $px['port'],
-        $eno, $estr, max(0.5, min(10.0, $left)), STREAM_CLIENT_CONNECT);
-    if (!is_resource($s)) return null;
-    $close = function () use ($s): void { if (is_resource($s)) fclose($s); };
-    $scheme = $px['scheme'];
-    if ($scheme === 'https') {
-        if (!ix_enable_tls($s, 5)) { $close(); return null; }
-        $scheme = 'http';
-    }
-    if ($scheme === 'http') {
-        if (!$t['tls']) return [$s, true];
-        $head = "CONNECT {$t['dial']}:{$t['port']} HTTP/1.1\r\nHost: {$t['dial']}:{$t['port']}\r\n";
-        if ($px['user'] !== '') $head .= 'Proxy-Authorization: Basic ' . base64_encode($px['user'] . ':' . $px['pass']) . "\r\n";
-        if (!ix_write_all($s, $head . "\r\n", $deadline)) { $close(); return null; }
-        $split = ix_read_until($s, $deadline, function (string $b): ?array {
-            $i = strpos($b, "\r\n\r\n");
-            return $i === false ? null : [substr($b, 0, $i), substr($b, $i + 4)];
-        }, 32768);
-        if (!is_array($split) || ix_status($split[0]) !== 200) { $close(); return null; }
-        @stream_context_set_option($s, ['ssl' => ['peer_name' => $t['host'], 'verify_peer' => true, 'verify_peer_name' => true]]);
-        if (!ix_enable_tls($s, 5)) { $close(); return null; }
-        return [$s, false];
-    }
-    if ($scheme === 'socks5' || $scheme === 'socks5h') {
-        if (!ix_write_all($s, $px['user'] === '' ? "\x05\x01\x00" : "\x05\x02\x00\x02", $deadline)) { $close(); return null; }
-        $greet = ix_read_n($s, 2, $deadline);
-        if ($greet === null || $greet[0] !== "\x05") { $close(); return null; }
-        if ($greet[1] === "\x02") {
-            if ($px['user'] === '') { $close(); return null; }
-            if (!ix_write_all($s, "\x01" . chr(strlen($px['user'])) . $px['user'] . chr(strlen($px['pass'])) . $px['pass'], $deadline)) { $close(); return null; }
-            $auth = ix_read_n($s, 2, $deadline);
-            if ($auth === null || $auth[1] !== "\x00") { $close(); return null; }
-        } elseif ($greet[1] !== "\x00") { $close(); return null; }
-        if (strlen($t['host']) > 255) { $close(); return null; }
-        if (!ix_write_all($s, "\x05\x01\x00\x03" . chr(strlen($t['host'])) . $t['host'] . pack('n', $t['port']), $deadline)) { $close(); return null; }
-        $rep = ix_read_n($s, 4, $deadline);
-        if ($rep === null || $rep[1] !== "\x00") { $close(); return null; }
-        if ($rep[3] === "\x01") $tail = 6;
-        elseif ($rep[3] === "\x04") $tail = 18;
-        elseif ($rep[3] === "\x03") {
-            $ln = ix_read_n($s, 1, $deadline);
-            if ($ln === null) { $close(); return null; }
-            $tail = ord($ln) + 2;
-        } else { $close(); return null; }
-        if (ix_read_n($s, $tail, $deadline) === null) { $close(); return null; }
-        return [$s, false];
-    }
-    if ($scheme === 'socks4') {
-        $user = $px['user'] !== '' ? $px['user'] : 'ddmgmt';
-        if (filter_var($t['host'], FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false && is_string(inet_pton($t['host']))) {
-            $req = "\x04\x01" . pack('n', $t['port']) . inet_pton($t['host']) . $user . "\x00";
-        } else {
-            $req = "\x04\x01" . pack('n', $t['port']) . "\x00\x00\x00\xff" . $user . "\x00" . $t['host'] . "\x00";
-        }
-        if (!ix_write_all($s, $req, $deadline)) { $close(); return null; }
-        $rep = ix_read_n($s, 8, $deadline);
-        if ($rep === null || $rep[0] !== "\x00" || $rep[1] !== "\x5a") { $close(); return null; }
-        return [$s, false];
-    }
-    $close();
-    return null;
+    $s = @stream_socket_client(($t['tls'] ? 'tls' : 'tcp') . '://' . $t['dial'] . ':' . $t['port'],
+        $eno, $estr, max(0.5, min(15.0, $left)), STREAM_CLIENT_CONNECT, $ctx ?: null);
+    return is_resource($s) ? $s : null;
 }
 function ix_status(string $head): int {
     if (preg_match('/^HTTP\/\S+\s+(\d{3})/', $head, $m) === 1) return (int)$m[1];
     return 0;
 }
-// One GET over raw sockets. Returns [code, headersAssoc, body] or ['error'].
-function ix_sock_hop(string $url, array $proxy, string $method, int $timeout = 25): array {
+// One direct GET over raw sockets. Returns [code, headersAssoc, body] or ['error'].
+function ix_sock_hop(string $url, string $method, int $timeout = 25): array {
     try {
         if ($method !== 'GET') return ['error' => 'socket engine is GET-only'];
         if (!function_exists('stream_socket_client')) return ['error' => 'sockets unavailable (stream_socket_client missing)'];
-        $px = ix_parse_proxy($proxy);
-        if ($proxy['type'] !== 'none' && $px === null) return ['error' => 'proxy address unusable (need scheme://host:port)'];
         $t = ix_parse_target($url);
         if ($t === null) return ['error' => 'URL unusable (need http(s)://host/path)'];
         if ($t['tls'] && !extension_loaded('openssl')) return ['error' => 'HTTPS over sockets needs openssl'];
         $deadline = microtime(true) + max(2, min(60, $timeout));
-        $opened = ix_sock_open($px, $t, $deadline);
-        if ($opened === null) return ['error' => 'connect/handshake failed (proxy down, blocked, or DNS)'];
-        [$s, $forward] = $opened;
+        $opened = ix_sock_open($t, $deadline);
+        if (!is_resource($opened)) return ['error' => 'connect/handshake failed (host down, blocked, or DNS)'];
+        $s = $opened;
         $close = function () use ($s): void { if (is_resource($s)) fclose($s); };
-        if ($t['tls'] && $px !== null) {
-            @stream_context_set_option($s, ['ssl' => ['peer_name' => $t['host'], 'verify_peer' => true, 'verify_peer_name' => true]]);
-            if (!ix_enable_tls($s, 5)) { $close(); return ['error' => 'TLS handshake failed']; }
-        }
-        $target = $forward ? $url : $t['path'];
+        $target = $t['path'];
         $req = "GET {$target} HTTP/1.1\r\nHost: {$t['dial']}" . (($t['tls'] && $t['port'] === 443) || (!$t['tls'] && $t['port'] === 80) ? '' : ':' . $t['port']) . "\r\n"
             . 'User-Agent: DeadDropMGMT-installer/' . INST_VERSION . "\r\nConnection: close\r\n";
-        if ($forward && $px !== null && $px['user'] !== '') {
-            $req .= 'Proxy-Authorization: Basic ' . base64_encode($px['user'] . ':' . $px['pass']) . "\r\n";
-        }
         if (!ix_write_all($s, $req . "\r\n", $deadline)) { $close(); return ['error' => 'request write failed']; }
         $split = ix_read_until($s, $deadline, function (string $b): ?array {
             $i = strpos($b, "\r\n\r\n");
@@ -480,16 +328,6 @@ function ix_sock_hop(string $url, array $proxy, string $method, int $timeout = 2
         return ['error' => 'socket engine: ' . $t->getMessage()];
     }
 }
-function read_proxy(): array {
-    $t = strtolower(trim((string)($_REQUEST['proxy_type'] ?? 'none')));
-    if (!in_array($t, ['none', 'http', 'socks5'], true)) $t = 'none';
-    $host = trim((string)($_REQUEST['proxy_host'] ?? ''));
-    $port = max(1, min(65535, (int)($_REQUEST['proxy_port'] ?? 0)));
-    if ($t !== 'none' && ($host === '' || $port === 0))
-        jer('proxy selected but host/port missing');
-    return ['type' => $t, 'host' => $host, 'port' => $port ?: 1080,
-        'user' => (string)($_REQUEST['proxy_user'] ?? ''), 'pass' => (string)($_REQUEST['proxy_pass'] ?? '')];
-}
 
 // ── capability check (mirrors includes/setup_check.php rows, standalone) ─────
 function cap_checks(): array {
@@ -506,7 +344,7 @@ function cap_checks(): array {
     }
     $hasCurl = function_exists('curl_init');
     $out[] = $hasCurl ? row('ext_curl', 'curl ' . pver('curl'), 'ok')
-        : row('ext_curl', 'curl missing', 'info', 'Optional. Without cURL: no SOCKS proxy, no HTTPS-via-proxy; direct downloads use streams.');
+        : row('ext_curl', 'curl missing', 'info', 'Optional. Direct downloads fall back to the bundled socket engine.');
     $fopen = filter_var(eini('allow_url_fopen'), FILTER_VALIDATE_BOOLEAN);
     $tls = $hasCurl || ($fopen && function_exists('stream_socket_client') && extension_loaded('openssl'));
     $out[] = $tls ? row('tls', 'HTTPS transport', 'ok')
@@ -586,43 +424,6 @@ function ix_schema_apply(PDO $pdo, array $stmts): array {
     return ['applied' => $n, 'error' => '', 'statement' => ''];
 }
 
-// ── Anonymity judging (ported from proxy_judge_anonymous / proxy_public_ip) ─
-// Same decision table as the app: SOCKS is header-anonymous by protocol,
-// rated lists are trusted, unrated HTTP must prove our IP stays out of the
-// request headers. Learning our own IP makes a DIRECT clearnet connection
-// (ipify/httpbin) — the UI logs this openly; it happens only on owner
-// clicks (Discover/Test), never per request.
-const IX_JUDGES = ['http://httpbin.org/get', 'http://azenv.net/'];
-function ix_url_to_proxy(string $url): ?array {
-    if (!preg_match('#^(\w+)://([^/:]+):(\d+)$#', $url, $m)) return null;
-    if (!in_array(strtolower($m[1]), ['http', 'https', 'socks4', 'socks5', 'socks5h'], true)) return null;
-    return ['type' => strtolower($m[1]), 'host' => $m[2], 'port' => (int)$m[3], 'user' => '', 'pass' => ''];
-}
-function ix_our_ip(): ?string {
-    $direct = ['type' => 'none', 'host' => '', 'port' => 0, 'user' => '', 'pass' => ''];
-    foreach (['https://api.ipify.org?format=text', 'http://httpbin.org/ip'] as $u) {
-        $r = http_fetch($u, $direct, 'GET', null, 8); // app parity: 8s, tiny body
-        if (isset($r['error']) || $r[0] !== 200) continue;
-        if (preg_match('/\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b/', $r[2], $m)) return $m[1];
-    }
-    return null;
-}
-// 'clean' = judges reached and none saw our IP; 'leak' = a judge saw it;
-// 'unknown' = no judge reachable through this proxy (unproven = unusable).
-function ix_judge(string $pxUrl, string $ourIp, array $judges): string {
-    $px = ix_url_to_proxy($pxUrl);
-    if ($px === null) return 'unknown';
-    $seen = false;
-    foreach ($judges as $j) {
-        if (!is_string($j) || !preg_match('#^https?://#i', $j)) continue;
-        $r = http_fetch($j, $px, 'GET', null, 6); // app parity: 6s judge budget
-        if (isset($r['error']) || $r[0] < 200 || $r[0] >= 300) continue;
-        $seen = true;
-        if (str_contains($r[2], $ourIp)) return 'leak';
-    }
-    return $seen ? 'clean' : 'unknown';
-}
-
 // ── action dispatch ──────────────────────────────────────────────────────────
 $action = (string)($_GET['action'] ?? $_POST['action'] ?? '');
 if ($action !== '') {
@@ -634,13 +435,12 @@ if ($action !== '') {
         jout(['ok' => true, 'rows' => $rows, 'fails' => $fails]);
     }
     if ($action === 'tags') {
-        $proxy = read_proxy();
         $src = trim((string)($_POST['src'] ?? ''));
         if ($src === '') $src = INST_TAGS_API;
         if (!preg_match('#^https?://#i', $src) && !str_starts_with($src, 'file://')) jer('not an http(s) URL');
-        $r = http_fetch($src, $proxy);
+        $r = http_fetch($src);
         if (isset($r['error'])) jer('version list failed: ' . $r['error']);
-        if ($r[0] !== 200) jer('version source answered HTTP ' . $r[0] . ' — proxy/auth issue? Add a proxy below or paste a zip URL manually.');
+        if ($r[0] !== 200) jer('version source answered HTTP ' . $r[0] . ' — paste a zip URL manually.');
         $tags = json_decode($r[2], true);
         if (!is_array($tags)) jer('version source returned garbage — paste a zip URL manually.');
         $out = [];
@@ -662,16 +462,15 @@ if ($action !== '') {
         // manual-upload button instead. A failed fetch never touches a
         // previous good package: it lands in .part, is validated, and only
         // then replaces the download.
-        $proxy = read_proxy();
         $url = trim((string)($_POST['url'] ?? ''));
         if (!preg_match('#^https?://#i', $url)) jer('not an http(s) URL');
         [$zip] = dl_paths();
         $tmp = $zip . '.part';
         @unlink($tmp);
-        $r = http_fetch($url, $proxy);
+        $r = http_fetch($url);
         if (isset($r['error'])) jer($r['error']);
         [$code, $hdrs, $body] = [$r[0], $r[1], $r[2]];
-        if ($code !== 200) jer('GitHub answered HTTP ' . $code . ' — wrong URL, or the proxy blocks it?');
+        if ($code !== 200) jer('GitHub answered HTTP ' . $code . ' — wrong URL?');
         $ct = strtolower($hdrs['content-type'] ?? '');
         if ($body === '' || (!str_contains($ct, 'zip') && !str_contains($ct, 'octet-stream') && substr($body, 0, 2) !== 'PK'))
             jer('that URL did not return a zip (HTTP ' . $code . ', ' . ($ct !== '' ? $ct : 'no content-type') . ') — check the version/URL.');
@@ -685,167 +484,19 @@ if ($action !== '') {
         jout(['ok' => true, 'size' => $size, 'total' => $size, 'done' => true, 'via' => $r['via'] ?? '?',
             'log' => 'download complete: ' . number_format($size) . ' B']);
     }
-    // Probe any URL through any proxy: powers the pool's Test buttons (and
+    // Probe any URL directly: powers the connection check (and
     // the test-suite). Reports transport used, status, size, latency.
     // Optional transport=curl|streams|sockets pins one engine (diagnostics),
-    // timeout= seconds per request (app parity: probes run short).
+    // timeout= seconds per request.
     if ($action === 'fetch') {
-        $proxy = read_proxy();
         $url = trim((string)($_POST['url'] ?? ''));
         if (!preg_match('#^https?://#i', $url)) jer('not an http(s) URL');
         $t0 = microtime(true);
-        $r = http_fetch($url, $proxy, 'GET', isset($_POST['transport']) ? (string)$_POST['transport'] : null,
+        $r = http_fetch($url, 'GET', isset($_POST['transport']) ? (string)$_POST['transport'] : null,
             max(2, min(60, (int)($_POST['timeout'] ?? 25))));
         $ms = (int)round((microtime(true) - $t0) * 1000);
         if (isset($r['error'])) jout(['ok' => false, 'error' => $r['error'], 'ms' => $ms, 'via' => $r['via'] ?? '?']);
         jout(['ok' => true, 'code' => $r[0], 'bytes' => strlen($r[2]), 'ms' => $ms, 'via' => $r['via'] ?? '?']);
-    }
-    // Public proxy discovery — the same community sources as the app's
-    // proxy_discover() (Proxifly rated JSON + monosans hourly plain lists),
-    // fetched over the current route. Needs ONE working route (direct on any
-    // real host); a host with no route at all cannot download any list, and
-    // must use the upload-zip path instead. Same anonymity round as the app:
-    // SOCKS entries are header-anonymous by protocol, rated entries trusted,
-    // unrated HTTP judged live while budget lasts; PROVEN leaks are dropped,
-    // unjudged-in-time stay flagged unverified for the UI to judge on demand.
-    if ($action === 'discover') {
-        $proxy = read_proxy();
-        $t0 = microtime(true);
-        $srcs = [
-            ['name' => 'proxifly', 'url' => 'https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/all/data.json', 'type' => 'proxifly', 'rated' => true],
-            ['name' => 'monosans', 'url' => 'https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt', 'type' => 'plain', 'proto' => 'http', 'rated' => false],
-            ['name' => 'monosans', 'url' => 'https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks4.txt', 'type' => 'plain', 'proto' => 'socks4', 'rated' => true],
-            ['name' => 'monosans', 'url' => 'https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt', 'type' => 'plain', 'proto' => 'socks5', 'rated' => true],
-        ];
-        $only = trim((string)($_POST['src'] ?? ''));
-        if ($only !== '') {
-            // Test hook (and power users): custom list(s) instead. A JSON
-            // array of {url,type,proto,rated,name} mirrors multi-source runs.
-            $srcs = [];
-            $decoded = substr($only, 0, 1) === '[' ? json_decode($only, true) : null;
-            foreach (is_array($decoded) ? $decoded : [['url' => $only]] as $c) {
-                if (!is_array($c) || empty($c['url'])) continue;
-                $u = (string)$c['url'];
-                $isJson = substr($u, -5) === '.json';
-                $srcs[] = ['name' => (string)($c['name'] ?? 'custom'), 'url' => $u,
-                    'type' => $isJson ? 'proxifly' : 'plain', 'proto' => (string)($c['proto'] ?? 'http'),
-                    'rated' => isset($c['rated']) ? (bool)$c['rated'] : $isJson];
-            }
-            if ($srcs === []) jer('custom source list empty');
-        }
-        $judges = json_decode((string)($_POST['judges'] ?? ''), true);
-        if (!is_array($judges) || $judges === []) $judges = IX_JUDGES;
-        $ourIpFixed = trim((string)($_POST['our_ip'] ?? ''));
-        $out = [];
-        $seen = []; // norm => index: first source wins, rated outranks unrated
-        $record = function (string $norm, string $source, bool $rated) use (&$out, &$seen): bool {
-            if (!isset($seen[$norm])) {
-                $seen[$norm] = count($out);
-                $out[] = ['url' => $norm, 'source' => $source, 'rated' => $rated, 'judged' => false, 'anonymous' => false];
-                return true;
-            }
-            if ($rated && !$out[$seen[$norm]]['rated']) {
-                $out[$seen[$norm]]['rated'] = true;
-                $out[$seen[$norm]]['source'] = $source;
-            }
-            return false;
-        };
-        $log = [];
-        foreach ($srcs as $src) {
-            if (microtime(true) - $t0 > 18) {
-                $log[] = 'budget spent — remaining lists skipped (retry for more)';
-                break;
-            }
-            if (!preg_match('#^https?://#i', $src['url']) && !str_starts_with($src['url'], 'file://')) {
-                continue;
-            }
-            $r = http_fetch($src['url'], $proxy, 'GET', null, 8); // lists share the budget: short reads
-            if (isset($r['error']) || $r[0] !== 200) {
-                $log[] = $src['name'] . '/' . basename((string)parse_url($src['url'], PHP_URL_PATH)) . ': ' . (isset($r['error']) ? $r['error'] : 'HTTP ' . $r[0]);
-                continue;
-            }
-            $n = 0;
-            if ($src['type'] === 'proxifly') {
-                $list = json_decode($r[2], true);
-                if (!is_array($list)) {
-                    $log[] = 'proxifly: garbage response';
-                    continue;
-                }
-                foreach ($list as $entry) {
-                    if (!is_array($entry)) continue;
-                    $proto = strtolower((string)($entry['protocol'] ?? ''));
-                    if ($proto === '') continue;
-                    $anon = strtolower((string)($entry['anonymity'] ?? ''));
-                    if (!str_starts_with($proto, 'socks') && !in_array($anon, ['anonymous', 'elite'], true)) continue;
-                    $norm = ix_norm($proto . '://' . (string)($entry['ip'] ?? '') . ':' . (string)($entry['port'] ?? ''));
-                    if ($norm === null) continue;
-                    if ($record($norm, $src['name'], true)) $n++;
-                    if (count($out) >= 60) break;
-                }
-            } else {
-                foreach (preg_split('/\r?\n/', trim($r[2])) ?: [] as $line) {
-                    if (!preg_match('/\b(\d{1,3}(?:\.\d{1,3}){3}:\d{2,5})\b/', $line, $m)) continue;
-                    $norm = ix_norm($src['proto'] . '://' . $m[1]);
-                    if ($norm === null) continue;
-                    if ($record($norm, $src['name'], $src['rated'])) $n++;
-                    if (count($out) >= 60) break;
-                }
-            }
-            $log[] = $src['name'] . ': ' . $n . ' candidates via ' . ($r['via'] ?? '?');
-            if (count($out) >= 60) break;
-        }
-        // Anonymity round for unrated HTTP while budget lasts (SOCKS needs
-        // none, rated is trusted). Proven leaks are dropped on the spot.
-        $leaked = 0;
-        $toJudge = [];
-        foreach ($out as $i => $c) {
-            if (!$c['rated'] && str_starts_with($c['url'], 'http://')) $toJudge[] = $i;
-            if (count($toJudge) >= 8) break;
-        }
-        if ($toJudge !== []) {
-            $ourIp = $ourIpFixed !== '' ? $ourIpFixed : ix_our_ip();
-            if ($ourIpFixed === '' && $ourIp !== null) $log[] = 'server IP learned via ipify (' . $ourIp . ') — direct, one-time, to verify proxies hide it';
-            if ($ourIp === null) {
-                $log[] = 'own IP unknowable (no direct route) — HTTP candidates stay unverified';
-            } else {
-                foreach ($toJudge as $i) {
-                    if (microtime(true) - $t0 > 26) {
-                        $log[] = 'judge budget spent — rest stay unverified';
-                        break;
-                    }
-                    $st = ix_judge($out[$i]['url'], $ourIp, $judges);
-                    if ($st === 'leak') {
-                        $leaked++;
-                        unset($out[$i]);
-                    } elseif ($st === 'clean') {
-                        $out[$i]['judged'] = true;
-                        $out[$i]['anonymous'] = true;
-                    }
-                }
-                $out = array_values($out);
-                if ($leaked > 0) $log[] = $leaked . ' leaking proxies dropped';
-            }
-        }
-        if ($out === []) jer('no candidates from any list. ' . implode(' ', $log));
-        jout(['ok' => true, 'candidates' => $out, 'log' => array_merge($log, [count($out) . ' candidates (probe them through fetch before use)'])]);
-    }
-    // Single-proxy anonymity verdict (Test-button chain + tests). Learns our
-    // IP directly unless our_ip is posted (same disclosure note as above).
-    if ($action === 'judge') {
-        $px = trim((string)($_POST['px'] ?? ''));
-        if (ix_url_to_proxy($px) === null) jer('not a proxy URL (need scheme://host:port)');
-        $judges = json_decode((string)($_POST['judges'] ?? ''), true);
-        if (!is_array($judges) || $judges === []) $judges = IX_JUDGES;
-        $ourIp = trim((string)($_POST['our_ip'] ?? ''));
-        $learned = false;
-        if ($ourIp === '') {
-            $ourIp = ix_our_ip();
-            $learned = true;
-        }
-        if ($ourIp === null) jer('own IP unknowable (no direct route) — cannot verify');
-        $st = ix_judge($px, $ourIp, $judges);
-        jout(['ok' => true, 'state' => $st, 'ip' => $ourIp, 'learned_ip' => $learned,
-            'log' => $learned ? 'server IP learned via ipify (' . $ourIp . ') — direct, one-time' : 'verified against posted IP']);
     }
     if ($action === 'upload') {
         if (!class_exists('ZipArchive')) jer('ZipArchive missing — enable the zip extension in the panel first.');
@@ -1044,8 +695,6 @@ button.btn-big{display:block;width:100%;padding:18px;font-size:13px;border-color
 #log .t{color:#444}#log .ok{color:var(--info)}#log .fail{color:var(--error)}#log .warn{color:var(--warn)}#log .info{color:var(--text)}
 .hint{font-size:13px;color:var(--muted)}a{color:var(--accent)}.hidden{display:none}
 code{font-family:ui-monospace,'IBM Plex Mono',Menlo,Consolas,monospace;font-size:12px;color:var(--text)}
-.pxrow{display:flex;gap:10px;align-items:baseline;padding:8px 0;border-top:1px solid var(--border);font-size:12px;font-family:ui-monospace,'IBM Plex Mono',Menlo,Consolas,monospace}
-.pxrow .u{flex:1;word-break:break-all}.pxrow .src{color:var(--muted);font-size:10px}
 .copy-scratch{position:fixed;opacity:0;top:0;left:0}
 @media(max-width:640px){.grid2,.grid3{grid-template-columns:1fr}body{padding:24px 12px 60px}}
 </style>
@@ -1072,13 +721,8 @@ code{font-family:ui-monospace,'IBM Plex Mono',Menlo,Consolas,monospace;font-size
 <div id="treeinfo"></div>
 <label>Version</label><select id="ver"><option value="">Loading versions from GitHub…</option></select>
 <label>…or paste a release zip URL manually</label><input type="text" id="url" placeholder="https://github.com/…/archive/refs/tags/v1.5.0.zip">
-<div class="sec">Route: how this server reaches GitHub</div>
-<p class="hint">Direct works on any normal host. When it doesn't — or when you want every request proxied — discover free public proxies (same community lists the app itself uses) and route through the tested pool. SOCKS resolves hostnames at the proxy (no local DNS leak).</p>
-<div><button class="btn-big" id="bdisc">Discover public proxies</button></div>
-<div class="hint" id="discnote">Untested candidates land in the pool below — probe them before use. Auto mode serves pool proxies only and fails closed (never falls back to direct); unverified HTTP stays out until verified, leaks are dropped.</div>
-<label>Mode</label><select id="mode"><option value="direct">direct (no proxy)</option><option value="auto">auto — pool only, fail closed</option></select>
-<div id="pool"></div>
-<div><button class="ghost hidden" id="btestall">Test all untested</button></div>
+<div class="sec">Download</div>
+<p class="hint">Direct connection to GitHub from this server. If the host cannot reach GitHub at all, upload the release zip yourself with the button below.</p>
 <div class="bar"><i id="dbar"></i></div><div class="hint" id="dtxt"></div>
 <div><button id="bdl">Download</button><button class="ghost" id="bup">Upload a zip instead…</button><input type="file" id="fup" accept=".zip" class="hidden"></div>
 <div id="dlbtns" class="hidden"><label><input type="checkbox" id="keepcfg" checked> Keep existing config.php (upgrade mode)</label><br><button id="bex">Extract into this directory</button></div>
@@ -1124,82 +768,6 @@ var f=files||fd(data||{});f.append("action",action);
 return fetch("?action="+encodeURIComponent(action),{method:"POST",body:f}).then(function(r){return r.json()}).catch(function(e){return {ok:false,error:"request failed: "+e}});
 }
 function get(action,qs){return fetch("?action="+encodeURIComponent(action)+(qs||""),{method:"GET"}).then(function(r){return r.json()}).catch(function(e){return {ok:false,error:"request failed: "+e}})}
-/* proxy pool: [{t,h,p,src,rated,st,anon,ms}] st = untested|ok|slow|fail|leak;
-   anon = proto|rated|verified|unverified|leak. persisted. */
-var pool=[];try{pool=JSON.parse(localStorage.getItem("ddm_inst_px")||"[]")}catch(e){pool=[]}
-if(!Array.isArray(pool))pool=[];
-var lastGood=null,ourIp=null;
-function savePool(){try{localStorage.setItem("ddm_inst_px",JSON.stringify(pool))}catch(e){}}
-function routeName(p){return p?p.t+"://"+p.h+":"+p.p+(p.u?" (auth)":""):"direct"}
-function anonName(p){
-if(p.anon==="proto")return "protocol-anon";
-if(p.anon==="rated")return "rated-list";
-if(p.anon==="verified")return "verified";
-if(p.anon==="leak")return "LEAK";
-return "unverified";
-}
-/* Fail-closed auto: leaks, failures, and unverified HTTP never serve traffic.
-   Order: working, then untested, slow last. Pinned mode is the owner's
-   explicit choice (warned when it leaks). */
-function poolUsable(p){
-if(!p||p.st==="fail"||p.st==="leak"||p.anon==="leak")return false;
-if(p.t==="http"&&!p.rated&&p.anon!=="verified")return false;
-return true;
-}
-function routes(){
-var m=$("mode").value;
-if(m==="direct")return [null];
-if(m.indexOf("px:")===0){var p=pool[+m.slice(3)];return [p||null]}
-var us=pool.filter(function(p){return poolUsable(p)&&p.st==="ok"}).sort(byMs);
-var un=pool.filter(function(p){return poolUsable(p)&&p.st==="untested"});
-var sl=pool.filter(function(p){return poolUsable(p)&&p.st==="slow"}).sort(byMs);
-function byMs(a,b){return (a.ms||1e9)-(b.ms||1e9)}
-var all=us.concat(un,sl);
-if(!all.length)log("pool has no usable proxy — using direct for this request","warn");
-return all.length?all:[null];
-}
-function pxObj(p){return p?{proxy_type:p.t,proxy_host:p.h,proxy_port:p.p,proxy_user:p.u||"",proxy_pass:p.w||""}:{proxy_type:"none"}}
-function renderPool(){
-var h="",m=$("mode"),keep=m.value;
-m.innerHTML='<option value="direct">direct (no proxy)</option><option value="auto">auto — try pool in order</option>';
-pool.forEach(function(p,i){
-var o=document.createElement("option");o.value="px:"+i;o.textContent=routeName(p);m.appendChild(o);
-var st=p.st==="ok"?"ok ("+p.ms+" ms)":p.st==="slow"?"slow ("+p.ms+" ms)":(p.st||"untested");
-var stc=p.st==="ok"?"ok":p.st==="slow"?"warn":(p.st==="fail"||p.st==="leak"||p.anon==="leak")?"fail":"info";
-h+='<div class="pxrow"><span class="u">'+routeName(p)+'</span><span class="src">'+(p.src||"manual")+' · '+anonName(p)+'</span><span class="st st-'+stc+'">'+st+'</span><span><button class="sm" data-t="'+i+'">test</button><button class="sm" data-u="'+i+'">use</button><button class="sm" data-d="'+i+'">del</button></span></div>';
-});
-if(!pool.length)h='<p class="hint">Pool empty — hit Discover above, or stay direct.</p>';
-$("pool").innerHTML=h;
-if(keep==="auto"||keep==="direct"||keep.indexOf("px:")===0)m.value=keep;
-$("btestall").classList.toggle("hidden",!pool.length);
-Array.prototype.forEach.call($("pool").querySelectorAll("[data-t]"),function(b){b.onclick=function(){testPx(pool[+b.getAttribute("data-t")])}});
-Array.prototype.forEach.call($("pool").querySelectorAll("[data-u]"),function(b){b.onclick=function(){var p=pool[+b.getAttribute("data-u")];$("mode").value="px:"+b.getAttribute("data-u");log("route pinned: "+routeName(p)+(p.anon==="leak"||(p.t==="http"&&!p.rated&&p.anon!=="verified")?" — WARNING: leaks or unverified, your explicit choice":""),"info");loadTags()}});
-Array.prototype.forEach.call($("pool").querySelectorAll("[data-d]"),function(b){b.onclick=function(){pool.splice(+b.getAttribute("data-d"),1);savePool();renderPool()}});
-}
-function testPx(p,cb){
-if(!p){if(cb)cb(null);return}
-log("probing "+routeName(p)+"…","info");
-api("fetch",Object.assign({url:"https://api.github.com/repos/kilerdevs/DeadDropMGMT/tags",timeout:6},pxObj(p))).then(function(r){
-if(!r.ok||r.code!==200){p.st="fail";log("proxy FAIL: "+routeName(p)+" — "+(r.error||("HTTP "+r.code))+" ("+r.ms+" ms)","fail");savePool();renderPool();if(cb)cb(null);return}
-p.ms=r.ms;
-p.st=r.ms>3000?"slow":"ok";
-lastGood=p;
-log("proxy "+p.st.toUpperCase()+": "+routeName(p)+" — HTTP 200, "+r.bytes+" B, "+r.ms+" ms via "+r.via,p.st==="ok"?"ok":"warn");
-if(p.t!=="http"){p.anon="proto";savePool();renderPool();if(cb)cb(p);return} // SOCKS: anonymous by protocol
-if(p.rated){p.anon="rated";savePool();renderPool();log("anonymity: rated list entry — trusted per app policy","info");if(cb)cb(p);return}
-log("anonymity: unrated HTTP — verifying via header-echo judge…","info");
-var j={px:p.t+"://"+p.h+":"+p.p};
-if(ourIp)j.our_ip=ourIp;
-api("judge",j).then(function(g){
-if(g.ip)ourIp=g.ip;
-if(!g.ok){p.anon="unverified";log("judge failed: "+(g.error||"unknown"),"warn")}
-else if(g.state==="clean"){p.anon="verified";log("anonymity VERIFIED: "+routeName(p)+" hides our IP","ok")}
-else if(g.state==="leak"){p.anon="leak";p.st="leak";if(lastGood===p)lastGood=null;log("anonymity LEAK: "+routeName(p)+" exposes our IP — dropped from auto","fail")}
-else{p.anon="unverified";log("anonymity unverified: no judge reachable through it","warn")}
-savePool();renderPool();if(cb)cb(p.anon==="leak"?null:p);
-});
-});
-}
 var stw={ok:"ok",fail:"blocked",warn:"limited",info:"info"};
 
 /* step 0 */
@@ -1229,54 +797,15 @@ log("tree probe: app files "+(r.present?"present":"absent")+", config.php "+(r.h
 });
 }
 function loadTags(){
-renderPool();
-var list=routes(),i=0;
-(function next(){
-if(i>=list.length){$("ver").innerHTML='<option value="">all routes failed — add a proxy or paste URL manually</option>';log("version list failed on every route","fail");return}
-var px=pxObj(list[i]);i++;
-log("version list via "+routeName(list[i-1])+"…","info");
-api("tags",px).then(function(r){
+log("version list via direct connection…","info");
+api("tags",{}).then(function(r){
 if(r.ok&&r.tags&&r.tags.length){
 var s=$("ver");s.innerHTML="";r.tags.forEach(function(t,j){var o=document.createElement("option");o.value=t.zip;o.textContent=t.tag+(j===0?" (latest)":"");s.appendChild(o)});
 var m=document.createElement("option");m.value="MASTER";m.textContent="master (bleeding edge)";s.appendChild(m);
-if(list[i-1])lastGood=list[i-1];
 log("versions via "+(r.via||"?")+": "+r.tags.map(function(t){return t.tag}).join(", "),"ok");
-}else{log("route failed: "+(r.error||"empty"),"warn");next()}
+}else{$("ver").innerHTML='<option value="">version list failed — paste a zip URL manually</option>';log("version list failed: "+(r.error||"empty"),"fail")}
 });
-})();
 }
-$("mode").onchange=function(){renderPool();loadTags()};
-$("bdisc").onclick=function(){
-var list=routes(),i=0;
-log("discovering public proxies (same lists the app uses)…","info");$("bdisc").disabled=true;
-(function next(){
-if(i>=list.length){$("bdisc").disabled=false;log("discovery failed on every route — this host has no route to GitHub at all; use the upload-zip path instead","fail");return}
-var px=pxObj(list[i]);i++;
-api("discover",px).then(function(r){
-if(r.ok&&r.candidates&&r.candidates.length){
-(r.log||[]).forEach(function(m){log("discover: "+m,"info")});
-var n=0;r.candidates.forEach(function(c){
-var m=c.url.match(/^(\w+):\/\/([^:]+):(\d+)$/);
-if(!m)return;
-if(pool.some(function(p){return p.t===m[1]&&p.h===m[2]&&+p.p===+m[3]}))return;
-pool.push({t:m[1],h:m[2],p:+m[3],u:"",w:"",src:c.source||"discovered",rated:!!c.rated,
-anon:m[1].indexOf("socks")===0?"proto":c.rated?"rated":"unverified",
-judged:!!c.anonymous,st:"untested"});n++;
-});
-savePool();renderPool();$("bdisc").disabled=false;
-log("discovered "+n+" new candidates — testing all…","ok");
-testAll();
-}else{log("discovery route failed: "+(r.error||"empty"),"warn");next()}
-});
-})();
-};
-function testAll(){
-var q=pool.filter(function(p){return p.st!=="ok"});
-if(!q.length){log("pool: everything already tested OK","info");return}
-log("testing "+q.length+" proxies…","info");
-(function next(i){if(i>=q.length)return;testPx(q[i],function(){next(i+1)})})(0);
-}
-$("btestall").onclick=testAll;
 $("bup").onclick=function(){$("fup").click()};
 $("fup").onchange=function(){
 if(!$("fup").files.length)return;
@@ -1293,18 +822,12 @@ var url=$("url").value.trim();
 if(!url){if(!$("ver").value){log("pick a version or paste a URL","warn");return}
 url=$("ver").value==="MASTER"?"<?= INST_MASTER_ZIP ?>":$("ver").value}
 log("downloading "+url+" (one request, a few MB)…","info");$("bdl").disabled=true;$("dtxt").textContent="downloading…";
-var list=lastGood?[lastGood].concat(routes().filter(function(p){return p!==lastGood})):routes(),i=0;
-(function next(){
-if(i>=list.length){$("bdl").disabled=false;$("dtxt").textContent="failed";log("download failed on every route","fail");return}
-var rt=list[i];i++;
-log("download route: "+routeName(rt),"info");
-api("download",Object.assign({url:url},pxObj(rt))).then(function(r){
-if(!r.ok){log("route failed: "+r.error,"warn");next();return}
+api("download",{url:url}).then(function(r){
+$("bdl").disabled=false;
+if(!r.ok){$("dtxt").textContent="failed";log("download failed: "+r.error,"fail");return}
 $("dbar").style.width="100%";$("dtxt").textContent=Math.round(r.size/1024)+" KB";
-if(rt)lastGood=rt;
-log(r.log+" via "+(r.via||"?"),"ok");$("dlbtns").classList.remove("hidden");$("bdl").disabled=false;
+log(r.log+" via "+(r.via||"?"),"ok");$("dlbtns").classList.remove("hidden");
 });
-})();
 };
 $("bex").onclick=function(){
 log("extracting…","info");$("bex").disabled=true;
