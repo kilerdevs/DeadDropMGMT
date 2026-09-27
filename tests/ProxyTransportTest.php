@@ -194,7 +194,10 @@ $pipe = static function ($a, $b, int $secs): void {
     stream_set_blocking($b, false);
     while (microtime(true) < $until) {
         $r = [$a, $b]; $w = null; $e = null;
-        if (@stream_select($r, $w, $e, 1) !== 1) continue;
+        // Both ends are watched: 2 means both ready (e.g. both closed), and
+        // skipping on anything but 1 spun here until the deadline, stalling
+        // this single-threaded stub past the next request's timeout.
+        if (!@stream_select($r, $w, $e, 1)) continue;
         foreach ($r as $s) {
             $d = @fread($s, 65536);
             if (!is_string($d) || $d === '') return;
@@ -377,7 +380,7 @@ while (time() < $until && $handled < 400) {
     stream_set_blocking($up, false);
     while (microtime(true) < $fin) {
         $r2 = [$c, $up]; $w2 = null; $e2 = null;
-        if (@stream_select($r2, $w2, $e2, 1) !== 1) continue;
+        if (!@stream_select($r2, $w2, $e2, 1)) continue; // 2 = both ends ready, not an error
         foreach ($r2 as $s) {
             $d = @fread($s, 65536);
             if (!is_string($d) || $d === '') break 2;
