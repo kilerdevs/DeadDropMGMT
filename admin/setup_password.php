@@ -27,10 +27,18 @@ $error = '';
 // setup started before the seal deploy completes instead of bricking.
 $flash_raw = $_SESSION['enrollment_flash'] ?? '';
 if (is_array($flash_raw)) {
-    $flash_dec = decrypt_secret(
+    // A setup begun on the previous build sealed this under the TOTP subkey;
+    // honor it once so an upgrade mid-enrollment cannot destroy the only copy.
+    $flash_dec = decrypt_flash(
         (string)($flash_raw['ciphertext'] ?? ''),
         (string)($flash_raw['iv'] ?? '')
     );
+    if ($flash_dec === false) {
+        $flash_dec = decrypt_secret(
+            (string)($flash_raw['ciphertext'] ?? ''),
+            (string)($flash_raw['iv'] ?? '')
+        );
+    }
     $enrollment_note = is_string($flash_dec) ? $flash_dec : '';
 } else {
     $enrollment_note = (string)$flash_raw;
@@ -117,7 +125,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <meta name="darkreader-lock">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Admin — <?= t('admin.setup.title') ?></title><link rel="stylesheet" href="/admin/style.css">
+<title>Admin — <?= t('admin.setup.title') ?></title><link rel="stylesheet" href="/admin/style.css?v=<?= admin_css_ver() ?>">
 </head>
 <body class="login-page">
 <div class="login-wrap">

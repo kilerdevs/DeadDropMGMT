@@ -18,7 +18,12 @@ function fetch_order(int $id) {
         $db   = get_db();
         $stmt = $db->prepare('SELECT * FROM orders WHERE id = ? LIMIT 1');
         $stmt->execute([$id]);
-        return $stmt->fetch();
+        $row = $stmt->fetch();
+        if (is_array($row)) {
+            // Stored encrypted (ADR-019): open the display copy once here.
+            $row['order_token'] = token_label(order_token_plain($row), $row['token_hmac'] ?? null);
+        }
+        return $row;
     } catch (Exception $e) {
         log_err('Edit fetch: ' . $e->getMessage());
         return false;
@@ -54,10 +59,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } else {
         $new_status       = in_array($_POST['status'] ?? '', ['preparing', 'delivered'], true)
                             ? $_POST['status'] : $order['status'];
-        $new_notes        = trim($_POST['notes']        ?? '');
-        $new_location     = trim($_POST['location']     ?? '');
-        $new_instructions = trim($_POST['instructions'] ?? '');
-        $new_password     = (string)($_POST['new_password'] ?? '');
+        $new_notes        = trim(post_string('notes'));
+        $new_location     = trim(post_string('location'));
+        $new_instructions = trim(post_string('instructions'));
+        $new_password     = post_string('new_password');
         $lat_raw          = $_POST['lat'] ?? '';
         $lng_raw          = $_POST['lng'] ?? '';
 
@@ -68,10 +73,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $error = t('admin.edit.error.invalid_transition');
         }
 
-        // Decode current location data for coordinate fallback
+        // Decode current location data for coordinate fallback. A stored
+        // location that no longer decrypts (legacy row before migration, a
+        // key-rotation slip) must never be re-encrypted from this form: the
+        // page shows a placeholder there, and saving it would replace the
+        // still-recoverable ciphertext for good.
         if ($error === '') {
-            $cur = decrypt_location_data($order['location_encrypted'], $order['location_iv'])
-                ?: ['text' => '', 'lat' => null, 'lng' => null, 'instructions' => ''];
+            $cur = decrypt_location_data($order['location_encrypted'], $order['location_iv'], $order['token_hmac'] ?? null);
+            if ($cur === false && (string)($order['location_encrypted'] ?? '') !== '') {
+                $error = t('admin.edit.error.decrypt_locked');
+            }
+            $cur = $cur ?: ['text' => '', 'lat' => null, 'lng' => null, 'instructions' => ''];
         } else {
             $cur = ['text' => '', 'lat' => null, 'lng' => null, 'instructions' => ''];
         }
@@ -110,12 +122,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'lat'          => $final_lat,
                     'lng'          => $final_lng,
                     'instructions' => $final_instr,
-                ]);
+                    'notes'        => $new_notes, // encrypted with the location (legacy column cleared)
+                ], $order['token_hmac'] ?? null); // bound to this order (re-binds legacy rows on save)
 
                 // delivered_at/expires_at are set by the SAME conditional
                 // update that flips the status — no read-decide-write window.
                 if ($order['status'] === 'preparing' && $new_status === 'delivered') {
-                    get_db()->prepare(
+                    $upd = get_db()->prepare(
                         'UPDATE orders SET
                             status                = "delivered",
                             delivered_at          = NOW(),
@@ -127,16 +140,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             pickup_password_enc   = NULL,
                             pickup_password_iv    = NULL
                          WHERE id = ? AND status = "preparing"'
-                    )->execute([
+                    );
+                    $upd->execute([
                         order_ttl_hours(),
-                        $new_notes !== '' ? $new_notes : null,
+                        null, // legacy plaintext notes column: cleared on every save
                         $enc['ciphertext'],
                         $enc['iv'],
                         $pw_hash,
                         $id,
                     ]);
                 } else {
-                    get_db()->prepare(
+                    $upd = get_db()->prepare(
                         'UPDATE orders SET
                             notes                 = ?,
                             location_encrypted    = ?,
@@ -145,8 +159,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             pickup_password_enc   = NULL,
                             pickup_password_iv    = NULL
                          WHERE id = ? AND status = ?'
-                    )->execute([
-                        $new_notes !== '' ? $new_notes : null,
+                    );
+                    $upd->execute([
+                        null, // legacy plaintext notes column: cleared on every save
                         $enc['ciphertext'],
                         $enc['iv'],
                         $pw_hash,
@@ -155,8 +170,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     ]);
                 }
 
+                // The conditional UPDATE matched nothing: the order was
+                // delivered, picked up or deleted since this page loaded
+                // (every save writes a fresh nonce, so an unchanged form
+                // still counts as one row). Say so — never "saved".
+                if ($upd->rowCount() === 0) {
+                    throw new DomainException('stale');
+                }
+
                 // Handle new photo uploads — same per-request cap as create.php.
-                if (!empty($_FILES['photos']['name'][0])) {
+                if (isset($_FILES['photos']['name']) && is_array($_FILES['photos']['name']) && !empty($_FILES['photos']['name'][0])) {
                     $db    = get_db();
                     $files = $_FILES['photos'];
                     $count = count($files['name']);
@@ -176,9 +199,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         ];
                         $rel = save_uploaded_photo($entry, $id, max_photo_bytes());
                         if ($rel !== false) {
-                            $db->prepare(
-                                'INSERT INTO order_photos (order_id, filename) VALUES (?, ?)'
-                            )->execute([$id, $rel]);
+                            store_order_photo($db, $id, $rel);
                         } else {
                             // Raw name like create.php: t() escapes it once at
                             // the sink — silent skips hid rejected uploads.
@@ -203,6 +224,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 audit('order_edit', $id, $order['order_token'], "status={$new_status}");
                 $order   = fetch_order($id);
                 $success = t('admin.edit.success.saved');
+            } catch (DomainException $e) {
+                $error = t('admin.edit.error.stale');
             } catch (Exception $e) {
                 log_err('Edit update: ' . $e->getMessage());
                 $error = t('admin.edit.error.save_failed');
@@ -216,8 +239,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 // ── Decrypt current data ──────────────────────────────────────────────────────
-$loc = decrypt_location_data($order['location_encrypted'], $order['location_iv'])
-    ?: ['text' => t('admin.edit.decrypt_error'), 'lat' => null, 'lng' => null, 'instructions' => ''];
+$loc = decrypt_location_data($order['location_encrypted'], $order['location_iv'], $order['token_hmac'] ?? null);
+if ($loc === false && (string)($order['location_encrypted'] ?? '') !== '' && $error === '') {
+    $error = t('admin.edit.error.decrypt_locked');
+}
+$loc = $loc ?: ['text' => t('admin.edit.decrypt_error'), 'lat' => null, 'lng' => null, 'instructions' => ''];
 
 // Pickup passwords are hash-only: nothing is decrypted for display. The
 // credential was shown once at creation and can be replaced, not recovered.
@@ -253,7 +279,7 @@ $init_zoom = $has_pin ? 17 : 12;
 <?php else: ?>
 <link rel="stylesheet" href="/admin/vendor/leaflet/leaflet.css">
 <?php endif; ?>
-<link rel="stylesheet" href="/admin/style.css">
+<link rel="stylesheet" href="/admin/style.css?v=<?= admin_css_ver() ?>">
 <meta name="csrf-token" content="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
 </head>
 <body>
@@ -263,7 +289,6 @@ $init_zoom = $has_pin ? 17 : 12;
 
     <main class="main">
     <?php require __DIR__ . '/totp_banner.php'; ?>
-    <?php require __DIR__ . '/osm_monit.php'; ?>
         <div class="page-heading">
             <?= t('admin.edit.title_prefix') ?> — <span class="token"><?= htmlspecialchars($order['order_token'], ENT_QUOTES, 'UTF-8') ?></span>
         </div>
@@ -359,6 +384,7 @@ $init_zoom = $has_pin ? 17 : 12;
                          data-i18n-error="<?= htmlspecialchars(t('admin.new_order.geocode_error'), ENT_QUOTES, 'UTF-8') ?>"
                          data-i18n-load-error="<?= htmlspecialchars(t('admin.maps.load_error'), ENT_QUOTES, 'UTF-8') ?>"
                          data-i18n-no-zones="<?= htmlspecialchars(t('admin.maps.no_zones'), ENT_QUOTES, 'UTF-8') ?>"></div>
+                    <?php if (map_provider() === MAP_PROVIDER_OSM && osm_proxy_enabled()) { require __DIR__ . '/osm_monit.php'; } ?>
                     <div class="map-coords" id="coords-display">
                         <?= htmlspecialchars(
                             $has_pin
@@ -383,7 +409,7 @@ $init_zoom = $has_pin ? 17 : 12;
                 <div class="form-group">
                     <label for="notes"><?= t('public.index.reveal.notes') ?> <span class="hint"><?= t('admin.new_order.notes_hint') ?></span></label>
                     <textarea id="notes" name="notes" rows="2"
-                              placeholder="<?= htmlspecialchars(t('admin.edit.notes_placeholder'), ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($order['notes'] ?? '', ENT_QUOTES, 'UTF-8') ?></textarea>
+                              placeholder="<?= htmlspecialchars(t('admin.edit.notes_placeholder'), ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars(order_notes_plain($order, $loc), ENT_QUOTES, 'UTF-8') ?></textarea>
                 </div>
 
                 <!-- Existing photos -->
@@ -450,19 +476,19 @@ $init_zoom = $has_pin ? 17 : 12;
                     <div class="field-label"><?= t('admin.edit.extend_label') ?></div>
                     <div class="extend-row">
                     <?php foreach (extend_hours_options() as $h): ?>
-                    <!-- Real forms, not JS-built ones: the admin CSP is
-                         script-src 'self' + nonce and never authorizes
-                         inline onclick, so script-built submits would be
-                         dead buttons. These carry the identical fields. -->
-                    <form method="POST" action="/admin/extend.php" class="extend-form">
-                        <input type="hidden" name="csrf_token"
-                               value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
-                        <input type="hidden" name="id"
-                               value="<?= htmlspecialchars((string)$id, ENT_QUOTES, 'UTF-8') ?>">
-                        <input type="hidden" name="hours" value="<?= (int)$h ?>">
-                        <input type="hidden" name="ref" value="edit">
-                        <button type="submit" class="btn btn-sm">+<?= (int)$h ?>h</button>
-                    </form>
+                    <!-- Real form submits, not JS-built ones: the admin CSP is
+                         script-src 'self' + nonce and never authorizes inline
+                         onclick. The <form>s themselves sit AFTER the edit form
+                         (a form nested in a form is dropped by the HTML parser
+                         and its </form> closes the edit form early); these
+                         controls join them through the form= attribute. -->
+                    <input type="hidden" form="extend-<?= (int)$h ?>" name="csrf_token"
+                           value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
+                    <input type="hidden" form="extend-<?= (int)$h ?>" name="id"
+                           value="<?= htmlspecialchars((string)$id, ENT_QUOTES, 'UTF-8') ?>">
+                    <input type="hidden" form="extend-<?= (int)$h ?>" name="hours" value="<?= (int)$h ?>">
+                    <input type="hidden" form="extend-<?= (int)$h ?>" name="ref" value="edit">
+                    <button type="submit" form="extend-<?= (int)$h ?>" class="btn btn-sm">+<?= (int)$h ?>h</button>
                     <?php endforeach; ?>
                     </div>
                 </div>
@@ -474,7 +500,7 @@ $init_zoom = $has_pin ? 17 : 12;
                 </div>
 
                 <div class="edit-extra-actions">
-                    <button class="action-btn"
+                    <button type="button" class="action-btn"
                             data-copy
                             data-token="<?= htmlspecialchars($order['order_token'], ENT_QUOTES, 'UTF-8') ?>">
                         <?= t('admin.edit.copy_data_button') ?>
@@ -482,6 +508,12 @@ $init_zoom = $has_pin ? 17 : 12;
                 </div>
 
             </form><!-- END main edit form -->
+
+            <?php if ($order['status'] === 'delivered'): ?>
+            <?php foreach (extend_hours_options() as $h): ?>
+            <form id="extend-<?= (int)$h ?>" method="POST" action="/admin/extend.php" class="extend-form"></form>
+            <?php endforeach; ?>
+            <?php endif; ?>
 
             <!-- ── Delete form — OUTSIDE the edit form ─────────────────────── -->
             <div class="edit-extra-actions">
@@ -526,7 +558,9 @@ $init_zoom = $has_pin ? 17 : 12;
         popup.textContent = msg;
         popup.className = 'save-popup' + (isError ? ' error' : '') + ' visible';
         clearTimeout(popupTimer);
-        popupTimer = setTimeout(function () { popup.classList.remove('visible'); }, isError ? 3000 : 1400);
+        // Long messages stay up long enough to be read (about 55 ms a character).
+        var ms = Math.min(9000, Math.max(isError ? 3000 : 1400, msg.length * 55));
+        popupTimer = setTimeout(function () { popup.classList.remove('visible'); }, ms);
     }
 
     function saveNow() {
@@ -541,7 +575,17 @@ $init_zoom = $has_pin ? 17 : 12;
         .then(function (r) { return r.json(); })
         .then(function (d) {
             saving = false;
-            if (d.csrf) csrf = d.csrf; // token rotated server-side on each save
+            if (d.csrf) {
+                // The token rotates on every verified request, failed saves
+                // included: push it into every form on the page (the next
+                // autosave reads the edit form's hidden field, and the extend /
+                // delete / photo forms submit theirs) or everything after the
+                // first validation error dies with "invalid CSRF".
+                csrf = d.csrf;
+                document.querySelectorAll('input[name="csrf_token"]').forEach(function (i) { i.value = d.csrf; });
+                var meta = document.querySelector('meta[name="csrf-token"]');
+                if (meta) meta.content = d.csrf;
+            }
             if (d.ok) {
                 showPopup(<?= json_encode('✓ ' . t('admin.edit.js.saved')) ?>, false);
                 setTimeout(function () { location.reload(); }, 600);

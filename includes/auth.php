@@ -12,6 +12,42 @@ const ADMIN_SESSION_ABSOLUTE_SECONDS = 43200; // 12 h
 
 // ── Session ───────────────────────────────────────────────────────────────────
 
+// Effective session directory: the configured save_path, or the system temp
+// dir when none is configured. Shared so the setup check reports the same
+// path the session actually uses.
+function session_effective_path(): string {
+    $configured = (string)@ini_get('session.save_path');
+    if (preg_match('/^(?:\d+;)?(.*)$/', $configured, $m) === 1) {
+        $configured = $m[1];
+    }
+    return $configured !== '' ? $configured : sys_get_temp_dir();
+}
+
+// Cheap shared hosting jails or quotas /tmp (open_basedir, noexec mounts):
+// session_start() then warns and login/CSRF/poll state silently breaks.
+// Only where the effective path is actually unusable, fall back to an
+// app-local dir — working setups are never touched (their sessions stay
+// exactly where they are, no mass logout).
+function session_save_path_ensure(): void {
+    $probe = session_effective_path();
+    if (is_dir($probe) && is_writable($probe)) {
+        return;
+    }
+    $local = dirname(__DIR__) . '/cache/sessions';
+    if (!is_dir($local) && !@mkdir($local, 0700, true)) {
+        return; // cannot improve — session_start() itself reports it
+    }
+    @ini_set('session.save_path', $local);
+}
+
+// Over HTTPS the cookie carries the __Host- prefix: browsers then refuse it
+// unless Secure, host-only and Path=/ — a sibling subdomain (or a plain-HTTP
+// response) can no longer plant a session ID for this app. Over plain HTTP
+// (local/dev) the prefix would be rejected, so the bare name stays.
+function session_cookie_name(): string {
+    return request_is_https() ? '__Host-' . SESSION_NAME : SESSION_NAME;
+}
+
 function start_secure_session(): void {
     if (session_status() !== PHP_SESSION_NONE) return;
     // Harden the mechanism itself, explicitly rather than trusting php.ini
@@ -22,6 +58,7 @@ function start_secure_session(): void {
     ini_set('session.use_strict_mode', '1');
     ini_set('session.use_only_cookies', '1');
     ini_set('session.use_trans_sid', '0');
+    session_save_path_ensure();
     session_set_cookie_params([
         'lifetime' => 0,
         'path'     => '/',
@@ -29,8 +66,25 @@ function start_secure_session(): void {
         'httponly' => true,
         'samesite' => 'Strict',
     ]);
-    session_name(SESSION_NAME);
+    session_name(session_cookie_name());
     session_start();
+    // Hosts that lock session.* (PHP_INI_SYSTEM) silently ignore the ini_set
+    // trio above — and the return values are easy to miss at 3 a.m. Verify
+    // the EFFECTIVE values once per session and say so loudly in the log
+    // (the setup check page shows the same). session.use_cookies is
+    // intentionally NOT asserted: the login poll endpoint disables it.
+    if (empty($_SESSION['ini_hardening_seen'])) {
+        $_SESSION['ini_hardening_seen'] = true;
+        $lost = [];
+        foreach (['session.use_strict_mode' => '1', 'session.use_only_cookies' => '1', 'session.use_trans_sid' => '0'] as $k => $v) {
+            if ((string)@ini_get($k) !== $v) {
+                $lost[] = $k;
+            }
+        }
+        if ($lost !== []) {
+            error_log('DeadDropMGMT: host ignores ini_set for ' . implode(',', $lost) . '; session hardening reduced (see admin/setup_check.php).');
+        }
+    }
 }
 
 // ── Identity helpers ──────────────────────────────────────────────────────────
@@ -258,6 +312,14 @@ function _db_table_missing(Throwable $e): bool {
 function admin_login(string $username, string $password): string {
     require_once dirname(__DIR__) . '/includes/db.php';
     start_secure_session();
+    // Account names are plain ASCII (user_action/bootstrap enforce it). Any
+    // other input can still MATCH one under the utf8mb4_unicode_ci collation
+    // ("ówner", full-width, zero-width joins == "owner") while hashing to a
+    // fresh per-account rate-limit key — so it is a guaranteed miss here.
+    if (preg_match('/^[a-zA-Z0-9_\-\.]+$/', $username) !== 1) {
+        password_verify($password, DUMMY_AUTH_HASH);
+        return 'fail';
+    }
     try {
         $stmt = get_db()->prepare('SELECT * FROM users WHERE username = ? LIMIT 1');
         $stmt->execute([$username]);
@@ -292,7 +354,7 @@ function admin_login(string $username, string $password): string {
     // empty-hash branch is not a timing oracle for "this account exists
     // and awaits enrollment".
     if ($hash === '') {
-        $enrollment = trim((string)($_POST['enrollment'] ?? ''));
+        $enrollment = trim(post_string('enrollment'));
         if ($password !== '' || $enrollment === '' || !enrollment_secret_valid((int)$user['id'], $enrollment)) {
             password_verify($password, DUMMY_AUTH_HASH);
             return 'fail';
@@ -339,13 +401,13 @@ function admin_logout(): void {
 
 // ── Flash messages ────────────────────────────────────────────────────────────
 // One-shot notices across a redirect. A message that carries a credential
-// (generated pickup password, enrollment secret) is sealed with the TOTP
+// (generated pickup password, enrollment secret) is sealed with the flash-v1
 // subkey, so the session store never rests in plaintext with it.
 
 function flash_set(string $msg, bool $ok, bool $sensitive = false): void {
     unset($_SESSION['flash'], $_SESSION['flash_sealed']);
     if ($sensitive) {
-        $_SESSION['flash_sealed'] = encrypt_secret($msg);
+        $_SESSION['flash_sealed'] = encrypt_flash($msg);
     } else {
         $_SESSION['flash'] = $msg;
     }
@@ -357,7 +419,7 @@ function flash_take(): array {
     $msg = (string)($_SESSION['flash'] ?? '');
     $sealed = $_SESSION['flash_sealed'] ?? null;
     if (is_array($sealed)) {
-        $dec = decrypt_secret((string)($sealed['ciphertext'] ?? ''), (string)($sealed['iv'] ?? ''));
+        $dec = decrypt_flash((string)($sealed['ciphertext'] ?? ''), (string)($sealed['iv'] ?? ''));
         $msg = is_string($dec) ? $dec : $msg;
     }
     $ok = (bool)($_SESSION['flash_ok'] ?? false);
@@ -498,6 +560,18 @@ function rl_enabled(): bool {
     return get_setting('rate_limit_enabled', '1') === '1';
 }
 
+// The owner's "IP-based attempt limiting" switch covers the public pickup IP
+// budget (busy NAT exits, testing). The admin authentication budgets, the
+// per-order pickup budget and the resource budgets stay on regardless:
+// switching them off used to leave 2FA with no guard but the 5-minute
+// pending window.
+const RL_ALWAYS_ON = ['admin_login', 'admin_login_acct', 'admin_2fa', 'admin_2fa_acct', 'admin_2fa_setup',
+    'admin_setup', 'admin_reauth', 'pickup_token', 'admin_tiles', 'admin_geocode', 'setup_apply'];
+
+function rl_scope_switchable(string $scope): bool {
+    return !in_array($scope, RL_ALWAYS_ON, true);
+}
+
 // window_start is written by MySQL UTC_TIMESTAMP() — a bare DATETIME with
 // no zone. Parsing it with plain strtotime() interprets it in PHP's
 // default timezone, skewing every window by the UTC offset: east of UTC
@@ -514,8 +588,20 @@ function _rl_parse_window_start(string $v): int|false {
     return strtotime($v . ' UTC');
 }
 
+// The default budget subject: the client IP — but an IPv6 client counts as
+// its whole /64. One subscriber routinely holds a /64 (2^64 addresses), so
+// per-address budgets were free to rotate; IPv4 and v4-mapped stay exact.
+function rl_client_subject(): string {
+    $ip = get_client_ip();
+    $bin = @inet_pton($ip);
+    if ($bin === false || strlen($bin) !== 16 || str_starts_with($bin, str_repeat("\0", 10) . "\xff\xff")) {
+        return $ip;
+    }
+    return inet_ntop(substr($bin, 0, 8) . str_repeat("\0", 8)) . '/64';
+}
+
 function rl_status(string $scope = 'public', ?string $subject = null): array {
-    if (!rl_enabled()) {
+    if (rl_scope_switchable($scope) && !rl_enabled()) {
         return ['blocked' => false, 'remaining' => 0, 'count' => 0];
     }
     require_once dirname(__DIR__) . '/includes/settings.php';
@@ -523,7 +609,7 @@ function rl_status(string $scope = 'public', ?string $subject = null): array {
     $window = rl_window_seconds();
     try {
         $stmt = get_db()->prepare('SELECT count, window_start FROM rate_limits WHERE ip_address = ? AND scope = ? LIMIT 1');
-        $stmt->execute([$subject ?? get_client_ip(), $scope]);
+        $stmt->execute([$subject ?? rl_client_subject(), $scope]);
         $row = $stmt->fetch();
     } catch (Exception $e) {
         // Fail CLOSED: this limiter guards pickup-password guessing and admin
@@ -563,11 +649,11 @@ function rl_status(string $scope = 'public', ?string $subject = null): array {
 // "one attempt left". The returned 'blocked' verdict comes from the
 // post-increment count of that single state transition.
 function rl_hit(string $scope = 'public', ?int $max_override = null, ?int $window_override = null, ?string $subject = null): array {
-    if (!rl_enabled()) {
+    if (rl_scope_switchable($scope) && !rl_enabled()) {
         return ['blocked' => false, 'remaining' => 0, 'count' => 0];
     }
     require_once dirname(__DIR__) . '/includes/settings.php';
-    $ip     = $subject ?? get_client_ip();
+    $ip     = $subject ?? rl_client_subject();
     $max    = $max_override ?? rl_max();
     $window = $window_override ?? rl_window_seconds();
     $db     = get_db();
@@ -627,6 +713,33 @@ function rl_increment(string $scope = 'public'): void {
     rl_hit($scope);
 }
 
+// Changing one's OWN password or removing one's OWN 2FA re-proves the current
+// password: a hijacked or unattended owner session must not be able to strip
+// 2FA and swap the password (2fa.php's own disable path already demands a
+// code). Guessing is budgeted per account. Other accounts' rows are the
+// owner's recovery path and need no re-auth.
+function admin_self_reauth_ok(int $uid, string $currentPassword): bool {
+    if ($uid !== current_user_id()) {
+        return true;
+    }
+    $hit = rl_hit('admin_reauth', 10, 900, 'u:' . $uid);
+    if ($hit['blocked']) {
+        return false;
+    }
+    try {
+        $st = get_db()->prepare('SELECT password_hash FROM users WHERE id = ? LIMIT 1');
+        $st->execute([$uid]);
+        $hash = (string)$st->fetchColumn();
+    } catch (Exception $e) {
+        return false;
+    }
+    if ($hash === '' || !password_verify($currentPassword, $hash)) {
+        return false;
+    }
+    rl_refund('admin_reauth', 'u:' . $uid);
+    return true;
+}
+
 // Budget key for a per-account limiter: rate_limits.ip_address is just the
 // counter's subject column, so an account's name (hashed to fit, and
 // case-folded like the users.username collation) can hold its own budget
@@ -643,7 +756,7 @@ function rl_refund(string $scope = 'public', ?string $subject = null): void {
     try {
         get_db()->prepare(
             'UPDATE rate_limits SET count = GREATEST(count - 1, 0) WHERE ip_address = ? AND scope = ?'
-        )->execute([$subject ?? get_client_ip(), $scope]);
+        )->execute([$subject ?? rl_client_subject(), $scope]);
     } catch (Exception $e) {
         // best-effort: a failed refund only costs the visitor one attempt
     }
@@ -656,7 +769,7 @@ function rl_refund(string $scope = 'public', ?string $subject = null): void {
 function rl_reset(string $scope = 'public', ?string $subject = null): void {
     try {
         get_db()->prepare('DELETE FROM rate_limits WHERE ip_address = ? AND scope = ?')
-            ->execute([$subject ?? get_client_ip(), $scope]);
+            ->execute([$subject ?? rl_client_subject(), $scope]);
     } catch (Exception $e) {
         // best-effort
     }
@@ -670,8 +783,18 @@ function rl_reset(string $scope = 'public', ?string $subject = null): void {
 // Legit users behind shared NAT keep their own bucket; an attacker must now
 // rotate both IP and cookie per attempt. Server-side storage means clearing
 // cookies is also visible as a brand-new session with zero history.
-// Window follows the configured IP-limiter window (rl_window_seconds) so the
-// two layers can never silently diverge when an admin retunes one of them.
+// The WINDOW follows the configured IP-limiter window (rl_window_seconds) so
+// the two layers can never silently diverge in time. The THRESHOLD is its own
+// constant: raising the IP budget for a busy NAT exit must not silently
+// loosen the per-cookie budget as well, and each layer stays tunable alone.
+
+const SESSION_BUCKET_MAX = 5;
+
+// Per-order pickup-password budget (index.php): wrong guesses at ONE token
+// from ANY number of addresses/sessions. Looser than the per-session bucket
+// so a recipient's typos never trip it; tight enough that a leaked link
+// leaves a weak password ~PICKUP_TOKEN_MAX guesses per window.
+const PICKUP_TOKEN_MAX = 10;
 
 function bucket_fail(string $scope = 'public'): void {
     $cur = $_SESSION['pw_fail'][$scope] ?? null;

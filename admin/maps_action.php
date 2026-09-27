@@ -24,8 +24,13 @@ switch ($action) {
     // Sizing (exact bytes) happens in the worker, not here: a dry-run pulls
     // megabytes and takes seconds-to-minutes, which no POST should wait for.
     // The row lands as queued; the worker sizes it, then either downloads or
-    // fails it with the reason (disk short, no proxy, …).
+    // fails it with the reason (disk short, no proxy, …). PHP-engine hosts
+    // have no worker to kick, so the POST finishes the zone inline instead
+    // (maps_php_inline is a no-op everywhere else).
     case 'add': {
+        if (!maps_downloads_supported()) {
+            json_out(['error' => t('admin.maps.flash.unsupported')], 422);
+        }
         $f = static fn(string $k): ?float => is_numeric($_POST[$k] ?? null)
             ? (float)$_POST[$k] : null;
         $minLon = $f('min_lon');
@@ -38,7 +43,7 @@ switch ($action) {
         $maxzoom = (int)($_POST['maxzoom'] ?? 14);
         $viaProxy = ($_POST['via_proxy'] ?? '1') === '1';
         [$id, $err] = maps_zone_add(
-            (string)($_POST['name'] ?? ''), $minLon, $minLat, $maxLon, $maxLat,
+            post_string('name'), $minLon, $minLat, $maxLon, $maxLat,
             $maxzoom, $viaProxy
         );
         if ($id === null) {
@@ -46,6 +51,8 @@ switch ($action) {
         }
         $kicked = maps_kick_worker();
         audit('maps_zone_queue', null, null, "id={$id}");
+        // No detached worker can exist on PHP-engine hosts: finish inline.
+        maps_php_inline($id);
         json_out(['ok' => true, 'id' => $id, 'kicked' => $kicked]);
     }
 
@@ -60,12 +67,16 @@ switch ($action) {
 
     // ── Re-queue a failed zone ──────────────────────────────────────────────
     case 'retry': {
+        if (!maps_downloads_supported()) {
+            json_out(['error' => t('admin.maps.flash.unsupported')], 422);
+        }
         $id = (int)($_POST['id'] ?? 0);
         if ($id <= 0 || !maps_zone_retry($id)) {
             json_out(['error' => t('admin.common.invalid_request')], 422);
         }
         $kicked = maps_kick_worker();
         audit('maps_zone_retry', null, null, "id={$id}");
+        maps_php_inline($id);
         json_out(['ok' => true, 'kicked' => $kicked]);
     }
 
@@ -73,17 +84,24 @@ switch ($action) {
     // Same reset as retry; the worker re-sizes against the fresh build and
     // republishes atomically, so the old file serves until the new one lands.
     case 'refresh': {
+        if (!maps_downloads_supported()) {
+            json_out(['error' => t('admin.maps.flash.unsupported')], 422);
+        }
         $id = (int)($_POST['id'] ?? 0);
         if ($id <= 0 || !maps_zone_refresh($id)) {
             json_out(['error' => t('admin.common.invalid_request')], 422);
         }
         $kicked = maps_kick_worker();
         audit('maps_zone_refresh', null, null, "id={$id}");
+        maps_php_inline($id);
         json_out(['ok' => true, 'kicked' => $kicked]);
     }
 
     // ── Live queue state for the progress poll ──────────────────────────────
     case 'status': {
+        // PHP-engine hosts donate a short slice per poll so the queue moves
+        // with no cron, no detach and no hanging POST (rows re-read below).
+        maps_php_poll_slice();
         $zones = [];
         foreach (maps_zone_list() as $z) {
             $zones[] = [

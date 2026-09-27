@@ -21,6 +21,17 @@ const MAP_PROVIDER_SELFHOSTED = 'selfhosted';
 const MAPLIBRE_VERSION = '5.13.0';
 const PMTILES_JS_VERSION = '4.5.0';
 
+// Zone colours: every zone gets one from this palette, by id — stable for as
+// long as the zone exists — on the OSM zone map and as the swatch in the zone
+// list, so the two can be matched at a glance. admin/style.css carries the
+// same colours as .mz-c0 … (AdminMobileTest pins the two together). Blue is
+// left out on purpose: it is the colour of the rectangle being drawn.
+const MAPS_ZONE_COLORS = ['#e6194b', '#2e9e44', '#f58231', '#911eb4', '#008b8b', '#d81b9a', '#9a6324', '#8a8f00'];
+
+function maps_zone_color_index(int $id): int {
+    return $id % count(MAPS_ZONE_COLORS);
+}
+
 // MapLibre renders vector tiles with WebGL workers built from Blob URLs,
 // which the default CSP (script-src 'self' + nonce, no worker-src) blocks.
 // Both CSP profiles therefore carry worker-src 'self' blob: (see auth.php).
@@ -105,6 +116,26 @@ function maps_zone_path(int $id, bool $part = false): string {
     $tok = maps_zone_ensure_token($id);
     $base = $tok === null ? 'zone_' . $id . '_missing' : maps_zone_file_base($id, $tok);
     return maps_tiles_dir() . '/' . $base . ($part ? '.part' : '.pmtiles');
+}
+
+// PHP-engine workspace next to the part/final files: the extract plan
+// (resolved tile offsets) and the fetched tile bytes. Same token scheme, so
+// the orphan sweep and the delete path treat them like the part file: kept
+// while the row claims the name, swept an hour after it stops being touched.
+/** @return array{string,string,string,string} [plan, tiles, part, final] */
+function maps_zone_workspace(int $id): array {
+    $tok = maps_zone_ensure_token($id);
+    $base = $tok === null ? 'zone_' . $id . '_missing' : maps_zone_file_base($id, $tok);
+    $dir = maps_tiles_dir();
+    return [$dir . '/' . $base . '.plan', $dir . '/' . $base . '.tiles',
+            $dir . '/' . $base . '.part', $dir . '/' . $base . '.pmtiles'];
+}
+
+/** Best-effort removal of a zone's PHP-engine sidecars (plan + tile bytes). */
+function maps_zone_drop_sidecars(int $id): void {
+    [$plan, $tiles] = maps_zone_workspace($id);
+    @unlink($plan);
+    @unlink($tiles);
 }
 
 // Ready-to-render zones: each ['id' => 'zone_<n>', 'file' => '<name>.pmtiles'].
@@ -719,6 +750,11 @@ function maps_cli_exec(array $args, ?array $env = null, ?callable $onChunk = nul
     if ($runner !== null) {
         return $runner($args, $env, $onChunk);
     }
+    // Hardened and shared hosts disable proc_open: fail as data (the engine
+    // router treats this as "CLI unavailable"), never as a fatal Error.
+    if (!function_exists('proc_open')) {
+        return [false, 'proc_open unavailable on this host'];
+    }
     $bin = maps_cli_bin();
     $cmd = escapeshellarg($bin);
     foreach ($args as $a) {
@@ -762,9 +798,6 @@ function maps_cli_bin(): string {
 
 /** @return array{bool,string} [ok, error] */
 function maps_ensure_cli(bool $viaProxy, ?string $proxy): array {
-    if (!function_exists('curl_init')) {
-        return [false, 'code:no_curl'];
-    }
     $bin = maps_cli_bin();
     // Pin first, execute second: an installed binary that is not the pinned
     // release is deleted BEFORE the version probe would run it, and the
@@ -857,8 +890,13 @@ function maps_ensure_cli(bool $viaProxy, ?string $proxy): array {
 
 // Stream a URL to disk with resume (Range) across calls. Proxy failures are
 // returned, never silently retried direct — the caller owns fail-closed.
+// cURL first when present; the shared proxy transport otherwise (same resume
+// semantics, every proxy scheme).
 /** @return array{bool,string} [ok, error] */
 function maps_fetch_file(string $url, string $dest, ?string $proxy): array {
+    if (!host_has_curl()) {
+        return maps_fetch_file_streams($url, $dest, $proxy);
+    }
     $ch = curl_init($url);
     if ($ch === false) {
         return [false, 'could not start download'];
@@ -879,19 +917,75 @@ function maps_fetch_file(string $url, string $dest, ?string $proxy): array {
         curl_setopt($ch, CURLOPT_RANGE, $have . '-');
     }
     if ($proxy !== null) {
-        curl_setopt($ch, CURLOPT_PROXY, $proxy);
+        curl_setopt($ch, CURLOPT_PROXY, proxy_curl_url($proxy));
     }
     $ok = curl_exec($ch);
     $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $err = curl_error($ch);
     unset($ch); // PHP 8.5 deprecates curl_close(); the handle frees on scope exit
     fclose($fh);
+    if ($ok && $code === 200 && $have > 0) {
+        // The server ignored Range: the full body was just APPENDED to the
+        // partial file, and that concatenation is corruption — never a
+        // success. Drop it so the next attempt restarts from zero (this is
+        // exactly what the streams branch does on 200-after-resume).
+        @unlink($dest);
+        return [false, 'server ignored resume; restarting from zero'];
+    }
     if ($ok && ($code === 200 || ($have > 0 && $code === 206))) {
         return [true, ''];
+    }
+    // A fresh (non-resume) attempt that failed must not leave its partial
+    // behind: error pages and truncated bodies would poison the next resume.
+    if ($have === 0) {
+        @unlink($dest);
     }
     return [false, $proxy !== null
         ? 'download failed through proxy (HTTP ' . $code . ($err !== '' ? ': ' . $err : '') . ')'
         : 'download failed (HTTP ' . $code . ($err !== '' ? ': ' . $err : '') . ')'];
+}
+
+// Curl-less download-to-disk: same contract as maps_fetch_file — resume via
+// Range, append on 206, restart from zero when the server answers a resume
+// with 200 (it ignored the Range), redirects followed. Bytes stream to disk
+// through a sink, so multi-megabyte binaries never sit in memory.
+/** @return array{bool,string} [ok, error] */
+function maps_fetch_file_streams(string $url, string $dest, ?string $proxy): array {
+    $have = is_file($dest) ? (int)filesize($dest) : 0;
+    $fh = null;
+    // @: an unwritable path warns — the code branch below owns the error.
+    $res = proxy_request_streams('GET', $url,
+        $have > 0 ? ['Range: bytes=' . $have . '-'] : [],
+        $proxy, 600, PHP_INT_MAX, 3,
+        static function (string $chunk) use (&$fh, $dest, $have): void {
+            if ($fh === null) {
+                $fh = @fopen($dest, $have > 0 ? 'ab' : 'wb');
+            }
+            if (is_resource($fh)) {
+                fwrite($fh, $chunk);
+            }
+        });
+    if (is_resource($fh)) {
+        fclose($fh);
+    }
+    $code = $res['code'];
+    if ($code === 206 && $have > 0 && $fh !== null) {
+        return [true, ''];
+    }
+    if ($code === 200 && $have === 0 && $fh !== null) {
+        return [true, ''];
+    }
+    if ($code === 200 && $have === 0 && $res['bytes'] === 0) {
+        return [true, '']; // empty file, honestly empty
+    }
+    if ($code === 200 && $have > 0) {
+        @unlink($dest); // the resume was ignored: partial tail deleted, start over
+        return maps_fetch_file_streams($url, $dest, $proxy);
+    }
+    @unlink($dest); // no partial or wrong-status body left behind (a 404 page is not a tool)
+    return [false, $proxy !== null
+        ? 'download failed through proxy (HTTP ' . $code . ')'
+        : 'download failed (HTTP ' . $code . ')'];
 }
 
 // Latest planet build key (e.g. 20260918), cached a day. Reuses osm_fetch so
@@ -967,6 +1061,12 @@ function maps_zone_add(string $name, float $minLon, float $minLat, float $maxLon
     if ($maxzoom !== 14 && $maxzoom !== 15) {
         return [null, 'code:bad_zoom'];
     }
+    // Continent-scale zones would OOM the plan builder (covering ids,
+    // entries, plan JSON) on small hosts — reject up front with the count.
+    $tiles = pmtiles_covering_count($minLon, $minLat, $maxLon, $maxLat, $maxzoom);
+    if ($tiles > PMTILES_COVERING_MAX) {
+        return [null, 'code:too_big|' . $tiles];
+    }
     if (maps_disk_free() < MAPS_HEADROOM_MIN) {
         return [null, 'code:disk_full_queue'];
     }
@@ -1015,8 +1115,12 @@ function maps_zone_exists(int $id): bool {
 // worker that has not written its row state yet.
 function maps_sweep_orphan_files(): int {
     $removed = 0;
+    // Fresh mtimes, not process memory: a steward that listed or statted the
+    // tiles earlier in its lifetime must decide on disk truth — a stale cache
+    // keeps orphans forever, or worse, deletes a live download as "aged".
+    clearstatcache();
     foreach (glob_list(maps_tiles_dir() . '/zone_*') as $f) {
-        if (!preg_match('/^zone_(\d+)(?:_([0-9a-f]{32}))?\.(pmtiles|part)$/', basename($f), $m)) {
+        if (!preg_match('/^zone_(\d+)(?:_([0-9a-f]{32}))?\.(pmtiles|part|plan|tiles)$/', basename($f), $m)) {
             continue;
         }
         if ((time() - (int)@filemtime($f)) < 3600) {
@@ -1045,6 +1149,7 @@ function maps_zone_delete(int $id): bool {
     // Resolve the file names while the row (and its token) still exists.
     $final = maps_zone_path($id);
     $part  = maps_zone_path($id, true);
+    [$plan, $tiles] = maps_zone_workspace($id);
     try {
         get_db()->prepare('DELETE FROM map_zones WHERE id = ?')->execute([$id]);
     } catch (Throwable $e) {
@@ -1053,6 +1158,8 @@ function maps_zone_delete(int $id): bool {
     }
     @unlink($final);
     @unlink($part);
+    @unlink($plan);
+    @unlink($tiles);
     audit('maps_zone_delete', null, null, "id={$id}");
     return true;
 }
@@ -1068,11 +1175,15 @@ function maps_zone_retry(int $id): bool {
              WHERE id = ? AND status = 'failed'"
         );
         $st->execute([$id]);
-        return $st->rowCount() === 1;
+        if ($st->rowCount() !== 1) {
+            return false;
+        }
     } catch (Throwable $e) {
         log_err('Zone retry: ' . $e->getMessage());
         return false;
     }
+    maps_zone_drop_sidecars($id); // a stale plan (older build) must not resume
+    return true;
 }
 
 // Freshness: a ready zone is stale once the cached planet build key moves
@@ -1106,16 +1217,22 @@ function maps_zone_refresh(int $id): bool {
              WHERE id = ? AND status IN ('ready', 'failed')"
         );
         $st->execute([$id]);
-        return $st->rowCount() === 1;
+        if ($st->rowCount() !== 1) {
+            return false;
+        }
     } catch (Throwable $e) {
         log_err('Zone refresh: ' . $e->getMessage());
         return false;
     }
+    maps_zone_drop_sidecars($id); // re-sizes against the fresh build
+    return true;
 }
 
 // Best pool proxy URL for a long download (same ok → new → dead ordering as
 // osm_fetch), or null when none is usable. Never falls back to direct here.
-function maps_pick_proxy(): ?string {
+// $forCli: the Go pmtiles CLI takes the proxy via HTTP(S)_PROXY, which has no
+// SOCKS4 support — such entries would only make the download fail.
+function maps_pick_proxy(bool $forCli = false): ?string {
     $pool = osm_proxy_pool();
     if (!$pool) {
         return null;
@@ -1133,9 +1250,13 @@ function maps_pick_proxy(): ?string {
         return ((int)($a['latency_ms'] ?? PHP_INT_MAX)) <=> ((int)($b['latency_ms'] ?? PHP_INT_MAX));
     });
     foreach ($pool as $px) {
-        if (($px['last_status'] ?? '') !== 'fail') {
-            return (string)$px['url'];
+        if (($px['last_status'] ?? '') === 'fail') {
+            continue;
         }
+        if ($forCli && str_starts_with((string)$px['url'], 'socks4')) {
+            continue;
+        }
+        return (string)$px['url'];
     }
     return null;
 }
@@ -1342,28 +1463,68 @@ function maps_steward_if_due(float $chance = 1.0): void {
 // php-fpm, so a detached `$PHP_BINARY script &` would die silently while the
 // admin is told the worker started. Fall back to the CLI next to the install.
 function maps_php_cli(): ?string {
-    $candidates = [];
-    // constant(): PHPStan knows PHP_BINARY only as a non-empty string, but
-    // under mod_php it really is '' — the case this guard exists for.
-    $running = (string)constant('PHP_BINARY');
-    if (PHP_SAPI === 'cli' && $running !== '') {
-        $candidates[] = $running;
+    return host_php_cli(); // probing lives in includes/host.php with the other capability checks
+}
+
+// Download engine. 'cli' runs the external pmtiles binary from a long-lived
+// worker (cron/maps_sync.php): that needs process execution and Linux (the
+// one-time CLI download rides either transport). 'php' is the pure-PHP
+// fallback in includes/pmtiles.php — planet range reads over PHP's own HTTP
+// transport, assembly on disk — which needs no exec, no cURL and no Linux,
+// only outbound HTTPS and a writable data directory. DDMGMT_MAPS_ENGINE
+// forces one (cli|php|off) for tests; 'off' refuses downloads everywhere.
+function maps_engine(): string {
+    $ov = getenv('DDMGMT_MAPS_ENGINE');
+    if ($ov === 'cli' || $ov === 'php' || $ov === 'off') {
+        return $ov;
     }
-    $candidates[] = PHP_BINDIR . '/php';
-    $candidates[] = '/usr/local/bin/php';
-    $candidates[] = '/usr/bin/php';
-    foreach ($candidates as $bin) {
-        if (is_file($bin) && is_executable($bin)) {
-            return $bin;
-        }
+    if (host_is_linux() && host_can_proc_open()) {
+        return 'cli';
     }
-    return null;
+    if (pmtiles_transport_ok()) {
+        return 'php';
+    }
+    return 'off';
+}
+
+// Zone downloads need a writable data directory and either engine. Free
+// shared hosting usually lacks the CLI triplet — the PHP engine covers it —
+// and the OSM map provider, the default, needs none of this at all.
+function maps_downloads_supported(): bool {
+    return host_dir_writable(maps_data_dir()) && maps_engine() !== 'off';
+}
+
+// Planet archive URL for a build key. DDMGMT_MAPS_PLANET_URL overrides for
+// tests (local stub server) — mirrors the DDMGMT_PMTILES_URL convention.
+function maps_planet_url(string $build): string {
+    $env = getenv('DDMGMT_MAPS_PLANET_URL');
+    if (is_string($env) && $env !== '') {
+        return $env;
+    }
+    return MAPS_PLANET_FILE_URL . $build . '.pmtiles';
+}
+
+/** One zone row by id, or null. @return ?array<string,mixed> */
+function maps_zone_get(int $id): ?array {
+    try {
+        $st = get_db()->prepare('SELECT * FROM map_zones WHERE id = ? LIMIT 1');
+        $st->execute([$id]);
+        $row = $st->fetch();
+        return is_array($row) ? $row : null;
+    } catch (Throwable) {
+        return null;
+    }
 }
 
 // Detached kick after queueing (Linux + exec only): the worker then runs
 // without holding any request. False = admin waits for system cron.
 function maps_kick_worker(): bool {
-    if (PHP_OS_FAMILY !== 'Linux' || !function_exists('exec')) {
+    // Internal switch, not admin UI: the e2e seed turns the detached kick
+    // off so browser specs own the queue — no worker may race them.
+    if (get_setting('maps_worker_kick', '1') !== '1') {
+        return false;
+    }
+    if (!host_can_detach()) {
         return false;
     }
     $cli = maps_php_cli();
@@ -1374,6 +1535,242 @@ function maps_kick_worker(): bool {
     $script = escapeshellarg(dirname(__DIR__) . '/cron/maps_sync.php');
     @exec($php . ' ' . $script . ' > /dev/null 2>&1 &');
     return true;
+}
+
+// Full pipeline for one zone on the PHP engine (no CLI): plan (resolve tile
+// offsets once) → resumable span fetching → assemble → structural verify →
+// atomic publish. Every state change hits the DB so the UI (and a killed
+// worker's successor) always sees the truth. $timeBox 0 runs to completion
+// (worker, inline queue request); >0 donates one resumable slice (status
+// poll) and returns 'more' while spans remain.
+// @return array{string,string} [done|more|failed, error]
+function maps_process_php(array $zone, int $timeBox): array {
+    $id = (int)$zone['id'];
+    $db = get_db();
+    $phase0 = microtime(true); // the budget covers sizing AND fetch, not just fetch
+    $mark = static function (string $status, array $extra = []) use ($db, $id): void {
+        $sets = 'status = ?';
+        $params = [$status];
+        foreach ($extra as $k => $v) {
+            $sets .= ", {$k} = ?";
+            $params[] = $v;
+        }
+        $params[] = $id;
+        try {
+            $db->prepare("UPDATE map_zones SET {$sets} WHERE id = ?")->execute($params);
+        } catch (Throwable) {
+        }
+    };
+
+    $viaProxy = ((int)($zone['via_proxy'] ?? 1)) === 1;
+    $proxy = $viaProxy ? maps_pick_proxy() : null;
+    if ($viaProxy && $proxy === null) {
+        $mark('failed', ['error' => 'code:proxy_empty']);
+        return ['failed', 'code:proxy_empty'];
+    }
+
+    [$build, $err] = maps_latest_build();
+    if ($build === null) {
+        $mark('failed', ['error' => substr($err, 0, 200)]);
+        return ['failed', $err];
+    }
+    $planet = maps_planet_url($build);
+    $bbox = [(float)$zone['min_lon'], (float)$zone['min_lat'], (float)$zone['max_lon'], (float)$zone['max_lat']];
+    $maxzoom = (int)$zone['maxzoom'];
+    [$planPath, $tilesPath, $partPath, $finalPath] = maps_zone_workspace($id);
+
+    // ── Sizing: resolve every tile offset once, exact bytes before kept ──
+    $plan = pmtiles_plan_load($planPath);
+    $fresh = is_array($plan)
+        && ($plan['url'] ?? null) === $planet
+        && ($plan['proxy'] ?? null) === $proxy
+        && ($plan['bbox'] ?? null) === $bbox
+        && ($plan['maxzoom'] ?? null) === $maxzoom;
+    if (!$fresh) {
+        $mark('sizing', ['build_key' => $build]);
+        // Bound each directory fetch to what remains of the budget: sizing
+        // must run to completion or not at all (no partial plan resumes),
+        // but one hung peer must not eat the whole PHP limit in one request.
+        $sizeTimeout = $timeBox > 0
+            ? max(5, min(60, (int)ceil($timeBox - (microtime(true) - $phase0))))
+            : 60;
+        [$plan, $perr] = pmtiles_build_plan($planet, $proxy, $bbox[0], $bbox[1], $bbox[2], $bbox[3], $maxzoom, $sizeTimeout);
+        if ($plan === null) {
+            $code = $perr === 'empty' ? 'code:sizing_empty' : 'code:sizing_failed|' . $perr;
+            $mark('failed', ['error' => substr($code, 0, 200)]);
+            return ['failed', $code];
+        }
+        $expected = (int)$plan['expected'];
+        if (!maps_disk_ok($expected)) {
+            $mark('failed', ['error' => 'code:disk_short|' . $expected]);
+            return ['failed', 'code:disk_short'];
+        }
+        if (!pmtiles_plan_save($planPath, $plan)) {
+            $mark('failed', ['error' => 'code:plan_failed']);
+            return ['failed', 'code:plan_failed'];
+        }
+        @unlink($tilesPath); // fresh plan, fresh bytes
+        $mark('downloading', ['bytes_expected' => $expected, 'bytes_done' => 0]);
+    }
+    // Normalize through the validator: sidecars are untrusted bytes even when
+    // this request built them (a concurrent retry rebuilds mid-flight).
+    $plan = pmtiles_plan_validate($plan);
+    if ($plan === null) {
+        $mark('failed', ['error' => 'code:plan_failed']);
+        return ['failed', 'code:plan_failed'];
+    }
+    $expected = (int)$plan['expected'];
+
+    // Sizing may have spent the whole budget (many leaf fetches through a
+    // slow proxy): yield with the plan on disk instead of dying mid-fetch.
+    // The next slice reloads the fresh plan above and continues fetching.
+    if ($timeBox > 0 && (microtime(true) - $phase0) >= $timeBox) {
+        return ['more', ''];
+    }
+
+    // ── Fetch: time-boxed resumable spans stream into the row ──
+    $t0 = microtime(true);
+    $lastRow = 0.0;
+    $progress = static function (int $fetched, int $total) use ($db, $id, $t0, &$lastRow): void {
+        if ($fetched < $total && (microtime(true) - $lastRow) < 2.0) {
+            return;
+        }
+        $lastRow = microtime(true);
+        $el = max($lastRow - $t0, 0.001);
+        $sp = (int)($fetched / $el);
+        $eta = $sp > 0 ? (int)(($total - $fetched) / $sp) : null;
+        try {
+            $db->prepare(
+                'UPDATE map_zones SET bytes_done = ?, speed_bps = ?, eta_secs = ? WHERE id = ?'
+            )->execute([$fetched, $sp, $eta, $id]);
+        } catch (Throwable) {
+        }
+    };
+    // Fetch gets what sizing left of the budget — fetch_due measures its own
+    // box from here, and sizing time would otherwise be double-spent.
+    $fetchBox = $timeBox > 0 ? max(1, $timeBox - (microtime(true) - $phase0)) : 0;
+    [$st, $serr] = pmtiles_fetch_due($plan, $tilesPath, $fetchBox, $progress);
+    if ($st === 'failed') {
+        $mark('failed', ['error' => 'code:download_failed|' . substr($serr, 0, 160)]);
+        return ['failed', 'code:download_failed'];
+    }
+    if ($st === 'more') {
+        return ['more', '']; // progress is in the row; the next slice resumes
+    }
+
+    // Deleted while it downloaded: nothing may publish for a row that is gone.
+    if (!maps_zone_exists($id)) {
+        @unlink($tilesPath);
+        @unlink($planPath);
+        return ['failed', 'code:deleted'];
+    }
+
+    // ── Assemble + verify + publish atomically ──
+    if (pmtiles_assemble($plan, $tilesPath, $partPath) === null
+        || !pmtiles_verify_path($partPath)
+    ) {
+        @unlink($partPath);
+        $mark('failed', ['error' => 'code:verify_failed']);
+        return ['failed', 'code:verify_failed'];
+    }
+    if (!@rename($partPath, $finalPath)) {
+        $mark('failed', ['error' => 'code:publish_failed']);
+        @unlink($partPath);
+        return ['failed', 'code:publish_failed'];
+    }
+    if (!maps_zone_exists($id)) { // deleted during verify/publish
+        @unlink($finalPath);
+        return ['failed', 'code:deleted'];
+    }
+    @unlink($tilesPath);
+    @unlink($planPath);
+    $mark('ready', [
+        'bytes_done' => filesize($finalPath),
+        'speed_bps' => null, 'eta_secs' => null, 'error' => null,
+    ]);
+    audit('maps_zone_ready', null, null, "id={$id} bytes=" . filesize($finalPath));
+    return ['done', ''];
+}
+
+// Status-poll advancement (PHP engine only): while the admin watches the
+// queue, each poll donates a short slice to the oldest active zone, so
+// downloads complete with no cron, no detach and no hanging POST. The DB
+// lock keeps concurrent polls/workers to one processor; kick=0 (e2e owns the
+// queue) disables it like every other automatic processing.
+function maps_php_poll_slice(): void {
+    if (maps_engine() !== 'php') {
+        return;
+    }
+    if (get_setting('maps_worker_kick', '1') !== '1') {
+        return;
+    }
+    try {
+        $rows = get_db()->query(
+            "SELECT * FROM map_zones WHERE status IN ('queued','sizing','downloading') ORDER BY id ASC LIMIT 1"
+        )->fetchAll();
+    } catch (Throwable) {
+        return;
+    }
+    if ($rows === []) {
+        return;
+    }
+    [$locked] = maps_worker_lock();
+    if (!$locked) {
+        return;
+    }
+    maps_worker_touch();
+    try {
+        maps_process_php($rows[0], 8);
+    } catch (Throwable $e) {
+        log_err('Maps poll slice: ' . $e->getMessage());
+    }
+    maps_worker_unlock();
+}
+
+// Wall-clock budget for the queue POST's inline completion: the PHP time
+// limit kills the request uncatchably mid-download, so stop early with
+// progress in the row (poll slices continue it) instead of running to
+// completion. Capped at 25 s even on generous hosts — a queue POST should
+// stay snappy. 0 (no limit: CLI, unlimited hosts) keeps old behavior.
+// Test seam: ini_get is read live so suites can pin max_execution_time.
+function maps_inline_budget(): int {
+    $limit = (int)@ini_get('max_execution_time');
+    if ($limit <= 0) {
+        return 0;
+    }
+    return max(5, min(25, $limit - 5));
+}
+
+// Inline completion for the queue POSTs (PHP engine only): no detached
+// worker can exist on these hosts, so the request that queued the zone
+// finishes it instead of leaving it queued forever. Same kick=0 exemption
+// as the poll slice (the browser specs own the queue there).
+function maps_php_inline(int $id): void {
+    if (maps_engine() !== 'php') {
+        return;
+    }
+    if (get_setting('maps_worker_kick', '1') !== '1') {
+        return;
+    }
+    $row = maps_zone_get($id);
+    if ($row === null || ($row['status'] ?? '') !== 'queued') {
+        return;
+    }
+    [$locked] = maps_worker_lock();
+    if (!$locked) {
+        return;
+    }
+    maps_worker_touch();
+    try {
+        // Inside the try on purpose: where set_time_limit is disabled the
+        // call throws Error (@ cannot suppress it), and that must land in
+        // the catch below — not fatal out while the worker lock is held.
+        @set_time_limit(0);
+        maps_process_php($row, maps_inline_budget());
+    } catch (Throwable $e) {
+        log_err('Maps inline: ' . $e->getMessage());
+    }
+    maps_worker_unlock();
 }
 
 // Full pipeline for one zone. Every state change hits the DB so the UI (and
@@ -1397,10 +1794,16 @@ function maps_process_one(array $zone): array {
     };
 
     $viaProxy = ((int)($zone['via_proxy'] ?? 1)) === 1;
-    $proxy = $viaProxy ? maps_pick_proxy() : null;
+    $proxy = $viaProxy ? maps_pick_proxy(maps_engine() !== 'php') : null;
     if ($viaProxy && $proxy === null) {
         $mark('failed', ['error' => 'code:proxy_empty']);
         return [false, 'code:proxy_empty'];
+    }
+
+    // Engine without the CLI triplet runs the pure-PHP pipeline instead.
+    if (maps_engine() === 'php') {
+        [$st, $err] = maps_process_php($zone, 0);
+        return $st === 'done' ? [true, ''] : [false, $err];
     }
 
     [$ok, $err] = maps_ensure_cli($viaProxy, $proxy);
@@ -1414,7 +1817,7 @@ function maps_process_one(array $zone): array {
         $mark('failed', ['error' => substr($err, 0, 200)]);
         return [false, $err];
     }
-    $planet = MAPS_PLANET_FILE_URL . $build . '.pmtiles';
+    $planet = maps_planet_url($build);
     // File names carry the zone's secret token (see maps_zone_ensure_token):
     // resolved once, so a delete mid-run cannot redirect later steps.
     $partPath  = maps_zone_path($id, true);

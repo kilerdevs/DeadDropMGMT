@@ -74,7 +74,7 @@ reasonable window (90 days is customary) to publish a fix before any public disc
 |---|---|
 | `index.php`, `receive.php` | Public order lookup, unlock, reveal and delivery-confirmation flows |
 | `admin/*` | Authentication, session handling, CSRF, 2FA, authorization gaps between owner and courier roles, the `admin/dispatch.php` route envelope |
-| `includes/crypto.php` | Encryption, key separation, hashing, ≥64-bit passphrase generation |
+| `includes/crypto.php` | Encryption, key separation, hashing, the order-token index, ≥64-bit passphrase generation |
 | `includes/order_state.php` | The atomic order state machine (deliver / receive / delete / expiry) |
 | `includes/auth.php` | Rate limiting, security headers, session configuration |
 | `includes/logger.php` | The tamper-evident log chain — ways to forge or rewrite history without detection |

@@ -6,7 +6,7 @@ require_once __DIR__ . '/bootstrap.php';
 
 $db = get_db();
 $db->exec("DELETE FROM users WHERE username IN ('t_az_owner','t_az_courier')");
-$db->prepare("DELETE FROM orders WHERE order_token IN ('aztoken00000001','aztoken00000002')")->execute();
+purge_orders($db, ['aztoken00000001', 'aztoken00000002']);
 
 $hash = password_hash('x', PASSWORD_BCRYPT);
 $db->prepare("INSERT INTO users (username, password_hash, role) VALUES ('t_az_owner', ?, 'owner')")->execute([$hash]);
@@ -14,11 +14,11 @@ $ownerId = (int)$db->lastInsertId();
 $db->prepare("INSERT INTO users (username, password_hash, role) VALUES ('t_az_courier', ?, 'courier')")->execute([$hash]);
 $courierId = (int)$db->lastInsertId();
 
-$ins = $db->prepare('INSERT INTO orders (created_by, order_token, pickup_password_hash, location_encrypted, location_iv, status)
-                     VALUES (?, ?, "x", "e", "00", "preparing")');
-$ins->execute([$courierId, 'aztoken00000001']);
+$ins = $db->prepare('INSERT INTO orders (created_by, token_hmac, token_enc, token_iv, pickup_password_hash, location_encrypted, location_iv, status)
+                     VALUES (?, ?, ?, ?, "x", "e", "00", "preparing")');
+$ins->execute([$courierId, ...tk('aztoken00000001')]);
 $ownOrder   = (int)$db->lastInsertId();
-$ins->execute([null, 'aztoken00000002']);
+$ins->execute([null, ...tk('aztoken00000002')]);
 $orphanOrder = (int)$db->lastInsertId();
 
 // Owner: full access to every order

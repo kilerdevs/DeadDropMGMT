@@ -87,9 +87,14 @@ T::eq('proxy headers ignored without DDMGMT_TRUST_PROXY', $ip, get_client_ip());
 putenv('DDMGMT_TRUST_PROXY=1');
 T::eq('public peer: headers ignored despite trust flag', $ip, get_client_ip());
 putenv('DDMGMT_TRUSTED_PROXIES=' . $ip);
-T::eq('explicitly listed peer: CF header wins', '203.0.113.1', get_client_ip());
+T::eq('listed peer: default header is XFF, a client-sent CF header is ignored', '203.0.113.2', get_client_ip());
+putenv('DDMGMT_CLIENT_IP_HEADER=CF-Connecting-IP');
+T::eq('CF header only when configured', '203.0.113.1', get_client_ip());
+putenv('DDMGMT_CLIENT_IP_HEADER=X-Bogus');
+T::eq('unknown configured header falls back to peer', $ip, get_client_ip());
+putenv('DDMGMT_CLIENT_IP_HEADER');
 unset($_SERVER['HTTP_CF_CONNECTING_IP']);
-T::eq('XFF first entry wins next', '203.0.113.2', get_client_ip());
+T::eq('XFF honored', '203.0.113.2', get_client_ip());
 putenv('DDMGMT_TRUSTED_PROXIES');
 T::eq('default list excludes public peer', $ip, get_client_ip());
 unset($_SERVER['HTTP_X_FORWARDED_FOR']);
@@ -101,20 +106,23 @@ unset($_SERVER['HTTP_X_FORWARDED_FOR']);
 T::eq('REMOTE_ADDR fallback', '127.0.0.1', get_client_ip());
 $_SERVER['REMOTE_ADDR'] = '192.168.55.3';
 $_SERVER['HTTP_X_REAL_IP'] = '198.51.100.9';
-T::eq('RFC1918 peer: X-Real-IP honored', '198.51.100.9', get_client_ip());
+T::eq('X-Real-IP ignored unless configured', '192.168.55.3', get_client_ip());
+putenv('DDMGMT_CLIENT_IP_HEADER=X-Real-IP');
+T::eq('RFC1918 peer: configured X-Real-IP honored', '198.51.100.9', get_client_ip());
+putenv('DDMGMT_CLIENT_IP_HEADER');
 unset($_SERVER['HTTP_X_REAL_IP']);
 $_SERVER['REMOTE_ADDR'] = '::1';
-$_SERVER['HTTP_CF_CONNECTING_IP'] = 'not-an-ip';
+$_SERVER['HTTP_X_FORWARDED_FOR'] = 'not-an-ip';
 T::eq('invalid header skipped, v6 loopback used', '::1', get_client_ip());
-$_SERVER['HTTP_CF_CONNECTING_IP'] = '2001:db8::7';
+$_SERVER['HTTP_X_FORWARDED_FOR'] = '2001:db8::7';
 T::eq('v6 loopback peer: header honored', '2001:db8::7', get_client_ip());
-unset($_SERVER['HTTP_CF_CONNECTING_IP']);
+unset($_SERVER['HTTP_X_FORWARDED_FOR']);
 
 // A malformed proxy entry must stay safe AND visible: it is skipped (the
 // peer falls back to REMOTE_ADDR) and warned about once per process.
 $_SERVER['REMOTE_ADDR'] = $ip;
 putenv('DDMGMT_TRUSTED_PROXIES=10.0.0.0/abc, ' . $ip);
-$_SERVER['HTTP_CF_CONNECTING_IP'] = '203.0.113.1';
+$_SERVER['HTTP_X_FORWARDED_FOR'] = '203.0.113.1';
 T::eq('bad CIDR skipped, listed peer still trusted', '203.0.113.1', get_client_ip());
 putenv('DDMGMT_TRUSTED_PROXIES=10.0.0.0/abc,,');
 T::eq('all-bad list with empty entry falls back to peer', $ip, get_client_ip());
@@ -124,11 +132,22 @@ putenv('DDMGMT_TRUSTED_PROXIES');
 // earlier entries are client-controlled under an appending proxy, so the
 // old first-entry rule let a spoofed IP bypass per-IP rate limiting.
 $_SERVER['REMOTE_ADDR'] = '127.0.0.1';
-unset($_SERVER['HTTP_CF_CONNECTING_IP']);
 $_SERVER['HTTP_X_FORWARDED_FOR'] = '203.0.113.2, 70.41.3.18';
 T::eq('multihop XFF uses peer-appended last hop', '70.41.3.18', get_client_ip());
 unset($_SERVER['HTTP_X_FORWARDED_FOR']);
 putenv('DDMGMT_TRUST_PROXY');
+
+// Budget subject: IPv6 clients count per /64 (one subscriber holds a whole
+// /64); IPv4 and v4-mapped addresses stay exact.
+$_SERVER['REMOTE_ADDR'] = '2001:db8:1:2:aaaa:bbbb:cccc:dddd';
+T::eq('IPv6 subject is the /64', '2001:db8:1:2::/64', rl_client_subject());
+$_SERVER['REMOTE_ADDR'] = '2001:db8:1:2::9';
+T::eq('same /64, same budget', '2001:db8:1:2::/64', rl_client_subject());
+$_SERVER['REMOTE_ADDR'] = '::ffff:198.51.100.4';
+T::eq('v4-mapped stays exact', '::ffff:198.51.100.4', rl_client_subject());
+$_SERVER['REMOTE_ADDR'] = '198.51.100.4';
+T::eq('IPv4 stays exact', '198.51.100.4', rl_client_subject());
+$_SERVER['REMOTE_ADDR'] = $ip;
 
 // CIDR syntax gate backing the trusted-proxy decision
 T::ok('cidr-valid: bare v4', _cidr_valid('10.0.0.1'));

@@ -74,7 +74,9 @@
         btn.addEventListener('click', function () {
             var token = btn.dataset.token || '';
             var code  = btn.dataset.code  || i18n.copy_no_password || '(none)';
-            var url   = window.location.protocol + '//' + window.location.host + '/?token=' + token;
+            // Token in the FRAGMENT: browsers never send it to the server, so
+            // it cannot land in web-server access logs (a ?query would).
+            var url   = window.location.protocol + '//' + window.location.host + '/#token=' + token;
             var text  = (i18n.copy_link_label || 'Delivery link: ') + url + '\n' + (i18n.copy_password_label || 'Pickup password: ') + code + '\n\n' + (i18n.copy_warning || '');
 
             function showOk() {
@@ -92,7 +94,9 @@
             function fallback() {
                 var el = document.createElement('textarea');
                 el.value = text;
-                el.style.cssText = 'position:fixed;opacity:0;top:0;left:0;';
+                // Stylesheet class, not el.style: style-src has no
+                // 'unsafe-inline', so inline style writes are blocked.
+                el.className = 'copy-scratch';
                 document.body.appendChild(el);
                 el.focus();
                 el.select();
@@ -122,12 +126,14 @@
         _stBtn.addEventListener('click', function () {
             _stSidebar.classList.add('sidebar-open');
             _stBackdrop.classList.add('sidebar-open');
-            _stBtn.style.display = 'none';
+            // The [hidden] rule beats the mobile display rule, and unlike
+            // _stBtn.style it is not blocked by style-src.
+            _stBtn.hidden = true;
         });
         _stBackdrop.addEventListener('click', function () {
             _stSidebar.classList.remove('sidebar-open');
             _stBackdrop.classList.remove('sidebar-open');
-            _stBtn.style.display = '';
+            _stBtn.hidden = false;
         });
     }
 })();

@@ -1,0 +1,15 @@
+sequenceDiagram
+    autonumber
+    actor C as Owner / Courier
+    participant A as App + database
+    actor R as Recipient
+
+    C->>A: Create order<br/>(pin, photos)
+    Note over A: Location encrypted,<br/>passphrase hashed
+    A-->>C: Passphrase shown once
+    C->>A: Mark delivered<br/>(TTL starts)
+    R->>A: Look up by token
+    R->>A: Unlock with passphrase<br/>(CSRF + rate limits)
+    A-->>R: Reveal map and photos<br/>(decrypted server-side)
+    R->>A: Confirm receipt
+    Note over A: Order, photos and<br/>events deleted

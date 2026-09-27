@@ -9,6 +9,355 @@ All notable changes to DeadDropMGMT are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-09-27
+
+### Added
+- **One-file web installer** (`tools/install.php`): shell-less shared-hosting
+  setup in a single upload. Open the file in a browser and a four-step wizard
+  (server check → release download → database + site setup → finish) takes it
+  from there: it fetches the release itself (resumable, verified) over a
+  direct connection — no proxy support by design; hosts that cannot reach
+  GitHub get a manual-upload button instead — writes `config.php` with a
+  fresh random AES key, creates the storage dirs and imports the schema
+  without the privileged statements (the database itself is still created in
+  the hosting panel), then deletes itself. Degrades gracefully where hosts
+  are crippled: streams/sockets transports where cURL is missing,
+  manual upload-and-extract where ZipArchive is missing. Covered by
+  `InstallerTest` (offline end-to-end, including proof the removed proxy
+  actions stay removed) and `InstallerLimitedEnvTest` (crippled `php.ini`:
+  no curl, no exec, no zip).
+- **Minified installer bundle** (`tools/install.min.php`): the upload build
+  of the installer (~3/4 the size), generated — never hand-edited — by
+  `php tools/build_installer_min.php` (token-based PHP minify, safe CSS/JS
+  passes with fail-closed tripwires for constructs the minifier does not
+  understand). A CI job rebuilds and commits it after every push (`[skip ci]`,
+  no loop); `InstallerMinTest` keeps branches honest with a freshness gate
+  plus a behavioral smoke of the minified code, including a socket-engine
+  pinned fetch.
+- **Setup check** (`admin/setup_check.php`): one page diagnosing every host
+  capability the app needs — PHP version, extensions, disabled functions,
+  database reachability, session time-zone, schema presence, table engines,
+  AES key, writable folders, session path, web server — with the fix next to
+  each failing row. While no owner exists it doubles as the installer: its
+  *Create / upgrade tables* button applies `setup.sql` without the privileged
+  `CREATE DATABASE` / `USE` lines (behind CSRF plus the optional
+  `DDMGMT_SETUP_TOKEN`, the same claim model as the first-owner form), so
+  panel users without the `CREATE` privilege or with forced `user_xxx` names
+  can install without phpMyAdmin. Covered by `SetupCheckTest`.
+- Map zone downloads no longer need process execution, cURL or Linux: a
+  pure-PHP engine (PMTiles reader/writer over the server's own HTTP
+  transport) extracts zones wherever outbound HTTPS exists. The go-pmtiles
+  binary stays the engine where the full triplet is present; elsewhere the
+  queue POST finishes small zones inline and every progress poll donates a
+  resumable slice, so downloads complete with no cron, no detach and no
+  hanging request. `DDMGMT_MAPS_ENGINE` pins `cli`/`php`/`off` for tests.
+- The OSM proxy path no longer needs cURL either: direct, forward-proxy,
+  CONNECT and SOCKS4/4a/5(h) requests, redirect following, chunked bodies and
+  the multi-proxy prober all run on plain PHP streams, so routing, discovery,
+  healing and zone downloads stay up on hosts whose PHP lacks the curl
+  extension (fail-closed as before; pool probing just runs sequentially).
+  Covered by a new `ProxyTransportTest` (framing units, loopback CONNECT/SOCKS
+  stubs, live-TLS proofs through both tunnel types).
+- `ArrayInputTest`: a permanent guard for array-shaped input. Every entry
+  point is sent every parameter name the code reads as `name[]=x`, GET and
+  POST, as a logged-in owner, and the answer and the logs must stay clean —
+  the class of bug behind the old `htmlspecialchars(): Argument #1 must be of
+  type string, array given` error (fixed earlier via `post_string()` /
+  `get_string()`). It fails on the pre-fix `index.php`.
+- **Runs on free shared hosting** (no Docker, no cron, no exec, no CLI PHP, no
+  way to set environment variables). A new capability layer
+  (`includes/host.php`) is consulted by everything that used to assume them:
+  the proxy pool upkeep runs **inline after the response** in a time-budgeted
+  pass when no detached job can be started; discovery fetches its lists and the
+  public-IP probe through the built-in socket engine, so neither cURL nor
+  `allow_url_fopen` is required; a host that can never find a working proxy
+  has routing **switched off automatically after three empty discoveries**
+  (audit + warning + Settings notice) instead of staying wedged fail-closed;
+  without cURL routing still applies and OSM requests still go through the
+  pool — only pool probing runs sequentially; map-zone **downloads** (which
+  genuinely need `proc_open` and Linux for the CLI fast path, and otherwise
+  ride the pure-PHP engine) are refused up front with a clear message
+  and a disabled Queue button. `DDMGMT_PSEUDO_CRON` / `DDMGMT_PROXY_HEAL` can be
+  `define()`d in `config.php`. **Settings → Hosting** lists what the host
+  allows and what each gap costs. A non-Docker install gets its version line
+  from `tools/build_info.sh --write` (`build-info.json`, web-denied). New README
+  section "Free shared hosting" and a troubleshooting entry.
+- Failed proxies are replaced automatically. While OSM proxy routing is
+  enabled, a discovered pool entry that fails is confirmed dead with a fresh
+  probe, deleted and swapped for a newly discovered proxy chosen by exactly the
+  Auto-discover criteria. Runs as a detached CLI job (`cron/proxy_heal.php`,
+  also invoked by the cleanup cron) under a lock and a 10-minute cooldown,
+  never inside a request. Nothing is deleted until a replacement exists (an
+  outage cannot wipe the pool, which never shrinks), recovered proxies are
+  kept, `manual` entries are never removed, each swap is audited
+  (`proxy_replace`). It reuses discovery, so it makes the same outbound
+  connections as the Auto-discover button — see the README privacy table.
+- Settings shows the running version to owners: `vX.Y.Z` for a tagged release,
+  or `vX.Y.Z+N` with a **BETA** badge and a one-line `hash · branch` for
+  builds past the last release tag (builds from `dev`); commit messages are
+  never recorded. The build host records
+  it with `tools/build_info.sh --export` (the image has no `.git`); a plain
+  build shows "unknown build". Not exposed on any public or unauthenticated
+  page.
+
+### Changed
+- **Breaking — client IP header.** With `DDMGMT_TRUST_PROXY=1` exactly one
+  header is read: `DDMGMT_CLIENT_IP_HEADER` (default `X-Forwarded-For`, last
+  hop). `CF-Connecting-IP` / `X-Real-IP` were tried first and could be forged
+  through a proxy that does not set them; behind Cloudflare set
+  `DDMGMT_CLIENT_IP_HEADER=CF-Connecting-IP`.
+- **OSM proxy routing is off by default** for new installs (opt-in: it
+  downloads public proxy lists and probes hundreds of unknown hosts).
+  Existing installs keep their stored setting.
+- Settings → Maps: **every zone has its own colour**, on the OSM zone map and
+  as a swatch in the zone list, so a rectangle can be matched to its row at a
+  glance (stable per zone; eight-colour palette, blue left for the rectangle
+  being drawn). Ready zones are drawn solid; zones still queued, sizing,
+  downloading or failed are dashed and lighter, with a hollow swatch, and the
+  status text is coloured too (ready green, in progress amber, failed red).
+- The OSM proxy status is a small caption **directly under the map** it
+  describes (order pickers and the zone editor) instead of a fixed overlay at
+  the top: it no longer covers page content, and a failover shows the skipped
+  proxies on a second, muted, capped line.
+- **OSM proxy routing is on by default** (new installs; existing installs keep
+  their setting) and the pool is **discovered automatically on the first run**:
+  an empty pool fails closed, so the same background job that replaces failed
+  proxies seeds a first pool with exactly what the Auto-discover button would
+  store (`proxy_seed` in the audit log) — started at container boot, by the
+  first page visit or by the first OSM request. Until it finishes, OSM-backed
+  maps answer 502 instead of leaking the server address. This makes the same
+  outbound connections as the button, so it is opt-out: routing off in
+  Settings, or `DDMGMT_PROXY_HEAL=0`.
+- The pseudo-cron now runs from **any PHP page** (public, admin, receipt, JSON
+  polls), not just the public index, and after the response has been sent, so
+  an install used only through `/admin/` still gets its hourly maintenance and
+  no visitor waits for a sweep. `healthz.php` stays code-free;
+  `DDMGMT_PSEUDO_CRON=0` turns it off for installs with real cron.
+- **Upgrade step required for existing installs:** after loading the new
+  `setup.sql`, run `php tools/migrate_order_tokens.php` (dry-run first, back
+  up the database — it drops the plaintext token columns). Until it has run,
+  orders created before the upgrade cannot be found; new orders work. The
+  hourly cleanup logs a `legacy_order_tokens` warning while any remain.
+  Details in the README and the troubleshooting guide.
+- The per-session failure bucket on the public unlock form now has its own
+  fixed threshold (5 failures per window) instead of borrowing the IP
+  limiter's attempt count, so retuning the IP budget (for example raising it
+  for a busy NAT exit) no longer moves the per-cookie budget; the bucket
+  still follows the limiter's window.
+- `X-Forwarded-Proto` multi-hop lists now use the last entry, the same rule
+  `X-Forwarded-For` already followed. A warning is logged when a list is seen.
+- Documentation: the requirement to serve the app from the root of its own
+  host (no sub-path) is documented, and the README, troubleshooting guide and
+  ADR-006/016/019 describe the changes above.
+
+### Fixed
+- **Owner self-service needs the current password.** Changing one's own
+  password or removing one's own 2FA from Users now re-proves the current
+  password (budgeted), so a hijacked owner session cannot strip 2FA.
+- **The "IP-based attempt limiting" switch only covers public budgets.**
+  Login, 2FA, account, per-order pickup and resource budgets stay on.
+- **Setup check no longer goes public when the database is down.** Strangers
+  get one generic row unless "no owner yet" is positively established; the
+  raw PDO error goes to the error log.
+- **Locations are bound to their order** (AES-GCM associated data =
+  token index, `b1:` values): a location copied onto another order's row no
+  longer opens. Existing rows re-bind on save or via
+  `tools/bind_locations.php`; a display token copy is checked against its
+  row's index.
+- **Delivery links carry the token in the URL fragment** (`/#token=…`), so it
+  never reaches access logs; the Docker Apache/nginx logs record paths
+  without query strings, and the post-delete "received" event is anonymous.
+- **Public session ID is regenerated on unlock**, and over HTTPS the cookie
+  is `__Host-ddmgmt` (no planting from sibling subdomains).
+- **Key rotation tool**: keys via `--keys-from-stdin` (arguments warn), all
+  order/user rows locked for the run, locations re-bound to the new index,
+  and legacy CBC / raw-master / recoverable-password rows are refused instead
+  of silently upgraded.
+- **Token entropy claim corrected**: case-insensitive lookups make it ≈82.7
+  bits, not 95.3.
+- **Network hardening**: chunked responses with absurd sizes or endless size
+  lines fail closed (app and installer); PMTiles root/inflated-directory/
+  entry-count/tile-length caps; per-account geocode budget, reverse lookups
+  rounded to ~1 km; SOCKS proxies resolve DNS remotely under cURL
+  (`socks5h`/`socks4a`), and the Go CLI is never handed a SOCKS4 proxy.
+- **Order editor**: the rotated CSRF token reaches every form after a failed
+  autosave; a save that matched no row (order delivered/picked up/deleted
+  meanwhile) says so instead of "saved"; a photo whose row cannot be written
+  is deleted instead of orphaned.
+- **Order creation is atomic** (order + photos in one transaction, files of a
+  rolled-back order removed, `Throwable` caught), and a junk `lat=` no longer
+  bypasses the location-required check.
+- **error.log is bounded**: Settings reads only its tail, the hourly cleanup
+  trims it past 5 MiB.
+- **Mutation probe works on a throwaway copy** — weakened guards never touch
+  the checkout, even when a run is interrupted.
+- **Server config parity**: Caddy denies dotfiles and nested
+  `uploads/**/*.php`; nginx/Caddy send `nosniff` on static files and
+  `Referrer-Policy` on uploads.
+- **Setup check warns about the published default DB password.**
+- **Base and service images pinned by digest** (Dependabot now also covers
+  the compose files); nginx moved off the end-of-life 1.27 line.
+- **Installer**: the database host is validated (no DSN injection) and
+  `config.php` is written `0640`.
+- **CVE-2026-85061 (MapLibre GL ≤ 6.4.0, DOM.sanitize bypass) mitigated**:
+  MapLibre's attribution control (the sanitizer path) is disabled on both
+  maps; the credit is rendered as plain text. Upgrading needs the ESM-only
+  6.x line, tracked separately.
+- **CVE-2025-69993 (Leaflet ≤ 1.9.4 tooltip HTML)**: zone names are passed to
+  `bindTooltip` as text nodes.
+- **Login / 2FA limits could be raced.** The attempt was counted only after
+  the bcrypt check, so parallel sessions all passed the same count. Both
+  steps now spend atomically first and refund on success.
+- **Per-account login budget bypass.** Collation-equal spellings (`ówner`,
+  full-width, zero-width joiners) matched the account but hashed to fresh
+  budgets; login now refuses names outside the account charset.
+- **Pickup passwords: per-order budget.** 10 wrong passwords per window per
+  token from any address (a leaked link plus rotating IPs buys no more), and
+  IPv6 clients are counted per /64 in every IP budget.
+- **Proxy credentials leaked to couriers** through the OSM status caption
+  (`via` / `skipped`) and into the audit log; both are redacted to
+  `scheme://host:port`.
+- **Proxy discovery probed internal hosts.** Third-party list entries naming
+  loopback, RFC1918, link-local or reserved addresses are discarded.
+- **Tile-cache timing leak between accounts.** Street-level tiles (z13+) are
+  cached per account, so a courier can no longer probe which areas others
+  viewed.
+- **Zone engine sidecars were downloadable** (`.plan` carries the proxy URL):
+  `.plan` / `.tiles` / `.tmp` are denied in `tiles/` on Apache, nginx, Caddy.
+- **Log integrity**: the Settings check now reports truncation against the
+  DB checkpoint (it computed but never showed it); the rotated `app.log.1`
+  is verified too, and a new generation links to the rotated tip — deleting
+  or editing the rotated file, or faking a rotation, now fails verification.
+- **Editing an undecryptable order destroyed its location**: autosave
+  re-encrypted the "[decryption error]" placeholder over recoverable
+  ciphertext. Such orders are now read-only with an explanation.
+- **Order edit page: nested forms.** The extend-expiry forms sat inside the
+  edit form, so "+Nh" submitted the edit form and Save was orphaned; they now
+  join their own forms via `form=`. The Copy button no longer submits.
+- **Order notes stored in plaintext.** Notes now ride in the encrypted
+  location blob (legacy rows move on their next save); the README no longer
+  implies photos are encrypted on disk.
+- **Panic wipe** also destroys `backups/` dumps; the overwrite helper
+  `fsync`s before unlinking (new `config.php` files; existing ones keep theirs).
+- **nginx / Caddy stacks never received new code** (Docker seeds a named
+  volume once): the FPM entrypoint refreshes the code on every start, keeping
+  runtime data; the web container now mounts the photo volume (photos 404ed).
+- **Docker images**: the docroot is root-owned (was `www-data`); build-host
+  `backups/` and `auto-update.*` are no longer baked into images.
+- **Security — web installer stayed live after install (critical).** It has
+  no login, and every action (upload/extract a zip, rewrite `config.php`,
+  fetch any URL) kept answering once the app was installed — remote code
+  execution and takeover for anyone who found the file. Now it locks as soon
+  as `config.php` exists: only the read-only check/tree probes and
+  self-removal answer; upgrades need an `INSTALL_UNLOCK` file created by the
+  owner beside the installer (consumed after the extract); setup never
+  overwrites an existing `config.php`; the source copy under an installed
+  app's `tools/` refuses to run; `file://` version lists are CLI-only.
+- **Installer upgrade deleted user data.** Extract replaced every top-level
+  folder, so an "upgrade mode" run wiped `uploads/`, `tiles/`, `data/`,
+  `cache/`. Runtime folders (`uploads`, `tiles`, `data`, `cache`, `logs`,
+  `backups`) are now merged: the release's `.htaccess` lands, nothing is
+  removed.
+- **Private folders were public on Apache without mod_rewrite.** Every
+  directory rule lived inside `<IfModule mod_rewrite.c>`, so such hosts
+  served `logs/` (session IDs in `error.log`), `tools/` (the installer) and
+  `backups/`. They now carry their own `Require all denied`; sensitive root
+  files are denied by a `FilesMatch` outside the rewrite block; dotfiles
+  (`.git/`, `.env`) 404. Setup check names any missing per-folder deny file
+  instead of reporting "ok" for a bare root `.htaccess`.
+- Restricted shared hosting no longer takes the app down or wedges the queue:
+  a denied `SET time_zone` degrades to the server-default zone instead of 503
+  on every page; `set_time_limit()` moved inside the worker try (a disabled
+  call used to fatal while holding the lock) and guarded in `cron/maps_sync`;
+  `proc_open()` is guarded so a disabled spawner fails as data, not an `Error`;
+  the cURL downloader no longer accepts a `200`-after-resume as success (it
+  appended the full body onto the partial file and looped on hash mismatch);
+  the inline queue worker and every span/sizing request run inside a budget
+  derived from `max_execution_time`, yielding `more` instead of dying mid-job;
+  zones covering over 250,000 tiles are refused up front (`code:too_big`)
+  instead of OOMing the plan builder; first-owner creation survives hosts
+  without the `LOCK` privilege (unique-username constraint still serializes
+  same-name races); sessions fall back to `cache/sessions` only where the
+  default path is actually unusable; ignored session `ini_set()` hardening is
+  logged once per session; and non-Apache installs get a ready-made
+  `docs/nginx-deaddrop.conf` mirroring `.htaccess` exactly.
+- Map zone downloads no longer decide on stale file ages: the orphan sweep
+  reads mtimes from disk instead of the process stat cache, so a steward that
+  listed the tiles earlier cannot keep orphans forever — or mistake a live
+  download for an aged file.
+- The browser specs own the map queue deterministically again: the detached
+  worker kick honours a `maps_worker_kick` switch (off in the e2e seed), so a
+  refreshed zone cannot be failed by a worker racing the test — and
+  queue-dependent specs skip cleanly on hosts that cannot run downloads
+  (no Linux/exec/cURL) instead of timing out on the disabled button.
+- PhotoCapTest probes for a free loopback port like MapsFetchTest instead of
+  insisting on a fixed one, so a busy CI runner cannot fail the boot.
+- Settings → Maps: queueing a zone without a name (or with the name not
+  reaching the server) gave a toast naming a field that sits far above the
+  button and vanished in seconds. The name is now checked in the browser: the
+  field is scrolled into view, focused and marked, with the reason written next
+  to it until you type. Every Settings POST (autosave, proxy and zone actions,
+  the status poll) also goes through one queue that takes the rotated CSRF
+  token from each reply and retries once with the live token on a 403, so two
+  overlapping requests can no longer reject each other or restore a stale token.
+- Notifications (the toasts on Settings and the order editor) no longer run off
+  the screen: they wrap, are capped to the viewport width and height, and stay
+  up longer the longer the message is. The "queued" message was one 100+
+  character line that did not fit a phone.
+- Settings → log viewer: **Verify integrity** checks the structured,
+  hash-chained log, but the panel listed only PHP's raw error file — so "2
+  entries verified" sat under "The log is empty". The viewer now shows the
+  structured entries (newest 200, with time, level, event, message and context)
+  above the raw error log, with Verify and the structured-log download next to
+  them.
+- Admin panel on phones: the menu button was missing on **New order** when the
+  map provider is self-hosted (`admin.js` was only loaded on the Leaflet path,
+  which also skipped the live-CSRF refresh on that form); the OSM proxy badge
+  was always on screen because its `display:flex` overrode the `hidden`
+  attribute, and is now only rendered for OSM maps with proxy routing enabled
+  (and sits beside the menu button on narrow screens); **Settings** no longer
+  scrolls sideways — the proxy pool and map zones render as cards instead of a
+  580px-minimum table. `[hidden]` now always wins over component display rules.
+- Settings → Maps zone editor now works on touch screens: drawing, corner
+  resize and move use Pointer Events (finger drags never produced the mouse
+  events it relied on), draw mode stops the page scrolling under the finger and
+  the corner handles are fingertip-sized. Existing zone rectangles show their
+  name as a permanent label and follow the live status poll. The OSM proxy
+  badge now also appears on Settings while proxy routing is on (the editor's
+  tiles and searches already went through the server-side proxy path).
+- A crafted array-shaped field (`order_token[]=x`) with a valid CSRF token made
+  `index.php` throw an uncaught `TypeError` while re-rendering the form. The
+  public and admin pages now read form and query fields through
+  `post_string()` / `get_string()` everywhere, so such input is an ordinary
+  validation error.
+- `receive.php` parsed `step` with an `(int)` cast, so `step[]=x` or `1abc`
+  counted as step 1. Only the literal `1` and `2` are steps now.
+- The admin console no longer reports `style-src` CSP violations: the last
+  inline `style=""` attributes and every `element.style` write (copy-button
+  scratch element, mobile menu toggle, zone-label colours, editor touch and
+  cursor handling) are stylesheet classes now, so the fail-closed policy is
+  satisfiable on every page.
+- Settings is one aligned column again: the panel no longer sits 115px left
+  of the version line (a viewport-centering offset that applied to some
+  blocks but not others), the hosting list is the same width as the settings
+  panel, and the version line is a single centered row. The admin stylesheet
+  link carries its mtime, so a deploy is visible without a hard refresh.
+
+### Security
+- Order tokens are no longer stored in the clear (ADR-019). Lookups go through
+  `orders.token_hmac`, an HMAC-SHA256 of the lower-cased token under its own
+  HKDF subkey; the admin panel reads an AES-GCM copy (`token_enc` /
+  `token_iv`) under a second subkey. `order_events` and `audit_log` keep only
+  the index, so a database dump holds no usable token and cannot be used to
+  test candidate tokens offline. `tools/migrate_order_tokens.php` migrates
+  existing data, and `tools/rotate_aes_key.php` now re-encrypts and re-indexes
+  tokens (event and audit rows of already-deleted orders lose their index).
+  Token matching stays case-insensitive, as before.
+- Sensitive flash messages (generated pickup passwords, enrollment secrets)
+  are sealed under their own HKDF subkey (`deaddrop:flash-v1`) instead of the
+  TOTP subkey, completing the purpose separation of ADR-016. Sessions are
+  transient, so nothing needs migrating.
+
 ## [1.5.0] - 2026-09-18
 
 ### Added
@@ -795,7 +1144,8 @@ First tagged release: the security-hardened core, fully gated by CI.
 - Actions pinned by SHA, workflows read-only, Dependabot
   (actions + composer + docker)
 
-[Unreleased]: https://github.com/kilerdevs/DeadDropMGMT/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/kilerdevs/DeadDropMGMT/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/kilerdevs/DeadDropMGMT/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/kilerdevs/DeadDropMGMT/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/kilerdevs/DeadDropMGMT/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/kilerdevs/DeadDropMGMT/compare/v1.2.0...v1.3.0

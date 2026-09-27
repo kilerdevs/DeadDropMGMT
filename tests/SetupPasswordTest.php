@@ -98,8 +98,17 @@ if (!$up) { exit(T::done()); }
 $css = (string)@file_get_contents(dirname(__DIR__) . '/admin/style.css');
 T::ok('style.css defines .setup-explain', str_contains($css, '.setup-explain'));
 T::ok('style.css defines .notice', str_contains($css, '.notice'));
-T::ok('panels center on screen, not parent', str_contains($css, 'left: -115px')
-    && str_contains($css, '@media (min-width: 781px)'));
+T::ok('panels center in .main, no per-panel viewport offset hack', !str_contains($css, 'left: -115px')
+    && str_contains($css, 'margin-inline: auto'));
+// The settings column is viewport-centered (Windows-app behaviour) by ONE
+// shared rule: every centered block must be listed in it, or the column
+// breaks apart again.
+$needle = 'min(115px, max(0px, (100% - 600px) / 2))';
+T::ok('viewport-centering nudge exists', str_contains($css, $needle));
+$rule = substr($css, max(0, (int)strpos($css, $needle) - 500), 600);
+foreach (['.version-strip', '.settings-panel', '.host-section-label', '.host-list'] as $sel) {
+    T::ok("viewport-center rule covers $sel", str_contains($rule, $sel));
+}
 
 // Bootstrap needs an empty users table; rate_limits are wiped too so no
 // earlier suite's 127.0.0.1 budget can rate-limit this flow.

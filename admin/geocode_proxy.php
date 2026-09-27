@@ -6,13 +6,25 @@ require_admin();
 // Release the session lock during the proxy chain (see tile_proxy.php).
 session_write_close();
 
+// Every request reaches Nominatim from THIS server (or its pool): budget them
+// per account like tile misses, so no account can loop searches into the
+// 1 req/s usage-policy ban or tie up PHP workers for 20 s each.
+$budget = rl_hit('admin_geocode', 60, 60, 'u:' . current_user_id());
+if ($budget['blocked']) {
+    header('Retry-After: ' . max(1, (int)$budget['remaining']));
+    http_response_code(429);
+    exit;
+}
+
 // Reverse mode for pin labels: ?reverse=1&lat=..&lon=.. answers
 // {"country": .., "state": ..} ('' when Nominatim knows no name for the
 // half). The client shows the joined label and must never fall back to raw
 // coordinates — lat/lng stay out of owner-facing surfaces by policy.
 if (($_GET['reverse'] ?? '') === '1') {
-    $lat = is_numeric($_GET['lat'] ?? null) ? (float)$_GET['lat'] : null;
-    $lon = is_numeric($_GET['lon'] ?? null) ? (float)$_GET['lon'] : null;
+    // A "country, state" label needs ~1 km, not the pin's 1 cm: the exact
+    // drop coordinates never leave the server for a label.
+    $lat = is_numeric($_GET['lat'] ?? null) ? round((float)$_GET['lat'], 2) : null;
+    $lon = is_numeric($_GET['lon'] ?? null) ? round((float)$_GET['lon'], 2) : null;
     $addr = ($lat === null || $lon === null) ? null : osm_reverse_lookup($lat, $lon);
     if ($addr === null) {
         header('Content-Type: text/plain');
@@ -28,7 +40,7 @@ if (($_GET['reverse'] ?? '') === '1') {
     exit;
 }
 
-$q = trim((string)($_GET['q'] ?? ''));
+$q = trim(get_string('q'));
 if ($q === '' || strlen($q) > 200) {
     http_response_code(400);
     exit;
