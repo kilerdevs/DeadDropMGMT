@@ -471,7 +471,7 @@ function ix_sock_hop(string $url, array $proxy, string $method): array {
                 }
                 $buf .= $chunk;
             }
-            if ($sized && strlen($body) !== $want) { $close(); return ['error' => 'body length mismatch']; }
+            if (strlen($body) !== $want) { $close(); return ['error' => 'body length mismatch']; }
         }
         $close();
         return [$code, $fields, $body];
