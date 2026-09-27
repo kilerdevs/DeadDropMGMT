@@ -6,14 +6,41 @@
 declare(strict_types=1);
 
 const INST_VERSION = '1.0.0';
-const INST_REPO = 'kilerdevs/DeadDropMGMT';
 const INST_MASTER_ZIP = 'https://github.com/kilerdevs/DeadDropMGMT/archive/refs/heads/master.zip';
 const INST_TAGS_API = 'https://api.github.com/repos/kilerdevs/DeadDropMGMT/tags';
 const INST_TABLES = ['users','orders','order_photos','osm_proxies','map_zones','order_events','rate_limits','audit_log','settings','log_checkpoints'];
 const INST_DIRS = ['logs','cache','cache/osm_tiles','cache/sessions','tiles','data/maps','uploads'];
 
-@ini_set('display_errors', '0');
-@error_reporting(E_ALL & ~E_DEPRECATED);
+// Cheap hosts disableini_set/ini_get/disk_free_space via disable_functions —
+// and on PHP 8 calling one throws Error, which @ cannot suppress. So every
+// such call below goes through a function_exists-guarded wrapper; the check
+// step then reports "unknown" instead of white-screening.
+if (function_exists('ini_set')) { @ini_set('display_errors', '0'); }
+if (function_exists('error_reporting')) { @error_reporting(E_ALL & ~E_DEPRECATED); }
+function eini(string $k): string { return function_exists('ini_get') ? (string)@ini_get($k) : ''; }
+function edisk(string $p) { return function_exists('disk_free_space') ? @disk_free_space($p) : false; }
+function pver(string $e): string { return function_exists('phpversion') ? (string)@phpversion($e) : 'unknown'; }
+
+// String helpers are PHP 8+: polyfill so a PHP 7 host gets the readable
+// "needs PHP 8.2" row instead of a parse-error blank page. (No other 8.x-only
+// syntax is used in this file for the same reason.)
+if (!function_exists('str_contains')) {
+    function str_contains(string $h, string $n): bool { return $n === '' || strpos($h, $n) !== false; }
+}
+if (!function_exists('str_starts_with')) {
+    function str_starts_with(string $h, string $n): bool { return strncmp($h, $n, strlen($n)) === 0; }
+}
+// php.ini shorthand ("8M", "512K", "-1") → bytes; -1/empty = unlimited.
+function shorthand_bytes(string $v): int {
+    $v = trim($v);
+    if ($v === '' || $v === '-1') return PHP_INT_MAX;
+    $u = strtolower(substr($v, -1));
+    $n = (int)$v;
+    if ($u === 'g') $n *= 1073741824;
+    elseif ($u === 'm') $n *= 1048576;
+    elseif ($u === 'k') $n *= 1024;
+    return $n;
+}
 
 // ── tiny helpers ─────────────────────────────────────────────────────────────
 function jout(array $d): void {
@@ -137,15 +164,15 @@ function cap_checks(): array {
         : row('php', 'PHP ' . PHP_VERSION, 'fail', 'DeadDropMGMT needs PHP 8.2+. Ask the host to switch the PHP version for this domain.');
     foreach (['pdo_mysql' => 'fail', 'mbstring' => 'fail', 'openssl' => 'warn', 'zlib' => 'warn'] as $ext => $lvl) {
         $out[] = extension_loaded($ext)
-            ? row('ext_' . $ext, $ext . ' ' . (string)phpversion($ext), 'ok')
+            ? row('ext_' . $ext, $ext . ' ' . pver($ext), 'ok')
             : row('ext_' . $ext, $ext . ($lvl === 'fail' ? ' MISSING' : ' missing'), $lvl,
                 $lvl === 'fail' ? "Required. Enable $ext in the panel (Select PHP Version / extensions)."
                     : "Optional: without $ext some features degrade (updates need zlib).");
     }
     $hasCurl = function_exists('curl_init');
-    $out[] = $hasCurl ? row('ext_curl', 'curl ' . (string)phpversion('curl'), 'ok')
+    $out[] = $hasCurl ? row('ext_curl', 'curl ' . pver('curl'), 'ok')
         : row('ext_curl', 'curl missing', 'info', 'Optional. Without cURL: no SOCKS proxy, no HTTPS-via-proxy; direct downloads use streams.');
-    $fopen = filter_var((string)@ini_get('allow_url_fopen'), FILTER_VALIDATE_BOOLEAN);
+    $fopen = filter_var(eini('allow_url_fopen'), FILTER_VALIDATE_BOOLEAN);
     $tls = $hasCurl || ($fopen && function_exists('stream_socket_client') && extension_loaded('openssl'));
     $out[] = $tls ? row('tls', 'HTTPS transport', 'ok')
         : row('tls', 'HTTPS transport', 'fail', 'Neither cURL nor (allow_url_fopen + openssl) available — GitHub downloads are impossible. Enable cURL.');
@@ -157,23 +184,36 @@ function cap_checks(): array {
     $w = is_writable(base());
     $out[] = $w ? row('writedir', 'directory writable', 'ok')
         : row('writedir', 'directory NOT writable', 'fail', 'The installer cannot write here. Fix ownership/permissions (755/775) or pick another dir.');
-    $free = @disk_free_space(base());
+    $free = edisk(base());
     $out[] = $free === false ? row('disk', 'disk space unknown', 'info')
         : ($free > 32 * 1048576 ? row('disk', 'disk free: ' . round($free / 1048576) . ' MB', 'ok')
             : row('disk', 'disk free: ' . round($free / 1048576) . ' MB', 'fail', 'Release needs ~5 MB + room for tiles/maps. Free space first.'));
+    // Upload fallback viability: the release zip is ~4 MB and panel PHP
+    // builds often cap uploads at 2 MB — know BEFORE downloading fails.
+    $upMax = shorthand_bytes(eini('upload_max_filesize'));
+    $postMax = shorthand_bytes(eini('post_max_size'));
+    $upCap = min($upMax, $postMax);
+    $out[] = $upCap === PHP_INT_MAX ? row('upload', 'upload limit: unlimited', 'ok')
+        : ($upCap >= 5 * 1048576 ? row('upload', 'upload limit: ' . round($upCap / 1048576) . ' MB', 'ok')
+            : row('upload', 'upload limit: ' . round($upCap / 1048576) . ' MB', 'warn',
+                'The ~4 MB release zip may not fit a manual upload — prefer direct download on this host.'));
+    $met = eini('max_execution_time');
+    $out[] = row('max_time', 'max_execution_time=' . ($met !== '' ? $met : '?'),
+        ($met !== '' && (int)$met > 0 && (int)$met < 20) ? 'warn' : 'info',
+        'The package downloads in one request (~4 MB); under ~20 s limits a slow link can time out — retry or upload the zip manually.');
     $out[] = function_exists('set_time_limit') ? row('set_time_limit', 'set_time_limit', 'ok')
         : row('set_time_limit', 'set_time_limit disabled', 'warn', 'Long steps run in small chunks anyway — slower but fine.');
     $out[] = function_exists('proc_open') ? row('proc_open', 'proc_open', 'ok')
         : row('proc_open', 'proc_open disabled', 'info', 'Fine — the app runs its pure-PHP maps pipeline instead.');
-    $sp = (string)@ini_get('session.save_path');
+    $sp = eini('session.save_path');
     $out[] = ($sp === '' || is_writable($sp)) ? row('sessions', 'session path' . ($sp !== '' ? ': ' . $sp : ''), 'ok')
         : row('sessions', 'session path not writable', 'warn', 'The installer pre-creates cache/sessions and the app falls back to it automatically.');
     $sw = (string)($_SERVER['SERVER_SOFTWARE'] ?? '');
     $out[] = stripos($sw, 'apache') !== false ? row('server', $sw, 'ok')
         : row('server', $sw !== '' ? $sw : 'web server', 'warn', 'Only Apache honors .htaccess. On nginx apply docs/nginx-deaddrop.conf after install.');
-    $ob = (string)@ini_get('open_basedir');
+    $ob = eini('open_basedir');
     if ($ob !== '') $out[] = row('open_basedir', 'open_basedir=' . $ob, 'info', 'May block temp paths outside this dir — the installer keeps everything local.');
-    $out[] = row('memory', 'memory_limit=' . (string)@ini_get('memory_limit'), 'info');
+    $out[] = row('memory', 'memory_limit=' . (eini('memory_limit') !== '' ? eini('memory_limit') : '?'), 'info');
     return $out;
 }
 
@@ -182,7 +222,9 @@ function schema_statements(string $sql, bool $keepCreate = false): array {
     $out = [];
     foreach (array_filter(array_map('trim', explode(';', $sql))) as $stmt) {
         $body = implode("\n", array_filter(explode("\n", $stmt),
-            static fn(string $l): bool => trim($l) !== '' && !str_starts_with(ltrim($l), '--')));
+            function (string $l): bool {
+                return trim($l) !== '' && !str_starts_with(ltrim($l), '--');
+            }));
         if ($body === '' || preg_match('/^USE\s+/i', $body) === 1) continue;
         if (str_starts_with($body, 'CREATE DATABASE') && !$keepCreate) continue;
         $out[] = $body;
@@ -256,6 +298,7 @@ if ($action !== '') {
             'log' => 'download complete: ' . number_format($size) . ' B']);
     }
     if ($action === 'upload') {
+        if (!class_exists('ZipArchive')) jer('ZipArchive missing — enable the zip extension in the panel first.');
         if (empty($_FILES['zip']['tmp_name']) || !is_uploaded_file($_FILES['zip']['tmp_name'])) jer('no file received');
         [$zip] = dl_paths();
         if (!@move_uploaded_file($_FILES['zip']['tmp_name'], $zip)) jer('cannot store upload — directory not writable?');
@@ -369,7 +412,7 @@ if ($action !== '') {
         foreach (INST_TABLES as $t) if (($engines[$t] ?? 'INNODB') !== 'INNODB') $badEng[] = $t . ':' . $engines[$t];
         if ($badEng !== []) $log[] = 'WARNING non-InnoDB tables: ' . implode(', ', $badEng) . ' (ask host to default to InnoDB)';
         // 5. session fallback dir + server note
-        $sp = (string)@ini_get('session.save_path');
+    $sp = eini('session.save_path');
         $log[] = ($sp === '' || is_writable($sp)) ? 'sessions: default path usable'
             : 'sessions: default NOT writable — app auto-falls back to cache/sessions (pre-created)';
         $sw = (string)($_SERVER['SERVER_SOFTWARE'] ?? '');
