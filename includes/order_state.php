@@ -133,28 +133,34 @@ function order_delete_atomic(int $id): ?array {
 // Expired → deleted, per order, under a row lock so cleanup can safely run
 // concurrently with itself, with receiving, or with revealing. Idempotent:
 // re-running deletes nothing extra and never resurrects partial failures.
-// Bounded: one pass handles at most $batch rows (default 200), then the
-// caller repeats while the previous pass was full — a backlog after days
-// without cron stays a series of small transactions instead of one giant
-// SELECT + unbounded loop that max_execution_time kills halfway.
+// Bounded and poison-proof: pages forward by id (ORDER BY id, AND id > ?),
+// so a row that fails every pass is stepped over instead of re-selected
+// forever — the old "repeat while the pass was full" loop spun forever when
+// a full batch kept failing. Statements are prepared once, outside the pass.
 function cleanup_expired_orders(int $batch = 200): int {
     $db      = get_db();
     $deleted = 0;
+    $batch   = max(1, $batch);
+    $lock   = $db->prepare(
+        'SELECT id, token_hmac FROM orders WHERE id = ? AND status = "delivered" AND expires_at IS NOT NULL AND expires_at <= NOW() LIMIT 1 FOR UPDATE'
+    );
+    $photos = $db->prepare('SELECT filename FROM order_photos WHERE order_id = ?');
+    $del    = $db->prepare('DELETE FROM orders WHERE id = ?');
+    $lastId = 0;
     do {
         // Defense in depth: only delivered orders expire. Expiry is armed by
         // delivery (and guarded extension); a preparing row must never be
         // swept even if an expires_at leaked onto it.
-        $expired = $db->query(
-            'SELECT id FROM orders WHERE status = "delivered" AND expires_at IS NOT NULL AND expires_at <= NOW() LIMIT ' . max(1, $batch)
-        )->fetchAll();
+        $sel = $db->prepare(
+            'SELECT id FROM orders WHERE status = "delivered" AND expires_at IS NOT NULL AND expires_at <= NOW() AND id > ? ORDER BY id LIMIT ' . $batch
+        );
+        $sel->execute([$lastId]);
+        $expired = $sel->fetchAll();
 
         foreach ($expired as $row) {
             $oid = (int)$row['id'];
             $db->beginTransaction();
             try {
-                $lock = $db->prepare(
-                    'SELECT id, token_hmac FROM orders WHERE id = ? AND status = "delivered" AND expires_at IS NOT NULL AND expires_at <= NOW() LIMIT 1 FOR UPDATE'
-                );
                 $lock->execute([$oid]);
                 $locked = $lock->fetch();
                 if (!$locked) {
@@ -162,11 +168,10 @@ function cleanup_expired_orders(int $batch = 200): int {
                     continue;
                 }
 
-                $photos = $db->prepare('SELECT filename FROM order_photos WHERE order_id = ?');
                 $photos->execute([$oid]);
                 $files = $photos->fetchAll(PDO::FETCH_COLUMN);
 
-                $db->prepare('DELETE FROM orders WHERE id = ?')->execute([$oid]);
+                $del->execute([$oid]);
                 _delete_order_events($db, $oid, is_string($locked['token_hmac'] ?? null) ? $locked['token_hmac'] : null);
                 $db->commit();
 
@@ -180,7 +185,10 @@ function cleanup_expired_orders(int $batch = 200): int {
                 log_err('Cleanup error on order #' . $oid . ': ' . $e->getMessage());
             }
         }
-    } while (count($expired) === max(1, $batch));
+        if ($expired !== []) {
+            $lastId = max($lastId, (int)end($expired)['id']);
+        }
+    } while (count($expired) === $batch);
 
     return $deleted;
 }

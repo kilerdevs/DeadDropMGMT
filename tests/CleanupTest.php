@@ -124,6 +124,13 @@ T::ok('non-empty directory survives the sweep', is_file($strayDir . 'stray.bin')
 @unlink($strayDir . 'stray.bin');
 @rmdir($strayDir);
 
+// Id-paged passes terminate: one-row batches still sweep everything and
+// return instead of looping (a permanently-failing row is stepped over by
+// the id cursor, never re-selected forever).
+$mk('clstoken000021', 'NOW() - INTERVAL 3 HOUR');
+$mk('clstoken000022', 'NOW() - INTERVAL 3 HOUR');
+T::eq('single-row batches sweep and terminate', 2, cleanup_expired_orders(1));
+
 // ── Stale rate-limit rows are purged, live ones kept ──────────────────────
 // Rows are one-per-IP×scope and never swept on the cold path — without this
 // the table bloats forever under IP rotation. Exercised through do_cleanup()

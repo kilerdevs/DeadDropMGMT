@@ -235,6 +235,15 @@ T::eq('lookup later data hit', $mixedRoot[2], pmtiles_lookup_id($mixedRoot, $fet
 T::ok('lookup past end misses', pmtiles_lookup_id($mixedRoot, $fetch, 99) === null);
 T::ok('lookup before start misses', pmtiles_lookup_id($mixedRoot, $fetch, 4) === null);
 T::ok('lookup corrupt leaf fails', pmtiles_lookup_id($mixedRoot, static fn(): ?array => null, 11) === null);
+// Run-length entries (identical tiles, e.g. open sea) cover id..id+run-1:
+// every tile inside the run must resolve, not just the first id.
+$runRoot = [
+    ['id' => 5, 'run' => 3, 'len' => 5, 'off' => 50],
+];
+T::eq('lookup run first id hits', $runRoot[0], pmtiles_lookup_id($runRoot, $fetch, 5));
+T::eq('lookup inside run hits', $runRoot[0], pmtiles_lookup_id($runRoot, $fetch, 6));
+T::eq('lookup run last id hits', $runRoot[0], pmtiles_lookup_id($runRoot, $fetch, 7));
+T::ok('lookup past run misses', pmtiles_lookup_id($runRoot, $fetch, 8) === null);
 
 // Hostile-upstream bounds: an absurd entry count or a gzip bomb fails
 // closed instead of exhausting memory.

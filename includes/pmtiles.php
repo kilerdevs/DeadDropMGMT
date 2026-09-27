@@ -953,5 +953,8 @@ function pmtiles_lookup_id(array $entries, callable $fetchLeaf, int $id, int $de
         }
         return pmtiles_lookup_id($leaf, $fetchLeaf, $id, $depth + 1);
     }
-    return $cand['id'] === $id ? $cand : null;
+    // A run-length entry covers id .. id+run-1 (PMTiles stores identical
+    // tiles, e.g. open sea or uniform land, as one run): match anywhere
+    // inside the run, not just on its first id.
+    return ($cand['id'] <= $id && $id < $cand['id'] + $cand['run']) ? $cand : null;
 }
