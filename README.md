@@ -28,7 +28,7 @@ all without the underlying data ever leaving the server in readable form.
 ![Log integrity](https://img.shields.io/badge/audit%20log-HMAC%20chained-blue?style=flat)
 
 ![PHPStan](https://img.shields.io/badge/PHPStan-level%205-4F5D95?style=flat)
-![Test suites](https://img.shields.io/badge/PHP%20test%20suites-44-success?style=flat)
+![Test suites](https://img.shields.io/badge/PHP%20test%20suites-45-success?style=flat)
 ![E2E](https://img.shields.io/badge/E2E-Playwright-45ba4b?style=flat&logo=playwright&logoColor=white)
 ![Coverage floor](https://img.shields.io/badge/coverage%20floor-%E2%89%A585%25-success?style=flat)
 ![Mutation probe](https://img.shields.io/badge/mutation%20probe-16%20mutants-success?style=flat)
@@ -458,11 +458,11 @@ locked-down `php.ini`. Everything that would normally lean on Docker, cron or pr
 
 **Set-up without a shell — two ways.** The one-file installer is the short path; the manual steps below it do the same thing by hand.
 
-**A. One-file installer (recommended).** Upload `tools/install.php` to the web root over FTP and open it in a browser
-(`https://your-host/install.php`). A four-step wizard takes it from there:
+**A. One-file installer (recommended).** Upload [`tools/install.min.php`](tools/install.min.php) to the web root over FTP and open it in a browser
+(`https://your-host/install.min.php`). It is the minified build of [`tools/install.php`](tools/install.php) — same wizard, smaller upload — regenerated and committed by CI after every push, so it never goes stale. A four-step wizard takes it from there:
 
 1. **Server check** — PHP version, extensions, disabled functions, writable folders, database reachability, with the fix next to each failing row.
-2. **Package** — pick a release; the installer downloads it itself (resumable, verified) over a direct connection or through proxies it discovers with the same app-parity pipeline as Auto-discover (rated sources win, anonymity-checked, fail-closed — never silent direct).
+2. **Package** — pick a release; the installer downloads it itself (resumable, verified) over a direct connection. No proxy support by design: a host that cannot reach GitHub gets the manual-upload button instead.
 3. **Database + site setup** — create the empty database and user in the hosting panel first (the installer has no such privilege there), enter them, hit *Test connection*, then *Install now*: it writes `config.php` with a fresh random AES key, creates the storage dirs and imports the schema without the privileged statements.
 4. **Finish** — verify, then delete the installer (one click; it removes itself).
 
@@ -667,7 +667,7 @@ A zero-dependency PHP suite (no PHPUnit — each file is a standalone script), a
 
 | Layer | What it proves | Run it |
 |---|---|---|
-| **PHP suites** — 44 | Crypto, auth, limits, state machine, maps, i18n, fail-closed branches, live-HTTP flows, web installer | `php tests/schema_loader.php && php tests/run_all.php` |
+| **PHP suites** — 45 | Crypto, auth, limits, state machine, maps, i18n, fail-closed branches, live-HTTP flows, web installer | `php tests/schema_loader.php && php tests/run_all.php` |
 | **Browser E2E** — 7 specs | What raw HTTP cannot see: no-JS paths, CSP-clean DOM, offline maps, mid-reveal UI | `npm ci && npx playwright install chromium && npm run e2e` |
 | **Coverage gate** | Line coverage floors over `includes/` under `pcov` | `composer install && php tests/coverage_runner.php` |
 | **Mutation probe** — 16 mutants | A tested guard versus a dead one | `php tools/mutation_probe.php` |
@@ -677,7 +677,7 @@ A zero-dependency PHP suite (no PHPUnit — each file is a standalone script), a
 The suite never touches your real database: `tests/bootstrap.php` forces `DDMGMT_DB_NAME=deaddrops_test` and points the app at TCP loopback unless you say otherwise.
 
 <details>
-<summary><b>The 44 PHP suites</b>, by area</summary>
+<summary><b>The 45 PHP suites</b>, by area</summary>
 
 <br>
 
@@ -692,7 +692,7 @@ The suite never touches your real database: `tests/bootstrap.php` forces `DDMGMT
 | Logging | `LoggerTest` — hash chain, continuity checkpoints, unusable-key behaviour |
 | Maps & proxy | `MapsTest`, `MapsFetchTest` (zone tokens, CLI pins, worker lock, orphan sweep), `MapsPhpTest` (pure-PHP zone engine), `PmtilesTest` (PMTiles v3 framing), `ProxyTest` (anonymity gate, tile cache), `ProxyClientTest` (response size ceilings), `ProxyHealTest` (failed-proxy replacement: confirm, replace-never-just-delete, manual entries exempt, lock, cooldown) |
 | Structure & guards | `KernelTest` (service manifest, CLI-only guards, web-server denies), `AdminMobileTest` (phone layout contract: menu button, OSM badge rules, touch zone editor), `VersionTest` (release vs beta build line, owners only), `PseudoCronTest` (any page starts the hourly sweep, healthz doesn't, the env switch), `LogViewerTest` (Settings lists the structured log that Verify integrity checks), `ArrayInputTest` (every entry point is sent every parameter name as an array — no crash, no TypeError in the logs), `HostTest` (shared-hosting degradations: config-constant switches, no exec / CLI / cURL, curl-less proxy routing with sequential pool probing, inline proxy upkeep, automatic routing switch-off, pure-PHP zone downloads), `ProxyTransportTest` (proxy framing units plus loopback CONNECT/SOCKS stubs and live-TLS proofs through both tunnel types), `DispatchTest` (the thin admin dispatcher contract), `FailClosedTest` (every guard, limiter, wipe and decrypt path, plus the DB TLS option matrix) |
-| Web installer | `InstallerTest` (offline end-to-end of the one-file installer: server check, release download, fail-closed proxy discovery, schema setup, config write), `InstallerLimitedEnvTest` (the same under a crippled `php.ini`: no curl, no exec, no ZipArchive) |
+| Web installer | `InstallerTest` (offline end-to-end of the one-file installer: server check, release download, schema setup, config write — plus proof the deleted proxy actions stay deleted), `InstallerLimitedEnvTest` (the same under a crippled `php.ini`: no curl, no exec, no ZipArchive), `InstallerMinTest` (the committed `.min` bundle is in sync, smaller, and passes the same smoke — including a socket-engine-pinned fetch) |
 
 </details>
 
@@ -839,7 +839,9 @@ DeadDropMGMT/
 ├── tools/                    CLI maintenance: key rotation/separation,
 │                             CBC→GCM and order-token migrations, recovery purge, mutation probe,
 │                             build_info.sh (version provenance for image builds),
-│                             install.php (one-file web installer for shell-less shared hosting)
+│                             install.php (one-file web installer for shell-less shared hosting),
+│                             install.min.php (its minified upload build — generated, CI-rebuilt),
+│                             build_installer_min.php (the generator: php tools/build_installer_min.php)
 ├── docker/                   Apache/nginx/Caddy front configs, entrypoint,
 │                             php.ini overrides, e2e journey
 ├── docs/                     ADRs + troubleshooting guide

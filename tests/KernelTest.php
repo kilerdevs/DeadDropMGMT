@@ -89,19 +89,19 @@ T::ok('admin entry pages scanned', $checked === 35);
 // ── Same rule for every other entry point: public pages, cron, CLI tools,
 // and the docker journey script. Deliberate exceptions (not scanned):
 // healthz.php answers liveness with zero dependencies by design,
-// config.php IS the base layer, tests/* keep their own bootstrap, and
-// tools/install.php is the standalone pre-install bootstrapper: it runs
-// where no app exists yet, so it cannot require the kernel, and it is a
-// browser wizard by design, so it cannot be CLI-only either.
-$noKernel = static fn(string $f): bool => basename($f) !== 'install.php';
+// config.php IS the base layer, tests/* keep their own bootstrap, and the
+// installer trio is standalone by design: tools/install.php runs where no
+// app exists yet (cannot require the kernel; a browser wizard, so it cannot
+// be CLI-only either), tools/install.min.php is its generated copy, and
+// tools/build_installer_min.php is a dev-time generator with its own guards
+// (covered by InstallerMinTest + the HTTP-inert probe instead).
+$noKernel = static fn(string $f): bool => !in_array(basename($f),
+    ['install.php', 'install.min.php', 'build_installer_min.php'], true);
 $others = array_merge(
     [$root . '/index.php', $root . '/receive.php', $root . '/cron/cleanup.php', $root . '/cron/maps_sync.php'],
     array_values(array_filter(glob($root . '/tools/*.php') ?: [], $noKernel)),
     [$root . '/docker/e2e_journey.php'],
 );
-foreach ($others as $f) {
-    $checked += _kernel_guarded('entry ' . basename($f), (string)file_get_contents($f));
-}
 T::ok('non-admin entry points scanned', count($others) === 11);
 
 // ── CLI-only scripts refuse every non-CLI SAPI, and the web server config

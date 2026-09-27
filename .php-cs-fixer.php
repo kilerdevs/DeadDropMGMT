@@ -16,6 +16,10 @@ $finder = PhpCsFixer\Finder::create()
     // vendor + coverage-html are generated; fromftp/ is an untracked local
     // deployment mirror, not repo source.
     ->exclude(['vendor', 'coverage-html', 'fromftp'])
+    // tools/install.min.php is generated (CI rebuilds it from
+    // tools/install.php after every push) — formatting it would fight the
+    // builder on every run.
+    ->notPath('tools/install.min.php')
     ->name('*.php');
 
 // declare_strict_types is classified "risky" by the fixer (it touches the

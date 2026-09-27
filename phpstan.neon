@@ -18,6 +18,8 @@ parameters:
 		# error pages and the gitignored local config are trivial / environment
 		- error
 		- config.php
+		# generated: CI rebuilds it from tools/install.php after every push
+		- tools/install.min.php
 	treatPhpDocTypesAsCertain: false
 	# The TLS option matrix lives in the pure db_options() factory, so no
 	# environment-dependent "always false" suppressions are needed anymore.

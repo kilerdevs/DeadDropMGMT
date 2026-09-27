@@ -14,15 +14,24 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   setup in a single upload. Open the file in a browser and a four-step wizard
   (server check → release download → database + site setup → finish) takes it
   from there: it fetches the release itself (resumable, verified) over a
-  direct connection or through auto-discovered proxies running the same
-  selection pipeline as Auto-discover (rated sources win, anonymity-checked,
-  fail-closed), writes `config.php` with a fresh random AES key, creates the
-  storage dirs and imports the schema without the privileged statements (the
-  database itself is still created in the hosting panel), then deletes itself.
-  Degrades gracefully where hosts are crippled: streams/sockets transports
-  where cURL is missing, manual upload-and-extract where ZipArchive is
-  missing. Covered by `InstallerTest` (offline end-to-end) and
-  `InstallerLimitedEnvTest` (crippled `php.ini`: no curl, no exec, no zip).
+  direct connection — no proxy support by design; hosts that cannot reach
+  GitHub get a manual-upload button instead — writes `config.php` with a
+  fresh random AES key, creates the storage dirs and imports the schema
+  without the privileged statements (the database itself is still created in
+  the hosting panel), then deletes itself. Degrades gracefully where hosts
+  are crippled: streams/sockets transports where cURL is missing,
+  manual upload-and-extract where ZipArchive is missing. Covered by
+  `InstallerTest` (offline end-to-end, including proof the removed proxy
+  actions stay removed) and `InstallerLimitedEnvTest` (crippled `php.ini`:
+  no curl, no exec, no zip).
+- **Minified installer bundle** (`tools/install.min.php`): the upload build
+  of the installer (~3/4 the size), generated — never hand-edited — by
+  `php tools/build_installer_min.php` (token-based PHP minify, safe CSS/JS
+  passes with fail-closed tripwires for constructs the minifier does not
+  understand). A CI job rebuilds and commits it after every push (`[skip ci]`,
+  no loop); `InstallerMinTest` keeps branches honest with a freshness gate
+  plus a behavioral smoke of the minified code, including a socket-engine
+  pinned fetch.
 - **Setup check** (`admin/setup_check.php`): one page diagnosing every host
   capability the app needs — PHP version, extensions, disabled functions,
   database reachability, session time-zone, schema presence, table engines,

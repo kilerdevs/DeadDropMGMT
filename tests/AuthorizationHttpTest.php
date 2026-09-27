@@ -302,7 +302,7 @@ T::ok('admin.js refreshes the token before any POST form', str_contains((string)
 // .htaccess, so this proves the scripts' own SAPI guard.)
 foreach ([
     'tools/purge_pickup_password_recovery.php', 'tools/separate_keys.php', 'tools/migrate_cbc_to_gcm.php',
-    'tools/rotate_aes_key.php', 'tools/mutation_probe.php', 'docker/e2e_journey.php', 'e2e/seed.php',
+    'tools/rotate_aes_key.php', 'tools/mutation_probe.php', 'tools/build_installer_min.php', 'docker/e2e_journey.php', 'e2e/seed.php',
     'cron/cleanup.php', 'cron/maps_sync.php', 'tests/schema_loader.php', 'tests/bootstrap.php', 'tests/run_all.php',
 ] as $cliOnly) {
     [$stCli, $bCli] = _az('GET', "$B/$cliOnly", null, '');

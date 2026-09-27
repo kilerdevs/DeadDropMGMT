@@ -489,6 +489,50 @@ jobs:
         if: always()
         run: docker compose down -v
 
+  # Minified web installer: tools/install.min.php is generated, never edited
+  # by hand. After every push this job rebuilds it from tools/install.php and
+  # commits the result back ([skip ci] — no loop). InstallerMinTest's
+  # freshness gate keeps branches honest in between: a stale .min fails the
+  # suite with the rebuild command. Write access is scoped to this job only
+  # (the workflow default above stays read-only); skipped on PRs, where the
+  # token cannot push.
+  installer-min:
+    runs-on: ubuntu-24.04
+    name: Minified installer (rebuild + commit-back)
+    permissions:
+      contents: write
+    if: github.event_name == 'push'
+    concurrency:
+      group: installer-min-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: '8.3'
+
+      - name: Rebuild minified installer
+        run: |
+          php -l tools/install.php
+          php tools/build_installer_min.php | tee min-build.txt
+          php -l tools/install.min.php
+          { echo "### Minified installer"; cat min-build.txt; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Commit back when the source moved
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add tools/install.min.php
+          git diff --cached --quiet && { echo 'in sync — nothing to commit'; exit 0; }
+          git commit -m 'Installer: rebuild minified bundle [skip ci]' \
+            -m 'Why: source moved; CI-regenerated from tools/install.php.'
+          git pull --rebase origin "${{ github.ref_name }}"
+          git push origin "HEAD:${{ github.ref_name }}"
+
   # Real-browser E2E (Playwright/Chromium): the behaviours raw HTTP cannot
   # see — no-JS form paths, inline-handler absence in a live DOM, mid-reveal
   # UI state. Same MariaDB service as the PHP suite; the app boots via
