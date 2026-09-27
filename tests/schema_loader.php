@@ -48,26 +48,36 @@ try {
 
 // Statements in setup.sql are ;-terminated with no DELIMITER blocks or
 // semicolons inside string literals, so the shared plain split is safe.
+$create = [];
 $toRun = [];
 foreach (schema_statements($sql, true) as $body) {
     // A least-privilege app user (e.g. the Docker stack's deaddrop) cannot run
     // CREATE DATABASE even with IF NOT EXISTS — skip it when the target
-    // already exists; as root (fresh installs) it still runs normally.
+    // already exists; as root (fresh installs) it still runs normally. A
+    // missing database is created IMMEDIATELY, not with the rest below: the
+    // explicit USE after this loop needs it to exist first.
     if (str_starts_with($body, 'CREATE DATABASE')) {
         $exists = $pdo->query(
             'SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ' . $pdo->quote($name)
         )->fetchColumn();
-        if ((int)$exists > 0) {
-            continue;
+        if ((int)$exists === 0) {
+            $create[] = $body;
         }
+        continue;
     }
     $toRun[] = $body;
+}
+$res = schema_apply($pdo, $create);
+if ($res['error'] !== '') {
+    fwrite(STDERR, "Schema statement failed: {$res['error']}\n--\n{$res['statement']}\n--\n");
+    exit(1);
 }
 // The shared splitter strips USE (production connects with dbname already);
 // the loader connects dbname-less so it can CREATE the database first, and
 // therefore selects it explicitly here instead.
 $pdo->exec('USE `' . str_replace('`', '``', $name) . '`');
-$res = schema_apply($pdo, $toRun);if ($res['error'] !== '') {
+$res = schema_apply($pdo, $toRun);
+if ($res['error'] !== '') {
     fwrite(STDERR, "Schema statement failed: {$res['error']}\n--\n{$res['statement']}\n--\n");
     exit(1);
 }
