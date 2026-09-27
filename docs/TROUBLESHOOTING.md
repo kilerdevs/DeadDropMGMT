@@ -172,8 +172,11 @@ response; see the `last_cleanup` setting; `DDMGMT_PSEUDO_CRON=0` turns it off). 
 
 ## Shared hosting: 500 after upload, dead maps, zone downloads refused
 
-Open **Settings → Hosting** first: it lists what this host allows (cURL, process execution, background jobs, the last
-maintenance sweep, writable folders, zone downloads) and what each missing piece costs.
+Open **Setup check** (`/admin/setup_check.php`) first: it lists every capability the app needs on this host — PHP version,
+extensions, disabled functions, database reachability and privileges, schema presence, table engines, the AES key, writable
+folders, the session path — with the fix next to each red row, and its *Create / upgrade tables* button installs the schema
+without the `CREATE DATABASE` / `USE` lines that restricted panel users cannot run. **Settings → Hosting** keeps the
+runtime view afterwards.
 
 - **A 500 on every page right after upload:** the host does not allow `Options` in `.htaccess` (`AllowOverride` without
   `Options`). Delete the `Options -Indexes` line at the top of `.htaccess`; the rest is guarded by `IfModule`.
@@ -187,7 +190,8 @@ maintenance sweep, writable folders, zone downloads) and what each missing piece
   (the faster `pmtiles` CLI path needs `proc_open` + Linux), so this now only appears when outbound HTTPS
   itself is unreachable or `data/` is not writable. The default OpenStreetMap provider works without any of it.
 - **Nothing is ever swept:** the pseudo-cron needs page visits; **Settings → Hosting → Scheduled maintenance** shows the
-  last sweep. On a very quiet site add a cron job for `php cron/cleanup.php` (hourly).
+  last sweep. On a very quiet site add a cron job for `php cron/cleanup.php` (hourly) — or point the host's *webcron* / scheduled-URL
+  feature (or any free uptime monitor) at any public page; the visit itself is the trigger.
 - **Writable folders "unavailable":** `chmod` `logs/ uploads/ cache/ data/ tiles/` so PHP can write (755 or 775 by FTP).
 
 ## Photo upload rejected
@@ -261,7 +265,9 @@ host to the app; do not mount it under a prefix (with or without stripping it).
 `.htaccess` is Apache-only. A non-Docker nginx/Caddy install MUST replicate every `deny all` / `respond 403` from
 `docker/nginx.conf` / `docker/Caddyfile` (`includes/`, `logs/`, `cron/`, `tools/`, `tests/`, `data/`, `config.php`, PHP
 execution under `uploads/`), or those paths are public. When in doubt, probe them: anything other than 403/404 on
-`/includes/db.php` and `/config.php` is a misconfiguration.
+`/includes/db.php` and `/config.php` is a misconfiguration. A ready-made server block is in
+[`docs/nginx-deaddrop.conf`](nginx-deaddrop.conf) (mirrors `.htaccess` exactly — `tiles/` and `uploads/` stay servable
+on purpose); **Setup check** warns when it detects a non-Apache server.
 
 ## Map zones vanished after a rebuild
 
@@ -272,8 +278,10 @@ directories if you rebuild often.
 
 ## A zone download is stuck or failed
 
-- **Nothing is moving:** downloads are done by `cron/maps_sync.php`, never by page visits. The Settings page kicks the worker
-  after queueing when the platform allows; otherwise schedule it (`*/15 * * * * php /path/to/cron/maps_sync.php`).
+- **Nothing is moving:** on the `php` engine (no `proc_open`/CLI) downloads advance from page visits — the queue POST works
+  within its budget and every progress poll donates a slice, so keep the zone's status page open or revisit it. The `cli`
+  engine instead needs `cron/maps_sync.php` (schedule `*/15 * * * * php /path/to/cron/maps_sync.php`); the Settings page
+  kicks the worker after queueing when the platform allows detached jobs.
 - **Failed after a long silence:** the hourly steward marks jobs whose worker died as failed. Use **Retry** on the zone.
 - **Failed immediately in proxy mode:** proxy mode is fail-closed — with no working pool proxy the job fails instead of
   silently going direct. Add proxies, or choose the direct route for that download.

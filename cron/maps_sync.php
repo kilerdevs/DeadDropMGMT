@@ -28,7 +28,14 @@ if (PHP_SAPI !== 'cli') {
 define('BASE_DIR', dirname(__DIR__));
 require_once BASE_DIR . '/includes/kernel.php';
 
-@set_time_limit(0);
+// Guarded: hosts that disable set_time_limit answer function_exists(false),
+// and a bare call would fatal the worker before it even locks.
+if (function_exists('set_time_limit')) {
+    try {
+        @set_time_limit(0);
+    } catch (Throwable) {
+    }
+}
 
 [$locked, $holder] = maps_worker_lock();
 if (!$locked) {

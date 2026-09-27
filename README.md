@@ -483,11 +483,15 @@ locked-down `php.ini`. Everything that would normally lean on Docker, cron or pr
    hosts still offer 8.1 or older — check the control panel first; the app will not run there.
 2. Give the app **its own (sub)domain** — it cannot live under `/drop/` (see [Requirements](#requirements)). Free hosts hand out subdomains.
 3. Upload the files (FTP), create a database and import `setup.sql` with phpMyAdmin (it is idempotent — re-import it after upgrades).
+   If the panel user has no `CREATE` privilege (or forces a name like `user_xxx`): create the empty database in the panel,
+   point `config.php` at it, and use **Setup check** (`/admin/setup_check.php`) — its *Create / upgrade tables* button applies
+   the same schema without the privileged lines.
 4. Copy `config.php.example` to `config.php` and fill in the database credentials and a 64-hex `AES_KEY_HEX`
    (`php -r "echo bin2hex(random_bytes(32));"` on any machine). Environment variables are optional — every value works as a constant.
    **Back the key up.**
 5. Make `logs/`, `uploads/`, `cache/`, `data/` and `tiles/` writable for PHP (FTP chmod `755`, or `775` if the host runs PHP as a different user).
-6. Open `/admin/` and create the owner. Then look at **Settings → Hosting**.
+6. Open `/admin/` and create the owner. Then look at **Setup check** (`/admin/setup_check.php` — every host capability
+   in one place, red rows first) and **Settings → Hosting**.
 
 **Switches** (`config.php` constants, or environment variables where you have them — the environment wins): 
 `define('DDMGMT_PSEUDO_CRON', false);` only if a real cron job runs `cron/cleanup.php`;
@@ -513,7 +517,7 @@ picker and public reveal alike).
 | **Zone editor** | The bbox can be typed or drawn directly on an OSM canvas in the same section (same-origin tiles via `tile_proxy.php`, so still zero third-party contact): drag to draw, drag the body to move, corners to resize; overlapping drafts warn with the shared-tiles percentage and existing zones render each in its own colour (the same swatch colour as in the zone list; dashed while still downloading). A place search pans through the proxied Nominatim path |
 | **Route consent per download** | Proxy pool (anonymous, can be extremely slow — pool proxies are volunteer-run) or direct (fast, reveals the server IP to the tile host). Proxy mode is fail-closed: no working pool proxy means a failed job, never silent direct |
 | **Sizing before downloading** | The worker dry-runs each zone for its exact byte count and refuses zones that don't fit the free disk (512 MiB headroom always kept). Deleting a zone frees its disk immediately; the worker measures, downloads with live speed/ETA, verifies, and publishes atomically |
-| **Worker** | `cron/maps_sync.php` (system cron recommended, e.g. every 15 min; the Settings page kicks it detached after queueing when the platform allows). Page visits never download — extracts can't resume, so a killed request would waste the whole transfer; the hourly pseudo-cron steward only fails jobs whose worker died silently (`maps_steward_if_due()`, run by the pseudo-cron) |
+| **Worker** | Two engines. `cli` (system cron `cron/maps_sync.php`, e.g. every 15 min; the Settings page kicks it detached after queueing when the platform allows) where `proc_open` + Linux exist. Everywhere else the `php` engine: the queue POST finishes small zones inline within a wall-clock budget derived from `max_execution_time`, and every progress poll donates a resumable 8-second slice — downloads complete with no cron and no hanging request. Single spans never exceed the remaining budget's socket timeout, and zones covering more than 250,000 tiles are refused up front |
 | **Freshness** | The planet rebuilds daily and each zone remembers the build it was cut from. When the worker next learns a newer build, ready zones cut from older ones show an *Update available* badge with a **Refresh** button that re-queues them — the worker re-downloads and republishes atomically, so the old file keeps serving until the new one lands. Freshness is computed from the cached build key only; no page view ever fetches the build list |
 | **Public reveal** | With the self-hosted provider, a delivered order whose pin sits inside a ready zone renders the same MapLibre stack on the public reveal page (`reveal-map.js`, style inlined server-side — no new endpoint) instead of the OSM iframe. Only the covering zones' files are fetched, so zones elsewhere stay undisclosed; a pin outside every zone (or provider `osm`) keeps the OSM embed. The Google/Apple Maps links remain plain outbound links either way |
 | **`pmtiles` CLI** | Pinned v1.31.2 (Linux x86_64 / arm64), fetched automatically on first use over TLS and verified against built-in SHA-256 pins (archive and binary) *before* it is ever executed. Only when you override the download (`DDMGMT_PMTILES_URL` / `DDMGMT_PMTILES_BIN`) or run another architecture does the app fall back to a trust-on-first-use hash recorded in `maps_cli_sha256`. Address search still uses the proxied Nominatim path — self-hosted geocoding (100 GB+ PostGIS) is deliberately out of scope |

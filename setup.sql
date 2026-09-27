@@ -8,6 +8,14 @@
 -- MySQL not at all).
 --
 --   mysql -u root -p < setup.sql
+--
+-- Shared hosting WITHOUT the CREATE privilege (or with a panel-forced
+-- database name like user_xxx instead of deaddrops): skip this file.
+-- Create the empty database in the panel, point config.php's DB_NAME at it,
+-- then open admin/setup_check.php — its "Create / upgrade tables" button
+-- applies every statement below except CREATE DATABASE and USE (both would
+-- fail with #1044/#1049 on such hosts). Deleting the CREATE DATABASE and
+-- USE lines below and importing the rest through phpMyAdmin works too.
 
 CREATE DATABASE IF NOT EXISTS deaddrops
     CHARACTER SET utf8mb4

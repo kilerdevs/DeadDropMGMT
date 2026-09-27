@@ -12,6 +12,34 @@ const ADMIN_SESSION_ABSOLUTE_SECONDS = 43200; // 12 h
 
 // ── Session ───────────────────────────────────────────────────────────────────
 
+// Effective session directory: the configured save_path, or the system temp
+// dir when none is configured. Shared so the setup check reports the same
+// path the session actually uses.
+function session_effective_path(): string {
+    $configured = (string)@ini_get('session.save_path');
+    if (preg_match('/^(?:\d+;)?(.*)$/', $configured, $m) === 1) {
+        $configured = $m[1];
+    }
+    return $configured !== '' ? $configured : sys_get_temp_dir();
+}
+
+// Cheap shared hosting jails or quotas /tmp (open_basedir, noexec mounts):
+// session_start() then warns and login/CSRF/poll state silently breaks.
+// Only where the effective path is actually unusable, fall back to an
+// app-local dir — working setups are never touched (their sessions stay
+// exactly where they are, no mass logout).
+function session_save_path_ensure(): void {
+    $probe = session_effective_path();
+    if (is_dir($probe) && is_writable($probe)) {
+        return;
+    }
+    $local = dirname(__DIR__) . '/cache/sessions';
+    if (!is_dir($local) && !@mkdir($local, 0700, true)) {
+        return; // cannot improve — session_start() itself reports it
+    }
+    @ini_set('session.save_path', $local);
+}
+
 function start_secure_session(): void {
     if (session_status() !== PHP_SESSION_NONE) return;
     // Harden the mechanism itself, explicitly rather than trusting php.ini
@@ -22,6 +50,7 @@ function start_secure_session(): void {
     ini_set('session.use_strict_mode', '1');
     ini_set('session.use_only_cookies', '1');
     ini_set('session.use_trans_sid', '0');
+    session_save_path_ensure();
     session_set_cookie_params([
         'lifetime' => 0,
         'path'     => '/',
@@ -31,6 +60,23 @@ function start_secure_session(): void {
     ]);
     session_name(SESSION_NAME);
     session_start();
+    // Hosts that lock session.* (PHP_INI_SYSTEM) silently ignore the ini_set
+    // trio above — and the return values are easy to miss at 3 a.m. Verify
+    // the EFFECTIVE values once per session and say so loudly in the log
+    // (the setup check page shows the same). session.use_cookies is
+    // intentionally NOT asserted: the login poll endpoint disables it.
+    if (empty($_SESSION['ini_hardening_seen'])) {
+        $_SESSION['ini_hardening_seen'] = true;
+        $lost = [];
+        foreach (['session.use_strict_mode' => '1', 'session.use_only_cookies' => '1', 'session.use_trans_sid' => '0'] as $k => $v) {
+            if ((string)@ini_get($k) !== $v) {
+                $lost[] = $k;
+            }
+        }
+        if ($lost !== []) {
+            error_log('DeadDropMGMT: host ignores ini_set for ' . implode(',', $lost) . '; session hardening reduced (see admin/setup_check.php).');
+        }
+    }
 }
 
 // ── Identity helpers ──────────────────────────────────────────────────────────

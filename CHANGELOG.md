@@ -10,6 +10,16 @@ All notable changes to DeadDropMGMT are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Setup check** (`admin/setup_check.php`): one page diagnosing every host
+  capability the app needs — PHP version, extensions, disabled functions,
+  database reachability, session time-zone, schema presence, table engines,
+  AES key, writable folders, session path, web server — with the fix next to
+  each failing row. While no owner exists it doubles as the installer: its
+  *Create / upgrade tables* button applies `setup.sql` without the privileged
+  `CREATE DATABASE` / `USE` lines (behind CSRF plus the optional
+  `DDMGMT_SETUP_TOKEN`, the same claim model as the first-owner form), so
+  panel users without the `CREATE` privilege or with forced `user_xxx` names
+  can install without phpMyAdmin. Covered by `SetupCheckTest`.
 - Map zone downloads no longer need process execution, cURL or Linux: a
   pure-PHP engine (PMTiles reader/writer over the server's own HTTP
   transport) extracts zones wherever outbound HTTPS exists. The go-pmtiles
@@ -24,6 +34,24 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   extension (fail-closed as before; pool probing just runs sequentially).
   Covered by a new `ProxyTransportTest` (framing units, loopback CONNECT/SOCKS
   stubs, live-TLS proofs through both tunnel types).
+
+### Fixed
+- Restricted shared hosting no longer takes the app down or wedges the queue:
+  a denied `SET time_zone` degrades to the server-default zone instead of 503
+  on every page; `set_time_limit()` moved inside the worker try (a disabled
+  call used to fatal while holding the lock) and guarded in `cron/maps_sync`;
+  `proc_open()` is guarded so a disabled spawner fails as data, not an `Error`;
+  the cURL downloader no longer accepts a `200`-after-resume as success (it
+  appended the full body onto the partial file and looped on hash mismatch);
+  the inline queue worker and every span/sizing request run inside a budget
+  derived from `max_execution_time`, yielding `more` instead of dying mid-job;
+  zones covering over 250,000 tiles are refused up front (`code:too_big`)
+  instead of OOMing the plan builder; first-owner creation survives hosts
+  without the `LOCK` privilege (unique-username constraint still serializes
+  same-name races); sessions fall back to `cache/sessions` only where the
+  default path is actually unusable; ignored session `ini_set()` hardening is
+  logged once per session; and non-Apache installs get a ready-made
+  `docs/nginx-deaddrop.conf` mirroring `.htaccess` exactly.
 
 ### Changed
 - Settings → Maps: **every zone has its own colour**, on the OSM zone map and

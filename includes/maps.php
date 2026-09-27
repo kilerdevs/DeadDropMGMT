@@ -750,6 +750,11 @@ function maps_cli_exec(array $args, ?array $env = null, ?callable $onChunk = nul
     if ($runner !== null) {
         return $runner($args, $env, $onChunk);
     }
+    // Hardened and shared hosts disable proc_open: fail as data (the engine
+    // router treats this as "CLI unavailable"), never as a fatal Error.
+    if (!function_exists('proc_open')) {
+        return [false, 'proc_open unavailable on this host'];
+    }
     $bin = maps_cli_bin();
     $cmd = escapeshellarg($bin);
     foreach ($args as $a) {
@@ -919,8 +924,21 @@ function maps_fetch_file(string $url, string $dest, ?string $proxy): array {
     $err = curl_error($ch);
     unset($ch); // PHP 8.5 deprecates curl_close(); the handle frees on scope exit
     fclose($fh);
+    if ($ok && $code === 200 && $have > 0) {
+        // The server ignored Range: the full body was just APPENDED to the
+        // partial file, and that concatenation is corruption — never a
+        // success. Drop it so the next attempt restarts from zero (this is
+        // exactly what the streams branch does on 200-after-resume).
+        @unlink($dest);
+        return [false, 'server ignored resume; restarting from zero'];
+    }
     if ($ok && ($code === 200 || ($have > 0 && $code === 206))) {
         return [true, ''];
+    }
+    // A fresh (non-resume) attempt that failed must not leave its partial
+    // behind: error pages and truncated bodies would poison the next resume.
+    if ($have === 0) {
+        @unlink($dest);
     }
     return [false, $proxy !== null
         ? 'download failed through proxy (HTTP ' . $code . ($err !== '' ? ': ' . $err : '') . ')'
@@ -1042,6 +1060,12 @@ function maps_zone_add(string $name, float $minLon, float $minLat, float $maxLon
     }
     if ($maxzoom !== 14 && $maxzoom !== 15) {
         return [null, 'code:bad_zoom'];
+    }
+    // Continent-scale zones would OOM the plan builder (covering ids,
+    // entries, plan JSON) on small hosts — reject up front with the count.
+    $tiles = pmtiles_covering_count($minLon, $minLat, $maxLon, $maxLat, $maxzoom);
+    if ($tiles > PMTILES_COVERING_MAX) {
+        return [null, 'code:too_big|' . $tiles];
     }
     if (maps_disk_free() < MAPS_HEADROOM_MIN) {
         return [null, 'code:disk_full_queue'];
@@ -1517,6 +1541,7 @@ function maps_kick_worker(): bool {
 function maps_process_php(array $zone, int $timeBox): array {
     $id = (int)$zone['id'];
     $db = get_db();
+    $phase0 = microtime(true); // the budget covers sizing AND fetch, not just fetch
     $mark = static function (string $status, array $extra = []) use ($db, $id): void {
         $sets = 'status = ?';
         $params = [$status];
@@ -1557,7 +1582,13 @@ function maps_process_php(array $zone, int $timeBox): array {
         && ($plan['maxzoom'] ?? null) === $maxzoom;
     if (!$fresh) {
         $mark('sizing', ['build_key' => $build]);
-        [$plan, $perr] = pmtiles_build_plan($planet, $proxy, $bbox[0], $bbox[1], $bbox[2], $bbox[3], $maxzoom);
+        // Bound each directory fetch to what remains of the budget: sizing
+        // must run to completion or not at all (no partial plan resumes),
+        // but one hung peer must not eat the whole PHP limit in one request.
+        $sizeTimeout = $timeBox > 0
+            ? max(5, min(60, (int)ceil($timeBox - (microtime(true) - $phase0))))
+            : 60;
+        [$plan, $perr] = pmtiles_build_plan($planet, $proxy, $bbox[0], $bbox[1], $bbox[2], $bbox[3], $maxzoom, $sizeTimeout);
         if ($plan === null) {
             $code = $perr === 'empty' ? 'code:sizing_empty' : 'code:sizing_failed|' . $perr;
             $mark('failed', ['error' => substr($code, 0, 200)]);
@@ -1584,6 +1615,13 @@ function maps_process_php(array $zone, int $timeBox): array {
     }
     $expected = (int)$plan['expected'];
 
+    // Sizing may have spent the whole budget (many leaf fetches through a
+    // slow proxy): yield with the plan on disk instead of dying mid-fetch.
+    // The next slice reloads the fresh plan above and continues fetching.
+    if ($timeBox > 0 && (microtime(true) - $phase0) >= $timeBox) {
+        return ['more', ''];
+    }
+
     // ── Fetch: time-boxed resumable spans stream into the row ──
     $t0 = microtime(true);
     $lastRow = 0.0;
@@ -1602,7 +1640,10 @@ function maps_process_php(array $zone, int $timeBox): array {
         } catch (Throwable) {
         }
     };
-    [$st, $serr] = pmtiles_fetch_due($plan, $tilesPath, $timeBox, $progress);
+    // Fetch gets what sizing left of the budget — fetch_due measures its own
+    // box from here, and sizing time would otherwise be double-spent.
+    $fetchBox = $timeBox > 0 ? max(1, $timeBox - (microtime(true) - $phase0)) : 0;
+    [$st, $serr] = pmtiles_fetch_due($plan, $tilesPath, $fetchBox, $progress);
     if ($st === 'failed') {
         $mark('failed', ['error' => 'code:download_failed|' . substr($serr, 0, 160)]);
         return ['failed', 'code:download_failed'];
@@ -1680,6 +1721,20 @@ function maps_php_poll_slice(): void {
     maps_worker_unlock();
 }
 
+// Wall-clock budget for the queue POST's inline completion: the PHP time
+// limit kills the request uncatchably mid-download, so stop early with
+// progress in the row (poll slices continue it) instead of running to
+// completion. Capped at 25 s even on generous hosts — a queue POST should
+// stay snappy. 0 (no limit: CLI, unlimited hosts) keeps old behavior.
+// Test seam: ini_get is read live so suites can pin max_execution_time.
+function maps_inline_budget(): int {
+    $limit = (int)@ini_get('max_execution_time');
+    if ($limit <= 0) {
+        return 0;
+    }
+    return max(5, min(25, $limit - 5));
+}
+
 // Inline completion for the queue POSTs (PHP engine only): no detached
 // worker can exist on these hosts, so the request that queued the zone
 // finishes it instead of leaving it queued forever. Same kick=0 exemption
@@ -1700,9 +1755,12 @@ function maps_php_inline(int $id): void {
         return;
     }
     maps_worker_touch();
-    @set_time_limit(0);
     try {
-        maps_process_php($row, 0);
+        // Inside the try on purpose: where set_time_limit is disabled the
+        // call throws Error (@ cannot suppress it), and that must land in
+        // the catch below — not fatal out while the worker lock is held.
+        @set_time_limit(0);
+        maps_process_php($row, maps_inline_budget());
     } catch (Throwable $e) {
         log_err('Maps inline: ' . $e->getMessage());
     }

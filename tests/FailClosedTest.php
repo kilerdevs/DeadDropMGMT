@@ -435,6 +435,23 @@ T::throws('unreachable database throws PDOException',
           fn() => db_connect($refused, 'root', '', db_options('', '', '', true)),
           PDOException::class);
 
+// SET time_zone honored where allowed, degraded (never fatal) where the
+// host denies SET — cheap shared panels revoke it, and that must not 503
+// the app.
+T::eq('UTC session applies where allowed', true, db_init_session($db));
+$denyPdo = new class(
+    'mysql:host=' . (getenv('DDMGMT_DB_HOST') ?: '127.0.0.1')
+        . ';port=' . (getenv('DDMGMT_DB_PORT') ?: '3306')
+        . ';dbname=' . TEST_DB_NAME . ';charset=utf8mb4',
+    getenv('DDMGMT_DB_USER') ?: 'root',
+    ''
+) extends PDO {
+    public function exec(string $statement): int|false {
+        throw new PDOException('Access denied; you need (at least one of) the SUPER privilege(s)');
+    }
+};
+T::eq('denied SET degrades to server zone', false, db_init_session($denyPdo));
+
 // Array-shaped request input fails into defaults, never TypeError — and the
 // coverage floor counts these arms while HTTP suites run where pcov cannot
 // see, so both bag readers and both CSRF guards are pinned here in-process.

@@ -2,6 +2,7 @@ config.php
 logs/
 uploads/
 cache/osm_tiles/
+cache/sessions/
 data/maps/
 tiles/*.pmtiles
 tiles/*.part

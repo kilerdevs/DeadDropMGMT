@@ -163,6 +163,15 @@ T::ok('zone add queues', $zid !== null && $zid > 0);
 T::eq('bad name code', 'code:bad_name', maps_zone_add('', 20.85, 52.05, 21.30, 52.40, 14, false)[1]);
 T::eq('bad zoom code', 'code:bad_zoom', maps_zone_add('x', 20.85, 52.05, 21.30, 52.40, 13, false)[1]);
 T::eq('unordered add code', 'code:unordered', maps_zone_add('x', 21.30, 52.05, 20.85, 52.40, 14, false)[1]);
+// Covering-count guard: small bboxes count exactly, continent-scale trips
+// the cap without building the million-entry id array.
+$smallIds = pmtiles_covering_ids(20.85, 52.05, 21.30, 52.40, 14);
+T::eq('covering count matches the id array', count($smallIds), pmtiles_covering_count(20.85, 52.05, 21.30, 52.40, 14));
+T::ok('whole world at z15 exceeds the cap', pmtiles_covering_count(-180.0, -85.0, 180.0, 85.0, 15) > PMTILES_COVERING_MAX);
+[$bigId, $bigErr] = maps_zone_add('P2 Too Big', -180.0, -85.0, 180.0, 85.0, 15, false);
+T::eq('oversized zone rejected', null, $bigId);
+T::ok('oversized zone names the count', str_starts_with($bigErr, 'code:too_big|'));
+T::ok('too_big renders a message, not a code', !str_contains(maps_zone_error_text($bigErr), 'code:'));
 $names = array_column(maps_zone_list(), 'name');
 T::ok('zone listed', in_array('P2 Test Zone', $names, true));
 T::eq('queued zone not ready', [], maps_ready_zones());

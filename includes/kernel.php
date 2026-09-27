@@ -45,6 +45,7 @@ foreach ([
     'cleanup',
     'wipe',
     'version',
+    'setup_check',
 ] as $service) {
     require_once __DIR__ . '/' . $service . '.php';
 }

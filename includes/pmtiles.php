@@ -37,6 +37,11 @@ const PMTILES_MERGE_GAP = 65536;
 const PMTILES_SPAN_MAX = 8388608;
 // Planet metadata is JSON kilobytes; anything past the cap is corruption.
 const PMTILES_META_MAX = 1048576;
+// Covering-set ceiling: a bbox × zoom that resolves to more tiles would OOM
+// the plan builder (covering ids, entries, plan JSON all scale with it) on
+// small hosts long before the disk check matters. A metro area at z15 is a
+// few thousand tiles; the cap is ~100× that.
+const PMTILES_COVERING_MAX = 250000;
 
 /** Little-endian uint64 of the 8 bytes at $off. */
 function pmtiles_u64(string $b, int $off): int {
@@ -138,6 +143,23 @@ function pmtiles_lonlat_to_xy(float $lon, float $lat, int $z): array {
     $m = log(tan(deg2rad($lat)) + 1.0 / cos(deg2rad($lat)));
     $y = (int)floor((1.0 - $m / M_PI) / 2.0 * $n);
     return [max(0, min($n - 1, $x)), max(0, min($n - 1, $y))];
+}
+
+/** Tile COUNT from z0..maxzoom covering the bbox, without building the id
+ * array: the OOM guard for covering_ids / plan JSON on small hosts. Stops
+ * counting past PMTILES_COVERING_MAX (exactness past the cap is pointless).
+ */
+function pmtiles_covering_count(float $minLon, float $minLat, float $maxLon, float $maxLat, int $maxzoom): int {
+    $total = 0;
+    for ($z = 0; $z <= $maxzoom; $z++) {
+        [$x0, $y0] = pmtiles_lonlat_to_xy($minLon, $maxLat, $z);
+        [$x1, $y1] = pmtiles_lonlat_to_xy($maxLon, $minLat, $z);
+        $total += (abs($x1 - $x0) + 1) * (abs($y1 - $y0) + 1);
+        if ($total > PMTILES_COVERING_MAX) {
+            return $total;
+        }
+    }
+    return $total;
 }
 
 /** Every tile id from z0..maxzoom covering the bbox, ascending, deduplicated. @return list<int> */
@@ -264,10 +286,13 @@ function pmtiles_transport_ok(): bool {
 
 /**
  * Walk the planet directories for the bbox tiles.
+ * $timeout bounds each directory fetch: under a web-request budget the
+ * caller passes what remains of it, so one hung peer cannot eat the whole
+ * PHP time limit in a single range request.
  * @return array{?array,string} [plan-or-null, error]
  */
-function pmtiles_build_plan(string $url, ?string $proxy, float $minLon, float $minLat, float $maxLon, float $maxLat, int $maxzoom): array {
-    [$hRaw, $err] = pmtiles_http_range($url, 0, PMTILES_HEADER_LEN, $proxy, 60);
+function pmtiles_build_plan(string $url, ?string $proxy, float $minLon, float $minLat, float $maxLon, float $maxLat, int $maxzoom, int $timeout = 60): array {
+    [$hRaw, $err] = pmtiles_http_range($url, 0, PMTILES_HEADER_LEN, $proxy, $timeout);
     if ($hRaw === null) {
         return [null, 'header: ' . $err];
     }
@@ -275,7 +300,7 @@ function pmtiles_build_plan(string $url, ?string $proxy, float $minLon, float $m
     if ($hdr === null) {
         return [null, 'bad header'];
     }
-    [$rootRaw, $err] = pmtiles_http_range($url, $hdr['rootOff'], $hdr['rootLen'], $proxy, 60);
+    [$rootRaw, $err] = pmtiles_http_range($url, $hdr['rootOff'], $hdr['rootLen'], $proxy, $timeout);
     if ($rootRaw === null) {
         return [null, 'root directory: ' . $err];
     }
@@ -288,21 +313,21 @@ function pmtiles_build_plan(string $url, ?string $proxy, float $minLon, float $m
         if ($hdr['metaLen'] > PMTILES_META_MAX) {
             return [null, 'metadata too large'];
         }
-        [$meta, $err] = pmtiles_http_range($url, $hdr['metaOff'], $hdr['metaLen'], $proxy, 60);
+        [$meta, $err] = pmtiles_http_range($url, $hdr['metaOff'], $hdr['metaLen'], $proxy, $timeout);
         if ($meta === null) {
             return [null, 'metadata: ' . $err];
         }
     }
     $leaves = [];
     $leafErr = '';
-    $fetchLeaf = static function (int $off, int $len) use ($url, $proxy, $hdr, &$leaves, &$leafErr): ?array {
+    $fetchLeaf = static function (int $off, int $len) use ($url, $proxy, $hdr, $timeout, &$leaves, &$leafErr): ?array {
         $key = $off . ':' . $len;
         if (!array_key_exists($key, $leaves)) {
             if ($len <= 0 || $len > PMTILES_SPAN_MAX) {
                 $leafErr = 'bad leaf directory';
                 return null;
             }
-            [$leafRaw, $err] = pmtiles_http_range($url, $hdr['leafOff'] + $off, $len, $proxy, 60);
+            [$leafRaw, $err] = pmtiles_http_range($url, $hdr['leafOff'] + $off, $len, $proxy, $timeout);
             if ($leafRaw === null) {
                 $leafErr = 'leaf directory: ' . $err;
                 return null;
@@ -316,8 +341,14 @@ function pmtiles_build_plan(string $url, ?string $proxy, float $minLon, float $m
         }
         return $leaves[$key];
     };
-    $wanted = pmtiles_covering_ids($minLon, $minLat, $maxLon, $maxLat, $maxzoom);
-    $entries = [];
+    // Fail fast on continent-scale requests: covering_ids + entries + plan
+    // JSON all scale with the tile count, and would OOM a small host long
+    // before the disk check matters. maps_zone_add() rejects these up front;
+    // this guards old rows and direct callers too.
+    if (pmtiles_covering_count($minLon, $minLat, $maxLon, $maxLat, $maxzoom) > PMTILES_COVERING_MAX) {
+        return [null, 'too many tiles'];
+    }
+    $wanted = pmtiles_covering_ids($minLon, $minLat, $maxLon, $maxLat, $maxzoom);    $entries = [];
     foreach ($wanted as $id) {
         $e = pmtiles_lookup_id($root, $fetchLeaf, $id);
         if ($e === null) {
@@ -375,10 +406,13 @@ function pmtiles_build_plan(string $url, ?string $proxy, float $minLon, float $m
  * whole (a failed span appends nothing), so the file size is always a span
  * boundary and a later call continues where this one stopped.
  * Progress callback receives (fetchedBytes, expectedBytes) after each span.
+ * $timeBox bounds the whole call AND each span's socket timeout: without the
+ * second bound one hung 8 MB span (default 120 s socket timeout) would sail
+ * past both the budget and a 30 s PHP limit mid-request, uncatchably.
  * @param array{url:string,proxy:?string,bbox:list<float>,maxzoom:int,tileType:int,tileComp:int,outMaxZoom:int,meta:string,entries:list<array{int,int,int}>,spans:list<array{int,int}>,expected:int} $plan
  * @return array{string,string,int} [done|more|failed, error, fetchedBytes]
  */
-function pmtiles_fetch_due(array $plan, string $tilesPath, int $timeBox, ?callable $progress = null): array {
+function pmtiles_fetch_due(array $plan, string $tilesPath, float $timeBox, ?callable $progress = null): array {
     $have = is_file($tilesPath) ? (int)@filesize($tilesPath) : 0;
     $cumulative = 0;
     $spans = $plan['spans'];
@@ -399,7 +433,12 @@ function pmtiles_fetch_due(array $plan, string $tilesPath, int $timeBox, ?callab
             $status = 'more';
             break;
         }
-        [$body, $err] = pmtiles_http_range((string)$plan['url'], $s, $spanLen, $plan['proxy']);
+        // Bound THIS span's socket wait to what remains of the budget (floor
+        // 5 s: below that nothing useful transfers anyway).
+        $spanTimeout = $timeBox > 0
+            ? max(5, min(120, (int)ceil($timeBox - (microtime(true) - $start))))
+            : 120;
+        [$body, $err] = pmtiles_http_range((string)$plan['url'], $s, $spanLen, $plan['proxy'], $spanTimeout);
         if ($body === null) {
             $status = 'failed';
             break;

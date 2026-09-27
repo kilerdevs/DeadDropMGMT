@@ -11,6 +11,10 @@ if (PHP_SAPI !== 'cli') {
 // Loads setup.sql into the isolated test database (DDMGMT_DB_NAME, default
 // deaddrops_test). setup.sql hardcodes "deaddrops", so the token is replaced
 // with the target database name before execution. Idempotent — safe to rerun.
+// Statement splitting and draining live in includes/setup_check.php (shared
+// with the web installer); this loader only adds the test-database rewrite.
+
+require_once __DIR__ . '/../includes/setup_check.php';
 
 $name = getenv('DDMGMT_TEST_DB') ?: 'deaddrops_test';
 $host = getenv('DDMGMT_DB_HOST') ?: '127.0.0.1';
@@ -43,16 +47,9 @@ try {
 }
 
 // Statements in setup.sql are ;-terminated with no DELIMITER blocks or
-// semicolons inside string literals, so a plain split is safe.
-foreach (array_filter(array_map('trim', explode(';', $sql))) as $stmt) {
-    // Drop comment-only fragments left over after splitting
-    $body = implode("\n", array_filter(
-        explode("\n", $stmt),
-        static fn(string $l): bool => trim($l) !== '' && !str_starts_with(ltrim($l), '--')
-    ));
-    if ($body === '') {
-        continue;
-    }
+// semicolons inside string literals, so the shared plain split is safe.
+$toRun = [];
+foreach (schema_statements($sql, true) as $body) {
     // A least-privilege app user (e.g. the Docker stack's deaddrop) cannot run
     // CREATE DATABASE even with IF NOT EXISTS — skip it when the target
     // already exists; as root (fresh installs) it still runs normally.
@@ -64,18 +61,15 @@ foreach (array_filter(array_map('trim', explode(';', $sql))) as $stmt) {
             continue;
         }
     }
-    try {
-        // query() + full result-set draining, because setup.sql's
-        // PREPARE/EXECUTE guard blocks leave live unbuffered results behind
-        $stmt = $pdo->query($body);
-        if ($stmt instanceof PDOStatement) {
-            while ($stmt->nextRowset()) { /* drain */ }
-            $stmt->closeCursor();
-        }
-    } catch (PDOException $e) {
-        fwrite(STDERR, "Schema statement failed: {$e->getMessage()}\n--\n$body\n--\n");
-        exit(1);
-    }
+    $toRun[] = $body;
+}
+// The shared splitter strips USE (production connects with dbname already);
+// the loader connects dbname-less so it can CREATE the database first, and
+// therefore selects it explicitly here instead.
+$pdo->exec('USE `' . str_replace('`', '``', $name) . '`');
+$res = schema_apply($pdo, $toRun);if ($res['error'] !== '') {
+    fwrite(STDERR, "Schema statement failed: {$res['error']}\n--\n{$res['statement']}\n--\n");
+    exit(1);
 }
 
 echo "Schema loaded into `$name`\n";

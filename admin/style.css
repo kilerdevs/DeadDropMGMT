@@ -604,6 +604,14 @@ tbody td:last-child { padding-right: 0; }
 .badge.delivered              { color: var(--accent); }
 .badge.delivered::before      { background: var(--accent); }
 
+/* Setup-check statuses: the bar carries the severity, the word names it. */
+.badge.st-ok                  { color: #4caf50; }
+.badge.st-ok::before          { background: #4caf50; }
+.badge.st-warn                { color: #e0a100; }
+.badge.st-warn::before        { background: #e0a100; }
+.badge.st-fail                { color: var(--error); }
+.badge.st-fail::before        { background: var(--error); }
+
 /* ── Order row action buttons ─────────────────────────────────────────────── */
 
 .order-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
