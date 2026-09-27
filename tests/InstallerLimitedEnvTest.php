@@ -139,11 +139,15 @@ if ($server !== null) {
         @proc_close($server);
     });
     file_put_contents($work . '/ping.txt', 'pong');
+    // Pinned to the socket engine: proves the ported transport with no curl
+    // involved at all (deterministic even where curl is compiled static).
     $noNet = array_merge(['-n'], ['-d', 'allow_url_fopen=0']);
-    [$code, $sock] = ixl_run($work, [], ['action' => 'fetch', 'url' => 'http://127.0.0.1:' . $stubPort . '/ping.txt', 'proxy_type' => 'none'], $noNet);
+    [$code, $sock] = ixl_run($work, [], ['action' => 'fetch', 'url' => 'http://127.0.0.1:' . $stubPort . '/ping.txt', 'proxy_type' => 'none', 'transport' => 'sockets'], $noNet);
     T::eq('sockets-only fetch exits 0', 0, $code);
     T::eq('sockets-only fetch 200 + 4 bytes', [200, 4], [$sock['code'] ?? 0, $sock['bytes'] ?? -1]);
     T::eq('transport used is the socket engine', 'sockets', $sock['via'] ?? null);
+    [$code, $bogus] = ixl_run($work, [], ['action' => 'fetch', 'url' => 'http://127.0.0.1:' . $stubPort . '/ping.txt', 'proxy_type' => 'none', 'transport' => 'pigeon'], $noNet);
+    T::eq('bogus transport pin refused', false, $bogus['ok'] ?? true);
 } else {
     T::ok('SKIP sockets-engine proof (no local stub server here)', true);
 }

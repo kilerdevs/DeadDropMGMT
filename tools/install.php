@@ -66,25 +66,26 @@ function pq(string $v): string { // php-quote for config patching
 
 // ── HTTP fetch with optional proxy + manual redirect loop ────────────────────
 // Transports tried in order, first success wins (every hop re-tried on the
-// next transport when one fails, so allow_url_fopen=off without cURL still
-// works via the bundled socket engine):
+// next transport when one fails, so a host without cURL still downloads via
+// the bundled socket engine):
 //   curl    — everything incl. SOCKS5 with remote DNS (fast path)
-//   streams — direct http/https, or plain-HTTP via an HTTP proxy
+//   streams — local files only (test hooks)
 //   sockets — proxy.php's no-cURL engine (raw sockets: CONNECT tunnel,
 //             SOCKS4/5/5h with remote DNS, chunked decoding), ported below
 // Returns [status, headers, body, 'via' => transport] or ['error' => msg].
 function transport_order(string $url, array $proxy): array {
     $order = [];
     if (function_exists('curl_init')) $order[] = 'curl';
-    $https = str_starts_with($url, 'https:');
-    if (filter_var(eini('allow_url_fopen'), FILTER_VALIDATE_BOOLEAN)
-        && ($proxy['type'] === 'none' || ($proxy['type'] === 'http' && !$https))) {
+    // streams serves local files only (see stream_hop); all HTTP(S) rides
+    // curl or the socket engine.
+    if (str_starts_with($url, 'file://') && $proxy['type'] === 'none'
+        && filter_var(eini('allow_url_fopen'), FILTER_VALIDATE_BOOLEAN)) {
         $order[] = 'streams';
     }
     if (function_exists('stream_socket_client')) $order[] = 'sockets';
     return $order;
 }
-function http_fetch(string $url, array $proxy, string $method = 'GET'): array {
+function http_fetch(string $url, array $proxy, string $method = 'GET', ?string $only = null): array {
     // Local files never travel a proxy — routing one there would either fail
     // or, worse, silently succeed direct (cURL ignores proxies for file://)
     // and produce false verdicts in judge/discover test hooks.
@@ -92,7 +93,13 @@ function http_fetch(string $url, array $proxy, string $method = 'GET'): array {
         return ['error' => 'proxies do not apply to file:// URLs'];
     }
     $order = transport_order($url, $proxy);
-    if ($order === []) return ['error' => 'no HTTP transport on this host (need cURL, allow_url_fopen, or sockets)'];
+    if ($only !== null) {
+        // Diagnostics pin (fetch action): force one engine to prove it.
+        if (!in_array($only, ['curl', 'streams', 'sockets'], true)) return ['error' => 'unknown transport'];
+        if (!in_array($only, $order, true)) return ['error' => $only . ' unusable here (missing extension or wrong URL kind)'];
+        $order = [$only];
+    }
+    if ($order === []) return ['error' => 'no HTTP transport on this host (need cURL or sockets)'];
     $last = 'unreachable';
     foreach ($order as $t) {
         $u = $url;
@@ -139,13 +146,15 @@ function curl_hop(string $url, array $proxy, string $method): array {
     if ($proxy['type'] === 'http') {
         curl_setopt($ch, CURLOPT_PROXY, $proxy['host'] . ':' . $proxy['port']);
         curl_setopt($ch, CURLOPT_PROXYTYPE, CURLPROXY_HTTP);
-        // Explicit route always wins: without this, a host-level NO_PROXY
-        // would silently bypass the pool proxy (fail-open leak).
-        curl_setopt($ch, CURLOPT_NOPROXY, '');
+        // Never-matching bypass list: the explicit route always wins. Without
+        // this a host-level NO_PROXY (common in docker) silently bypasses the
+        // pool proxy — a fail-open leak. '.invalid' can never suffix-match a
+        // real target ('*' would mean the opposite: proxy off everywhere).
+        curl_setopt($ch, CURLOPT_NOPROXY, '.invalid');
     } elseif ($proxy['type'] === 'socks5') {
         curl_setopt($ch, CURLOPT_PROXY, $proxy['host'] . ':' . $proxy['port']);
         curl_setopt($ch, CURLOPT_PROXYTYPE, CURLPROXY_SOCKS5_HOSTNAME); // remote DNS: no leak
-        curl_setopt($ch, CURLOPT_NOPROXY, '');
+        curl_setopt($ch, CURLOPT_NOPROXY, '.invalid');
     }
     if ($proxy['user'] !== '') curl_setopt($ch, CURLOPT_PROXYUSERPWD, $proxy['user'] . ':' . $proxy['pass']);
     $raw = curl_exec($ch);
@@ -156,28 +165,16 @@ function curl_hop(string $url, array $proxy, string $method): array {
     return [$code, hdrs_parse(substr($raw, 0, $hsz)), substr($raw, $hsz)];
 }
 function stream_hop(string $url, array $proxy, string $method): array {
-    if ($proxy['type'] === 'socks5') return ['error' => 'SOCKS5 over plain streams unsupported — trying sockets'];
-    if ($proxy['type'] === 'http' && str_starts_with($url, 'https:'))
-        return ['error' => 'HTTPS via HTTP proxy over plain streams unsupported — trying sockets'];
-    $h = ['User-Agent: DeadDropMGMT-installer/' . INST_VERSION, 'Accept: */*', 'Connection: close'];
-    $opt = ['http' => ['method' => $method, 'header' => implode("\r\n", $h), 'timeout' => 25,
-        'ignore_errors' => true, 'follow_location' => 0, 'protocol_version' => 1.1]];
-    if ($proxy['type'] === 'http') {
-        $opt['http']['proxy'] = 'tcp://' . $proxy['host'] . ':' . $proxy['port'];
-        $opt['http']['request_fulluri'] = true;
-        if ($proxy['user'] !== '') $opt['http']['header'] .= "\r\nProxy-Authorization: Basic " . base64_encode($proxy['user'] . ':' . $proxy['pass']);
-    }
-    $ctx = stream_context_create($opt);
-    $body = @file_get_contents($url, false, $ctx);
-    if ($body === false) return ['error' => 'connection failed (DNS / firewall / allow_url_fopen?)'];
-    if (empty($http_response_header)) {
-        // Non-HTTP wrappers (file://) have no status line — a body means success.
-        return str_starts_with($url, 'file://') ? [200, [], (string)$body] : ['error' => 'empty response (proxy hung up?)'];
-    }
-    $code = 0;
-    if (preg_match('#HTTP/\S+\s+(\d+)#', (string)$http_response_header[0], $m)) $code = (int)$m[1];
-    if ($method === 'HEAD') $body = '';
-    return [$code, hdrs_parse(implode("\r\n", $http_response_header)), (string)$body];
+    // Local files only. HTTP(S) always rides curl or the socket engine now:
+    // file_get_contents cannot report status codes without the
+    // $http_response_header variable, which PHP 8.5 deprecated (any read of
+    // it warns — and a warning byte breaks the JSON contract). The socket
+    // engine parses heads itself, so nothing is lost.
+    if ($proxy['type'] !== 'none') return ['error' => 'proxies do not apply to file:// URLs'];
+    if (!str_starts_with($url, 'file://')) return ['error' => 'plain-streams HTTP retired — trying next transport'];
+    $body = @file_get_contents($url);
+    if ($body === false) return ['error' => 'local file unreadable'];
+    return [200, [], (string)$body];
 }
 
 // ── No-cURL socket engine (ported from includes/proxy.php) ───────────────────
@@ -437,12 +434,14 @@ function ix_sock_hop(string $url, array $proxy, string $method): array {
                 $buf = substr($buf, $size + 2);
             }
         } else {
-            $want = isset($fields['content-length']) && preg_match('/^\d+$/', $fields['content-length']) === 1 ? (int)$fields['content-length'] : null;
+            // Expected length, or -1 for close-delimited (int sentinel, not
+            // null — keeps the checks below branch-simple for static analysis).
+            $want = isset($fields['content-length']) && preg_match('/^\d+$/', $fields['content-length']) === 1 ? (int)$fields['content-length'] : -1;
             $buf = $rest;
             while (true) {
                 if ($buf !== '') {
                     $take = $buf;
-                    if ($want !== null) {
+                    if ($want >= 0) {
                         $need = $want - strlen($body);
                         if ($need <= 0) break;
                         $take = substr($buf, 0, $need);
@@ -450,27 +449,27 @@ function ix_sock_hop(string $url, array $proxy, string $method): array {
                     $body .= $take;
                     if (strlen($body) > IX_MAX_BODY) { $close(); return ['error' => 'body exceeds 16 MB cap']; }
                     $buf = substr($buf, strlen($take));
-                    if ($want !== null && strlen($body) >= $want) break;
+                    if ($want >= 0 && strlen($body) >= $want) break;
                 }
-                if ($want !== null && strlen($body) >= $want) break;
+                if ($want >= 0 && strlen($body) >= $want) break;
                 $rset = [$s]; $w = null; $e = null;
                 $left = $deadline - microtime(true);
-                if ($left <= 0) { $close(); return $want === null ? [$code, $fields, $body] : ['error' => 'body shortfall (declared ' . $want . ', got ' . strlen($body) . ')']; }
+                if ($left <= 0) { $close(); return $want < 0 ? [$code, $fields, $body] : ['error' => 'body shortfall (declared ' . $want . ', got ' . strlen($body) . ')']; }
                 $n = @stream_select($rset, $w, $e, (int)$left, (int)(($left - (int)$left) * 1000000));
                 if ($n !== 1) {
                     $close();
-                    if ($want === null) return [$code, $fields, $body]; // close-delimited: EOF ends it
+                    if ($want < 0) return [$code, $fields, $body]; // close-delimited: EOF ends it
                     return ['error' => 'body shortfall (declared ' . $want . ', got ' . strlen($body) . ')'];
                 }
                 $chunk = @fread($s, 65536);
                 if (!is_string($chunk) || $chunk === '') {
                     $close();
-                    if ($want === null) return [$code, $fields, $body];
+                    if ($want < 0) return [$code, $fields, $body];
                     return ['error' => 'body shortfall (declared ' . $want . ', got ' . strlen($body) . ')'];
                 }
                 $buf .= $chunk;
             }
-            if (is_int($want) && strlen($body) !== $want) { $close(); return ['error' => 'body length mismatch']; }
+            if ($want >= 0 && strlen($body) !== $want) { $close(); return ['error' => 'body length mismatch']; }
         }
         $close();
         return [$code, $fields, $body];
@@ -685,12 +684,13 @@ if ($action !== '') {
     }
     // Probe any URL through any proxy: powers the pool's Test buttons (and
     // the test-suite). Reports transport used, status, size, latency.
+    // Optional transport=curl|streams|sockets pins one engine (diagnostics).
     if ($action === 'fetch') {
         $proxy = read_proxy();
         $url = trim((string)($_POST['url'] ?? ''));
         if (!preg_match('#^https?://#i', $url)) jer('not an http(s) URL');
         $t0 = microtime(true);
-        $r = http_fetch($url, $proxy);
+        $r = http_fetch($url, $proxy, 'GET', isset($_POST['transport']) ? (string)$_POST['transport'] : null);
         $ms = (int)round((microtime(true) - $t0) * 1000);
         if (isset($r['error'])) jout(['ok' => false, 'error' => $r['error'], 'ms' => $ms, 'via' => $r['via'] ?? '?']);
         jout(['ok' => true, 'code' => $r[0], 'bytes' => strlen($r[2]), 'ms' => $ms, 'via' => $r['via'] ?? '?']);
