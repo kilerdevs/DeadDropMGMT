@@ -617,12 +617,15 @@ $aliveS = @fsockopen('127.0.0.1', $socksPort, $enS, $esS, 2);
 $aliveO = @fsockopen('127.0.0.1', $originPort, $enO, $esO, 2);
 fwrite(STDERR, 'DBG613 code=' . $dbg['code'] . ' bytes=' . $dbg['bytes']
     . ' trunc=' . ($dbg['truncated'] ? '1' : '0') . ' bodylen=' . strlen($dbg['body'])
+    . ' expSha=' . hash('sha256', $BODY) . ' dbgSha=' . hash('sha256', $dbg['body'])
     . ' socksAlive=' . (is_resource($aliveS) ? 'y' : "n($enS/$esS)")
     . ' originAlive=' . (is_resource($aliveO) ? 'y' : "n($enO/$esO)")
     . ' sockslog=' . substr(str_replace("\n", '|', (string)@file_get_contents($socksLog)), -300) . "\n");
 if (is_resource($aliveS)) fclose($aliveS);
 if (is_resource($aliveO)) fclose($aliveO);
-T::eq('no-cURL SOCKS fetch works', $BODY, osm_fetch_via($originBase . '/tile', $socksPx, 10));
+$fetch613 = osm_fetch_via($originBase . '/tile', $socksPx, 10);
+fwrite(STDERR, 'DBG613B fetch613=' . (is_string($fetch613) ? 'str len=' . strlen($fetch613) . ' sha=' . hash('sha256', $fetch613) : gettype($fetch613)) . ' curlNow=' . (host_has_curl() ? '1' : '0') . "\n");
+T::eq('no-cURL SOCKS fetch works', $BODY, $fetch613);
 T::ok('no-cURL routing stays honoured', osm_proxy_enabled() === (get_setting('osm_proxy_enabled', '1') === '1'));
 host_override(null, true);
 
