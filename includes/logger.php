@@ -401,6 +401,7 @@ function log_recent_entries(int $limit = 200, ?string $path = null): array {
 
 /** Last $maxLines lines within the last $maxBytes. @return array{0:list<string>,1:bool} [lines oldest-first, cut] */
 function log_tail_lines(string $path, int $maxBytes = 262144, int $maxLines = 500): array {
+    clearstatcache(true, $path); // a stale cached size (PHP 8.2) would read an appended log as empty
     $size = @filesize($path);
     if ($size === false || $size === 0) {
         return [[], false];
