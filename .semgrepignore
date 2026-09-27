@@ -1,0 +1,4 @@
+# Generated files that must not be scanned: they are byte-derived from
+# reviewed sources (which ARE scanned), and minification collapses code
+# into single-line taint artifacts that fail rules the source passes.
+tools/install.min.php
