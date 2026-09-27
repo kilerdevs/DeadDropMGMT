@@ -439,12 +439,16 @@ T::throws('unreachable database throws PDOException',
 // host denies SET — cheap shared panels revoke it, and that must not 503
 // the app.
 T::eq('UTC session applies where allowed', true, db_init_session($db));
+// Credentials come from the environment like everywhere else (CI's database
+// has a root password, local dev does not) — otherwise this connection
+// itself fails and the test proves nothing about the SET fallback.
+$denyPass = getenv('DDMGMT_DB_PASS');
 $denyPdo = new class(
     'mysql:host=' . (getenv('DDMGMT_DB_HOST') ?: '127.0.0.1')
         . ';port=' . (getenv('DDMGMT_DB_PORT') ?: '3306')
         . ';dbname=' . TEST_DB_NAME . ';charset=utf8mb4',
     getenv('DDMGMT_DB_USER') ?: 'root',
-    ''
+    $denyPass === false ? '' : $denyPass
 ) extends PDO {
     public function exec(string $statement): int|false {
         throw new PDOException('Access denied; you need (at least one of) the SUPER privilege(s)');
