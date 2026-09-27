@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # README promises PHP 8.2+ (8.0/8.1 are EOL — testing them would bless
     # unpatched runtimes). 8.5 is in the matrix because the shipped Docker
     # images already run it — the production runtime must never go untested.
@@ -74,7 +74,7 @@ jobs:
   # Same suite against MySQL 8 — the app claims MySQL/MariaDB support, and
   # setup.sql must stay portable (guarded ALTERs, no engine-only syntax).
   tests-mysql:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     name: tests (MySQL 8)
     services:
       mysql:
@@ -119,7 +119,7 @@ jobs:
   # open and any regression burns the suite's own budget math. TZ is honored
   # because the runner image leaves date.timezone unset (UTC default).
   tests-tz:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     name: tests (Europe/Warsaw TZ)
     services:
       mariadb:
@@ -162,7 +162,7 @@ jobs:
   # version- AND hash-pinned: a compromised release must not analyse — or
   # worse, pass — this repo's code.
   phpstan:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     name: PHPStan
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -190,7 +190,7 @@ jobs:
   # Tool is version- AND hash-pinned like PHPStan: a compromised release
   # must not rewrite — or wave through — this repo's code.
   style:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     name: Code style
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -216,7 +216,7 @@ jobs:
   # a regression is a failed build, not a quieter number on a report nobody
   # reads. Exact pins live on the command line below.
   coverage:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       mariadb:
         image: mariadb:11
@@ -302,7 +302,7 @@ jobs:
   # because the killer suites are the DB-backed in-process ones; no coverage
   # driver, no Composer tooling — the probe is dependency-free like the app.
   mutation:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     name: Mutation probe (report-only)
     services:
       mariadb:
@@ -356,12 +356,15 @@ jobs:
   # Docker isn't installed on the maintainer's machine — these jobs are the
   # only place the images and compose stacks actually get exercised.
   docker:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       DDMGMT_DB_HOST: db
       DDMGMT_DB_PORT: '3306'
       DDMGMT_DB_USER: deaddrop
       DDMGMT_DB_PASS: deaddrop-db
+      # Keep the pipeline hermetic: no automatic proxy discovery (public list
+      # downloads, probes) while the stacks boot. ProxyHealTest covers it.
+      DDMGMT_PROXY_HEAL: '0'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -486,6 +489,50 @@ jobs:
         if: always()
         run: docker compose down -v
 
+  # Minified web installer: tools/install.min.php is generated, never edited
+  # by hand. After every push this job rebuilds it from tools/install.php and
+  # commits the result back ([skip ci] — no loop). InstallerMinTest's
+  # freshness gate keeps branches honest in between: a stale .min fails the
+  # suite with the rebuild command. Write access is scoped to this job only
+  # (the workflow default above stays read-only); skipped on PRs, where the
+  # token cannot push.
+  installer-min:
+    runs-on: ubuntu-24.04
+    name: Minified installer (rebuild + commit-back)
+    permissions:
+      contents: write
+    if: github.event_name == 'push'
+    concurrency:
+      group: installer-min-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: '8.3'
+
+      - name: Rebuild minified installer
+        run: |
+          php -l tools/install.php
+          php tools/build_installer_min.php | tee min-build.txt
+          php -l tools/install.min.php
+          { echo "### Minified installer"; cat min-build.txt; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Commit back when the source moved
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add tools/install.min.php
+          git diff --cached --quiet && { echo 'in sync — nothing to commit'; exit 0; }
+          git commit -m 'Installer: rebuild minified bundle [skip ci]' \
+            -m 'Why: source moved; CI-regenerated from tools/install.php.'
+          git pull --rebase origin "${{ github.ref_name }}"
+          git push origin "HEAD:${{ github.ref_name }}"
+
   # Real-browser E2E (Playwright/Chromium): the behaviours raw HTTP cannot
   # see — no-JS form paths, inline-handler absence in a live DOM, mid-reveal
   # UI state. Same MariaDB service as the PHP suite; the app boots via
@@ -493,7 +540,7 @@ jobs:
   # deaddrops_e2e database seeded by e2e/global-setup.js, so the PHP and
   # browser harnesses never observe each other's rows.
   e2e:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     name: e2e (Playwright/Chromium)
     services:
       mariadb:
@@ -524,7 +571,7 @@ jobs:
           extensions: pdo_mysql, openssl, gd, fileinfo
 
       - name: Setup Node
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'
           cache: 'npm'

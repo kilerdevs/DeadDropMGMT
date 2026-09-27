@@ -74,6 +74,15 @@ body.login-page {
 
 .shell { display: flex; min-height: 100vh; }
 
+/* The hidden attribute must beat any component's own display rule (the OSM
+   badge and the zones table set display:flex/block and would otherwise show
+   while hidden). */
+[hidden] { display: none !important; }
+
+/* Off-screen clipboard scratch element (admin.js copy fallback). A class,
+   not el.style: style-src has no 'unsafe-inline'. */
+.copy-scratch { position: fixed; opacity: 0; top: 0; left: 0; }
+
 /* Hidden on desktop — mobile media query overrides these */
 .sidebar-toggle,
 .sidebar-backdrop { display: none; }
@@ -425,6 +434,49 @@ button.sidebar-logout {
 }
 .log-line:first-child .log-num { color: #555; }
 
+/* Same column as the settings panel below, so the two align. */
+.host-list { max-width: 600px; margin-inline: auto; margin-bottom: 40px; }
+/* The hosting label heads the centered list above, so it sits in the same
+   column (text stays left-aligned, meeting the rows' left edge). Other
+   .section-label users (analytics, orders, log viewer) head full-width
+   content and keep the full-width label. */
+.host-section-label { max-width: 600px; margin-inline: auto; }
+.host-row {
+    display:        flex;
+    flex-wrap:      wrap;
+    align-items:    baseline;
+    gap:            4px 14px;
+    padding:        10px 0;
+    border-bottom:  1px solid var(--border);
+    font-family:    'IBM Plex Mono', monospace;
+    font-size:      12px;
+}
+.host-label  { color: var(--text); min-width: 190px; }
+.host-status { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; }
+.host-row--ok          .host-status { color: #4caf50; }
+.host-row--limited     .host-status { color: #e0a100; }
+.host-row--unavailable .host-status { color: #f44336; }
+.host-hint   { flex-basis: 100%; color: var(--text-muted); font-size: 11px; line-height: 1.6; }
+
+/* Spacing formerly carried by style="" attributes (blocked by style-src). */
+.maps-add-group { margin-top: 18px; }
+.maps-editor-title { margin-top: 12px; }
+
+.mz-field-error {
+    color:          var(--error);
+    font-size:      11px;
+    letter-spacing: 0.04em;
+    line-height:    1.4;
+}
+input.mz-invalid { border-bottom-color: var(--error) !important; }
+
+.log-ts   { flex-shrink: 0; color: #444; white-space: nowrap; }
+.log-lvl  { flex-shrink: 0; min-width: 44px; font-size: 10px; letter-spacing: 0.08em; color: #666; }
+.log-text { flex: 1 1 auto; min-width: 0; }
+.log-line--error .log-lvl { color: #f44336; }
+.log-line--warn  .log-lvl { color: #e0a100; }
+.log-line--info  .log-lvl { color: #4caf50; }
+
 .log-empty {
     font-family:   'IBM Plex Mono', monospace;
     font-size:     12px;
@@ -552,6 +604,14 @@ tbody td:last-child { padding-right: 0; }
 .badge.delivered              { color: var(--accent); }
 .badge.delivered::before      { background: var(--accent); }
 
+/* Setup-check statuses: the bar carries the severity, the word names it. */
+.badge.st-ok                  { color: #4caf50; }
+.badge.st-ok::before          { background: #4caf50; }
+.badge.st-warn                { color: #e0a100; }
+.badge.st-warn::before        { background: #e0a100; }
+.badge.st-fail                { color: var(--error); }
+.badge.st-fail::before        { background: var(--error); }
+
 /* ── Order row action buttons ─────────────────────────────────────────────── */
 
 .order-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
@@ -638,23 +698,27 @@ input[type="range"]::-moz-range-track { height: 2px; background: var(--border); 
 
 .form-panel { border: 1px solid var(--border); padding: 36px; max-width: 680px; margin-inline: auto; }
 
-/* Viewport-centered panels: `margin-inline: auto` alone centers within
-   .main (the viewport minus the fixed 230px sidebar), so a "centered"
-   panel lands right of the true screen center. The relative offset pulls
-   it left by half the sidebar width. Relative positioning — not transform —
-   so position:fixed descendants (e.g. the settings .save-popup, appended
-   to body) stay viewport-anchored. Desktop only: on mobile the sidebar is
-   an off-canvas drawer and .main already spans the full width. Applies to
-   panels that are direct children of .main. */
+/* Panels center within .main via margin-inline: auto — the same column as
+   the version strip, the hosting list, and every other centered block, so
+   they stay aligned at every viewport width. (A former relative-offset hack
+   pulled panels 115px left toward the viewport center; it only applied to
+   some blocks and broke the column whenever the sidebar width changed.) */
+
+/* ── Viewport-centered settings column ─────────────────────────────────── */
+/* Windows-app behaviour: the settings column sits on the true screen center,
+   not just in the area right of the sidebar. Every centered block carries the
+   same relative nudge — half the 230px sidebar — so the column moves as one
+   and stays aligned with itself. The nudge self-limits to the free side
+   margin, so narrow windows never push the column under the sidebar. At phone
+   widths the sidebar is a drawer and .main already is the viewport, hence the
+   breakpoint (it mirrors the sidebar's own 781px media query). */
 @media (min-width: 781px) {
-    .form-panel,
+    .version-strip,
     .settings-panel,
-    .totp-panel,
-    .centered-panel,
-    .panic-wrap,
-    .users-add-panel {
+    .host-section-label,
+    .host-list {
         position: relative;
-        left: -115px; /* half the desktop sidebar width */
+        left: calc(-1 * min(115px, max(0px, (100% - 600px) / 2)));
     }
 }
 
@@ -930,17 +994,29 @@ input[type="file"]::file-selector-button:hover { background: var(--accent); colo
     left:            50%;
     transform:       translate(-50%, -50%);
     z-index:         9999;
+    /* Any message must fit any screen: it wraps (never one long line), is
+       capped to the viewport width with a gutter on each side, and scrolls
+       rather than growing past the viewport height. */
+    box-sizing:      border-box;
+    width:           max-content;
+    max-width:       92vw;
+    max-width:       min(92vw, 520px);
+    max-height:      80vh;
+    overflow-y:      auto;
     background:      var(--surface);
     border:          1px solid #4caf50;
-    padding:         18px 40px;
+    padding:         14px 24px;
     font-family:     'IBM Plex Mono', monospace;
     font-size:       13px;
-    letter-spacing:  0.06em;
+    letter-spacing:  0.04em;
+    line-height:     1.5;
+    text-align:      center;
+    white-space:     normal;
+    overflow-wrap:   anywhere;
     color:           #4caf50;
     pointer-events:  none;
     opacity:         0;
     transition:      opacity 200ms ease;
-    white-space:     nowrap;
 }
 .save-popup.visible { opacity: 1; }
 .save-popup.error   { border-color: var(--error); color: var(--error); }
@@ -1157,6 +1233,42 @@ h1 {
 
 .settings-panel { max-width: 600px; }
 
+/* Settings → build version line (owners only). */
+.version-strip {
+    display:        flex;
+    flex-wrap:      wrap;
+    align-items:    center;
+    justify-content: center;
+    gap:            6px 12px;
+    max-width:      600px;
+    margin:         0 auto 18px;
+    font-family:    'IBM Plex Mono', monospace;
+    font-size:      12px;
+    color:          var(--text-muted);
+}
+.version-label {
+    font-size:      10px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+}
+.version-value { color: var(--text); font-size: 13px; }
+.version-muted { color: var(--text-muted); }
+.beta-badge {
+    border:         1px solid #e0a100;
+    color:          #e0a100;
+    font-size:      10px;
+    letter-spacing: 0.15em;
+    padding:        1px 6px;
+    cursor:         help;
+}
+.version-commit {
+    line-height:    1.5;
+    white-space:    nowrap;
+    overflow:       hidden;
+    text-overflow:  ellipsis;
+}
+.version-commit code { color: var(--text); }
+
 /* ── OSM proxy pool (settings page) ──────────────────────────────────────── */
 
 .proxies-hint {
@@ -1212,29 +1324,41 @@ h1 {
 /* ── OSM proxy monit (map pages) ─────────────────────────────────────────── */
 
 .osm-monit {
-    position:        fixed;
-    right:           16px;
-    top:             16px;
-    z-index:         5000;
+    /* A caption directly under the map it describes: in the page flow, never
+       an overlay (a floating badge covered the heading and forms, and on
+       failover — several lines — covered more). Small on purpose. */
     display:         flex;
-    align-items:     center;
+    align-items:     flex-start;
     gap:             8px;
+    box-sizing:      border-box;
+    width:           100%;
+    margin:          6px 0 0;
     background:      var(--surface, #111);
     border:          1px solid var(--accent, #4caf50);
-    padding:         10px 16px;
+    padding:         4px 9px;
     font-family:     'IBM Plex Mono', monospace;
-    font-size:       12px;
-    letter-spacing:  0.05em;
+    font-size:       10px;
+    letter-spacing:  0.04em;
+    line-height:     1.5;
     color:           var(--text, #ddd);
-    word-break:      break-all;
-    max-width:       70vw;
-    pointer-events:  none;
-    box-shadow:      0 2px 12px rgba(0, 0, 0, 0.5);
+}
+.osm-monit-body {
+    display:         flex;
+    flex-direction:  column;
+    gap:             1px;
+    min-width:       0;
+    overflow-wrap:   anywhere;
+}
+/* Failover detail: second, muted line — which pool proxies were skipped. */
+.osm-monit-detail {
+    font-size:       9px;
+    color:           var(--text-muted, #888);
 }
 .osm-monit-dot {
     flex:            none;
-    width:           9px;
-    height:          9px;
+    margin-top:      4px;
+    width:           6px;
+    height:          6px;
     border-radius:   50%;
     background:      #4caf50;
     animation:       osm-monit-pulse 2s infinite;
@@ -1480,6 +1604,46 @@ h1 {
 
     .btn.btn-sm { padding: 8px 12px; font-size: 10px; }
 
+    /* ── Settings: structured log rows — message on its own line ────── */
+    .log-line { flex-wrap: wrap; gap: 0 10px; }
+    .log-line .log-text { flex-basis: 100%; padding-left: 46px; }
+
+    /* ── Settings: proxy pool + zones as cards, never a 580px table ──── */
+    /* The blanket table min-width above is for scroll-wrapped data tables.
+       These live directly in .main (a scroll container), so a min-width would
+       drag the whole page sideways. */
+
+    .proxies-table { min-width: 0; }
+
+    .proxies-table:not(.maps-table),
+    .proxies-table:not(.maps-table) tbody { display: block; }
+    .proxies-table:not(.maps-table) thead {
+        position: absolute;
+        width:    1px;
+        height:   1px;
+        overflow: hidden;
+        clip:     rect(0 0 0 0);
+    }
+    .proxies-table:not(.maps-table) tr {
+        display:       flex;
+        flex-wrap:     wrap;
+        align-items:   center;
+        gap:           4px 14px;
+        padding:       10px 0;
+        border-bottom: 1px solid var(--border);
+    }
+    .proxies-table:not(.maps-table) td {
+        padding:       0;
+        border:        0;
+        min-width:     0;
+        font-size:     11px;
+    }
+    .proxies-table:not(.maps-table) .px-url { flex: 1 1 100%; }
+    .proxies-table:not(.maps-table) .px-actions { margin-left: auto; }
+
+    .proxies-toolbar { flex-wrap: wrap; }
+    .proxies-toolbar input[type="text"] { flex: 1 1 100%; }
+
     /* ── Login page ──────────────────────────────────────────────────── */
 
     body.login-page { padding: 28px 16px; }
@@ -1660,6 +1824,71 @@ h1 {
     margin:        8px 0 4px;
     background:    #0d1117;
 }
+/* Zone colours (see MAPS_ZONE_COLORS in includes/maps.php): the same colour marks
+   a zone on the map and in the list. Ready zones are solid, zones still on
+   their way (queued, sizing, downloading, failed) are hollow and dashed. */
+.mz-c0 { --zc: #e6194b; }
+.mz-c1 { --zc: #2e9e44; }
+.mz-c2 { --zc: #f58231; }
+.mz-c3 { --zc: #911eb4; }
+.mz-c4 { --zc: #008b8b; }
+.mz-c5 { --zc: #d81b9a; }
+.mz-c6 { --zc: #9a6324; }
+.mz-c7 { --zc: #8a8f00; }
+.mz-swatch {
+    display:        inline-block;
+    box-sizing:     border-box;
+    width:          10px;
+    height:         10px;
+    margin-right:   8px;
+    vertical-align: baseline;
+    background:     var(--zc, #888);
+    border:         2px solid var(--zc, #888);
+}
+tr[data-status]:not([data-status="ready"]) .mz-swatch {
+    background:     transparent;
+    border-style:   dashed;
+}
+tr[data-status="ready"] .mz-status { color: #4caf50; }
+tr[data-status="queued"] .mz-status,
+tr[data-status="sizing"] .mz-status,
+tr[data-status="downloading"] .mz-status { color: #e0a100; }
+tr[data-status="failed"] .mz-status { color: #f44336; }
+
+/* Draw mode: the finger draws instead of panning or scrolling the page.
+   Leaflet drops its own touch-action when dragging is switched off. */
+.maps-editor-map.mz-drawing {
+    touch-action:        none !important;
+    -webkit-user-select: none;
+    user-select:         none;
+    cursor:              crosshair;
+}
+
+/* Drag handles and the draft rectangle must not start a page scroll under
+   the finger. A class, not el.style: style-src blocks inline style writes. */
+.maps-editor-map .mz-no-touch {
+    touch-action: none !important;
+}
+
+/* Permanent zone-name labels on the already-downloaded rectangles.
+   The frame takes the zone colour via the .mz-cN palette class (--zc),
+   falling back to red when no palette class is present. */
+.leaflet-tooltip.mz-zone-label {
+    background:     rgba(17, 20, 24, 0.85);
+    border:         1px solid var(--zc, #c0392b);
+    border-radius:  0;
+    box-shadow:     none;
+    color:          #eee;
+    font-family:    'IBM Plex Mono', monospace;
+    font-size:      10px;
+    letter-spacing: 0.06em;
+    padding:        2px 6px;
+    max-width:      180px;
+    overflow:       hidden;
+    text-overflow:  ellipsis;
+    white-space:    nowrap;
+}
+.leaflet-tooltip.mz-zone-label::before { display: none; }
 
 .maps-search-row {
     display:   flex;
@@ -1758,3 +1987,17 @@ h1 {
 }
 
 .photo-delete-btn:hover { color: var(--error); }
+
+/* Plain-text map credit (replaces MapLibre's HTML attribution control). */
+.map-attrib {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    z-index: 2;
+    padding: 1px 6px;
+    font-size: 10px;
+    line-height: 1.5;
+    color: #333;
+    background: rgba(255, 255, 255, 0.75);
+    pointer-events: none;
+}

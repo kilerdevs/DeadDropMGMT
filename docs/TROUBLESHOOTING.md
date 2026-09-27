@@ -19,10 +19,13 @@ Symptom → cause → fix. For setup, see the [README](../README.md); for design
 | "Verify integrity" complaints | [Broken line](#verify-integrity-reports-a-broken-line-n) · [Continuity](#verify-integrity-continuity-says-truncated--rotated--none) · [Empty or key unavailable](#verify-integrity-says-nothing-to-verify-or-log-key-unavailable) |
 | Expired orders are still listed | [Expiry](#expired-orders-never-disappear) |
 | Photo upload rejected | [Photos](#photo-upload-rejected) |
+| Shared hosting: 500 after upload, dead maps, zone downloads refused | [Shared hosting](#shared-hosting-500-after-upload-dead-maps-zone-downloads-refused) |
 | Courier forced to the 2FA page | [2FA](#courier-bounced-to-2faphprequired1) |
 | Panic page restarts | [Panic](#panic-page-resets-to-step-1-with-an-error) |
 | First-owner form asks for a token | [Setup token](#first-owner-form-asks-for-a-setup-token) |
 | `config.php` fatals on first login | [config.php](#fresh-configphp-fatals-on-first-login) |
+| Broken links or redirects after moving the app under a sub-path | [Sub-path install](#links-redirects-or-assets-break-under-a-sub-path) |
+| Recipients get "not found" for orders created before an upgrade | [Legacy tokens](#orders-from-before-an-upgrade-are-not-found) |
 | Sensitive paths reachable on nginx/Caddy | [Web server denies](#manual-nginxcaddy-install-serves-sensitive-paths) |
 | Self-hosted map: zones missing, stuck or failing | [Zones missing](#map-zones-vanished-after-a-rebuild) · [Zone download stuck](#a-zone-download-is-stuck-or-failed) · [CLI hash mismatch](#pmtiles-cli-hash-mismatch) |
 | Developing locally | [Local quirks](#local-development-quirks) |
@@ -44,15 +47,15 @@ chmod 750 logs uploads
 ## Rate-limited / logins rejected
 
 Several independent budgets exist: the pickup, admin-login and 2FA-code surfaces each count per IP, login and 2FA also
-count per *account*, and pickup adds a per-session failure bucket. The attempt count (3–10, default 5) and window
+count per *account*, and pickup adds a per-session failure bucket (fixed at 5 failures per window; it does not follow the attempt count). The attempt count (3–10, default 5) and window
 (5–60 min, default 15) live in **Settings → Security**; one switch turns the whole limiter on or off.
 
 Work through the usual causes:
 
 1. **Everyone shares one IP.** Behind a reverse proxy or CDN the app sees the proxy's address for every visitor, so one
    person's failures lock out everybody. Set `DDMGMT_TRUST_PROXY=1` and, if the proxy connects from public addresses,
-   `DDMGMT_TRUSTED_PROXIES` (see the README's proxy-trust section). Only enable it when the proxy overwrites the forwarded
-   headers.
+   `DDMGMT_TRUSTED_PROXIES` (see the README's proxy-trust section). Behind Cloudflare also set
+   `DDMGMT_CLIENT_IP_HEADER=CF-Connecting-IP`; with a proxy that sends only `X-Real-IP`, set it to `X-Real-IP`.
 2. **One account is locked.** Repeated wrong passwords or 2FA codes exhaust that account's own budget even from a fresh IP.
    Wait out the window, or clear the counters:
 
@@ -149,7 +152,11 @@ be caught by design; that is the documented blind spot.
 ## "Verify integrity" says nothing to verify or log key unavailable
 
 - **"Nothing to verify yet — the structured log is empty"**: the check covers the structured log (`logs/app.log`) only, not
-  the error log. A fresh install or a log that was just wiped (panic mode, key rotation archive) has nothing to check.
+  the raw PHP error file (`logs/error.log`). A fresh install or a log that was just wiped (panic mode, key rotation
+  archive) has nothing to check.
+- **"N entries verified" but the panel looked empty** (older versions): Settings used to list only `logs/error.log`.
+  It now shows the structured log first — the entries the check covers, newest 200 — and the raw PHP error log as a
+  second section below it.
 - **"log key unavailable (AES_KEY_HEX invalid)"**: the chain key derives from the master key and the process cannot read a
   valid one — see [AES key](#aes-key-missing-invalid-or-lost). Logging refuses quietly (one warning) rather than writing
   entries it could never verify.
@@ -158,10 +165,34 @@ be caught by design; that is the documented blind spot.
 
 Recipients never see an order past its expiry — lookups, unlocks and receipts treat it as gone the moment `expires_at`
 passes — but the *row* is removed by a sweep. Expiry runs three ways: the Docker image's built-in loop (every 15 minutes),
-real cron (`cron/cleanup.php`, hourly recommended), and pseudo-cron (every page visit checks an hourly stamp — see the
-`last_cleanup` setting). On a quiet site without cron the sweep can lag until the next visit. If rows with a past
+real cron (`cron/cleanup.php`, hourly recommended), and pseudo-cron (every PHP page visit — public, admin or a JSON poll — checks an hourly stamp after sending its
+response; see the `last_cleanup` setting; `DDMGMT_PSEUDO_CRON=0` turns it off). On a quiet site without cron the sweep can lag until the next visit. If rows with a past
 `expires_at` persist for days, run `php cron/cleanup.php` by hand and read its output plus `logs/error.log`. Only
 `delivered` orders expire — `preparing` rows are never swept, even with an `expires_at` set.
+
+## Shared hosting: 500 after upload, dead maps, zone downloads refused
+
+Open **Setup check** (`/admin/setup_check.php`) first: it lists every capability the app needs on this host — PHP version,
+extensions, disabled functions, database reachability and privileges, schema presence, table engines, the AES key, writable
+folders, the session path — with the fix next to each red row, and its *Create / upgrade tables* button installs the schema
+without the `CREATE DATABASE` / `USE` lines that restricted panel users cannot run. **Settings → Hosting** keeps the
+runtime view afterwards.
+
+- **A 500 on every page right after upload:** the host does not allow `Options` in `.htaccess` (`AllowOverride` without
+  `Options`). Delete the `Options -Indexes` line at the top of `.htaccess`; the rest is guarded by `IfModule`.
+- **Maps show nothing (502) for the first minute or two of a new install:** routing through the proxy pool is on by
+  default and the first pool is still being discovered (inline, after a page visit, on hosts without exec). It fills on
+  its own; if this host cannot reach any proxy it switches routing off after three empty attempts and says so in
+  Settings — turn it back on to retry, or leave it off to fetch OSM directly.
+- **"Routing switched off automatically" in Settings:** discovery found nothing three times in a row (outbound
+  connections blocked, or the public lists unreachable from this host). OSM requests now go direct from the server.
+- **"Zone downloads are not available on this host":** the pure-PHP engine needs nothing but outbound HTTPS
+  (the faster `pmtiles` CLI path needs `proc_open` + Linux), so this now only appears when outbound HTTPS
+  itself is unreachable or `data/` is not writable. The default OpenStreetMap provider works without any of it.
+- **Nothing is ever swept:** the pseudo-cron needs page visits; **Settings → Hosting → Scheduled maintenance** shows the
+  last sweep. On a very quiet site add a cron job for `php cron/cleanup.php` (hourly) — or point the host's *webcron* / scheduled-URL
+  feature (or any free uptime monitor) at any public page; the visit itself is the trigger.
+- **Writable folders "unavailable":** `chmod` `logs/ uploads/ cache/ data/ tiles/` so PHP can write (755 or 775 by FTP).
 
 ## Photo upload rejected
 
@@ -194,12 +225,49 @@ The `DUMMY_AUTH_HASH` / `DUMMY_TOTP_SECRET` constants are required — a `config
 Copy `config.php.example` whole instead — it also carries helpers such as `overwrite_and_unlink()`; the dummy values are
 fixed by design, not secrets.
 
+## Orders from before an upgrade are "not found"
+
+**Symptom:** after upgrading, recipients get "not found" for orders that existed before, while newly created orders work.
+`logs/app.log` carries a `legacy_order_tokens` warning from the hourly cleanup.
+
+**Cause:** order tokens are no longer stored in the clear (ADR-019). Older orders still hold theirs in the plaintext
+`order_token` column and have no index yet, so lookups cannot match them.
+
+**Fix:** back up the database, make sure the current `setup.sql` has been loaded (on Docker it is only auto-loaded on a
+database's first boot), then move the tokens across:
+
+```bash
+php tools/migrate_order_tokens.php --dry-run
+php tools/migrate_order_tokens.php
+```
+
+The tool works in one transaction and drops the plaintext columns at the end. Older dumps and backups still contain the
+tokens — delete or re-create them. If you also rotated the AES key before migrating, the tool needs the key that is
+currently deployed; `rotate_aes_key.php` refuses to run while plaintext token columns exist.
+
+---
+
+## Links, redirects or assets break under a sub-path
+
+**Symptom:** the app works at `https://drop.example.org/` but `https://example.org/drop/` shows a login that redirects to
+`/admin/…` on the wrong site, missing styles, or 404s on `/uploads/…`.
+
+**Cause:** every internal URL is root-relative (`/admin/`, `/uploads/`, `Location: /`, plus the `.htaccess` rules and the
+nginx/Caddy configs). There is no base-path setting.
+
+**Fix:** serve the app from the root of its own host — a virtual host or subdomain. On a reverse proxy, forward the whole
+host to the app; do not mount it under a prefix (with or without stripping it).
+
+---
+
 ## Manual nginx/Caddy install serves sensitive paths
 
 `.htaccess` is Apache-only. A non-Docker nginx/Caddy install MUST replicate every `deny all` / `respond 403` from
 `docker/nginx.conf` / `docker/Caddyfile` (`includes/`, `logs/`, `cron/`, `tools/`, `tests/`, `data/`, `config.php`, PHP
 execution under `uploads/`), or those paths are public. When in doubt, probe them: anything other than 403/404 on
-`/includes/db.php` and `/config.php` is a misconfiguration.
+`/includes/db.php` and `/config.php` is a misconfiguration. A ready-made server block is in
+[`docs/nginx-deaddrop.conf`](nginx-deaddrop.conf) (mirrors `.htaccess` exactly — `tiles/` and `uploads/` stay servable
+on purpose); **Setup check** warns when it detects a non-Apache server.
 
 ## Map zones vanished after a rebuild
 
@@ -210,8 +278,10 @@ directories if you rebuild often.
 
 ## A zone download is stuck or failed
 
-- **Nothing is moving:** downloads are done by `cron/maps_sync.php`, never by page visits. The Settings page kicks the worker
-  after queueing when the platform allows; otherwise schedule it (`*/15 * * * * php /path/to/cron/maps_sync.php`).
+- **Nothing is moving:** on the `php` engine (no `proc_open`/CLI) downloads advance from page visits — the queue POST works
+  within its budget and every progress poll donates a slice, so keep the zone's status page open or revisit it. The `cli`
+  engine instead needs `cron/maps_sync.php` (schedule `*/15 * * * * php /path/to/cron/maps_sync.php`); the Settings page
+  kicks the worker after queueing when the platform allows detached jobs.
 - **Failed after a long silence:** the hourly steward marks jobs whose worker died as failed. Use **Retry** on the zone.
 - **Failed immediately in proxy mode:** proxy mode is fail-closed — with no working pool proxy the job fails instead of
   silently going direct. Add proxies, or choose the direct route for that download.

@@ -116,5 +116,114 @@ require_once dirname(__DIR__) . '/includes/audit.php';
 require_once dirname(__DIR__) . '/includes/order_state.php';
 require_once dirname(__DIR__) . '/includes/wipe.php';
 require_once dirname(__DIR__) . '/includes/proxy.php';
+require_once dirname(__DIR__) . '/includes/pmtiles.php';
 require_once dirname(__DIR__) . '/includes/maps.php';
 require_once dirname(__DIR__) . '/includes/cleanup.php';
+require_once dirname(__DIR__) . '/includes/version.php';
+require_once dirname(__DIR__) . '/includes/host.php';
+
+// Suites run their own HTTP servers against a shared database: a sweep firing
+// at the end of some request would delete or touch rows a test just seeded.
+// The pseudo-cron is therefore off unless a suite (PseudoCronTest) turns it on
+// for its own server, which inherits this environment.
+putenv('DDMGMT_PSEUDO_CRON=0');
+
+// No suite may ever start the detached proxy healer: it would run real
+// discovery (list downloads, public-IP lookup, probes) against the network.
+// ProxyHealTest installs its own capturing stand-in.
+osm_proxy_heal_spawner(static fn(): bool => false);
+
+// Cleanup that runs at process exit AND can be run earlier through the returned
+// handle (once only). The coverage runner executes every suite in ONE process,
+// where a shutdown-only cleanup fires after the LAST suite — so state a suite
+// leaves behind (settings, proxies, forced host answers, env vars) leaks into
+// the next one. Call the handle just before `exit(T::done())`.
+// proc_open() with a command STRING runs it through `sh -c`: proc_terminate()
+// then signals only that shell and the real server (php -S, a stub) is
+// orphaned — still bound to its port, where a later suite's requests can land
+// on it. "exec" makes the shell replace itself, so the handle IS the server.
+function t_exec_cmd(string $cmd): string {
+    return DIRECTORY_SEPARATOR === '\\' ? $cmd : 'exec ' . $cmd;
+}
+
+function t_teardown(callable $fn): callable {
+    $done = false;
+    $once = static function () use (&$done, $fn): void {
+        if ($done) {
+            return;
+        }
+        $done = true;
+        $fn();
+    };
+    register_shutdown_function($once);
+    return $once;
+}
+
+// ── Order-token helpers (ADR-019) ─────────────────────────────────────────────
+// The database never holds a token in the clear, so tests cannot INSERT or
+// match one directly. These helpers keep the raw SQL in the suites readable.
+
+/** [token_hmac, token_enc, token_iv] for an INSERT INTO orders (token_hmac, token_enc, token_iv, …). */
+function tk(string $token): array {
+    return array_values(token_columns($token));
+}
+
+/** Does a live row exist for this token? (looked up through the keyed index) */
+function order_row_exists(PDO $db, string $token): bool {
+    $st = $db->prepare('SELECT 1 FROM orders WHERE token_hmac = ? LIMIT 1');
+    $st->execute([token_index($token)]);
+    return (bool)$st->fetchColumn();
+}
+
+/** The order id for a token, or null. */
+function order_id_for(PDO $db, string $token): ?int {
+    $st = $db->prepare('SELECT id FROM orders WHERE token_hmac = ? LIMIT 1');
+    $st->execute([token_index($token)]);
+    $id = $st->fetchColumn();
+    return $id === false ? null : (int)$id;
+}
+
+/** Delete the orders (and their events) for the given tokens. */
+function purge_orders(PDO $db, array $tokens): void {
+    $del  = $db->prepare('DELETE FROM orders WHERE token_hmac = ?');
+    $delE = $db->prepare('DELETE FROM order_events WHERE token_hmac = ?');
+    foreach ($tokens as $t) {
+        $idx = token_index((string)$t);
+        $del->execute([$idx]);
+        $delE->execute([$idx]);
+    }
+}
+
+/**
+ * Delete every order whose token starts with $prefix. Tokens are stored
+ * encrypted, so this opens each display copy — fine for a test database.
+ */
+function purge_orders_like(PDO $db, string $prefix): void {
+    $hits = [];
+    foreach ($db->query('SELECT id, token_hmac, token_enc, token_iv FROM orders')->fetchAll() as $r) {
+        $plain = order_token_plain($r);
+        if ($plain !== null && str_starts_with($plain, $prefix)) {
+            $hits[] = $plain;
+        }
+    }
+    purge_orders($db, $hits);
+}
+
+/** How many orders have a token starting with $prefix (opens each display copy). */
+function orders_count_like(PDO $db, string $prefix): int {
+    $n = 0;
+    foreach ($db->query('SELECT token_enc, token_iv FROM orders')->fetchAll() as $r) {
+        $plain = order_token_plain($r);
+        if ($plain !== null && str_starts_with($plain, $prefix)) {
+            $n++;
+        }
+    }
+    return $n;
+}
+
+/** Number of event rows carrying this token's index. */
+function event_count_for(PDO $db, string $token): int {
+    $st = $db->prepare('SELECT COUNT(*) FROM order_events WHERE token_hmac = ?');
+    $st->execute([token_index($token)]);
+    return (int)$st->fetchColumn();
+}

@@ -46,11 +46,27 @@ function db_options(string $ca, string $cert, string $key, bool $verify): array 
     return $options;
 }
 
+// Session setup, separated so the shared-hosting fallback is unit-testable:
+// cheap panels often revoke SET, which must degrade (the server-default zone
+// stays in effect) instead of taking the whole app down with a 503. Returns
+// true when the session runs UTC, false when the host denied SET.
+function db_init_session(PDO $pdo): bool {
+    try {
+        $pdo->exec("SET time_zone = '+00:00'");
+        return true;
+    } catch (PDOException $e) {
+        // error_log, not app_log: the logger needs the database this is
+        // setting up, so it cannot be used here yet.
+        error_log('DeadDropMGMT: SET time_zone denied (' . $e->getMessage() . '); using server-default zone.');
+        return false;
+    }
+}
+
 // Separate connection step so the failure path is unit-testable without a
 // live database (a refused TCP connect reproduces it exactly).
 function db_connect(string $dsn, string $user, string $pass, array $options): PDO {
     $pdo = new PDO($dsn, $user, $pass, $options);
-    $pdo->exec("SET time_zone = '+00:00'");
+    db_init_session($pdo);
     return $pdo;
 }
 

@@ -8,13 +8,16 @@ name: deaddrop-caddy
 
 services:
   db:
-    image: mariadb:11
+    image: mariadb:13@sha256:d4fdec0510ad498e4f3127da30a99df3745bd6d5e611ae6ac5f76403d9284a8d
     restart: unless-stopped
     environment:
       MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASS:-deaddrop-root}
       MARIADB_DATABASE: deaddrops
       MARIADB_USER: deaddrop
       MARIADB_PASSWORD: ${DB_PASS:-deaddrop-db}
+      # A newer image on an older data volume (e.g. a Dependabot major bump)
+      # backs up the system tables and runs mariadb-upgrade on first start.
+      MARIADB_AUTO_UPGRADE: "1"
     volumes:
       - db-data:/var/lib/mysql
       - ./setup.sql:/docker-entrypoint-initdb.d/setup.sql:ro
@@ -28,6 +31,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.fpm
+      args:
+        DDMGMT_BUILD_INFO: ${DDMGMT_BUILD_INFO:-}
     restart: unless-stopped
     environment:
       DDMGMT_DB_HOST: db
@@ -37,8 +42,12 @@ services:
       DDMGMT_DB_PASS: ${DB_PASS:-deaddrop-db}
       DDMGMT_AES_KEY_HEX: ${DDMGMT_AES_KEY_HEX:-}
       DDMGMT_SETUP_TOKEN: ${DDMGMT_SETUP_TOKEN:-}
+      # Automatic OSM proxy discovery (first-run seeding + replacing failed
+      # proxies) and the page-visit pseudo-cron: 0 turns either one off.
+      DDMGMT_PROXY_HEAL: ${DDMGMT_PROXY_HEAL:-1}
+      DDMGMT_PSEUDO_CRON: ${DDMGMT_PSEUDO_CRON:-1}
     volumes:
-      - app-src:/var/www/html        # populated from the image on first use…
+      - app-src:/var/www/html        # code refreshed from the image on every start…
       - app-uploads:/var/www/html/uploads
       - app-logs:/var/www/html/logs
       - app-cache:/var/www/html/cache
@@ -48,7 +57,7 @@ services:
         condition: service_healthy
 
   web:
-    image: caddy:2-alpine
+    image: caddy:2-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
     restart: unless-stopped
     ports:
       - "${APP_PORT:-2137}:80"
@@ -58,6 +67,7 @@ services:
       - caddy-data:/data
       - caddy-config:/config-caddy
       - app-src:/var/www/html:ro     # …shared from fpm for static files
+      - app-uploads:/var/www/html/uploads:ro  # photos live in their own volume
     depends_on:
       - fpm
 

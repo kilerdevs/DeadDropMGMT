@@ -163,6 +163,15 @@ T::ok('zone add queues', $zid !== null && $zid > 0);
 T::eq('bad name code', 'code:bad_name', maps_zone_add('', 20.85, 52.05, 21.30, 52.40, 14, false)[1]);
 T::eq('bad zoom code', 'code:bad_zoom', maps_zone_add('x', 20.85, 52.05, 21.30, 52.40, 13, false)[1]);
 T::eq('unordered add code', 'code:unordered', maps_zone_add('x', 21.30, 52.05, 20.85, 52.40, 14, false)[1]);
+// Covering-count guard: small bboxes count exactly, continent-scale trips
+// the cap without building the million-entry id array.
+$smallIds = pmtiles_covering_ids(20.85, 52.05, 21.30, 52.40, 14);
+T::eq('covering count matches the id array', count($smallIds), pmtiles_covering_count(20.85, 52.05, 21.30, 52.40, 14));
+T::ok('whole world at z15 exceeds the cap', pmtiles_covering_count(-180.0, -85.0, 180.0, 85.0, 15) > PMTILES_COVERING_MAX);
+[$bigId, $bigErr] = maps_zone_add('P2 Too Big', -180.0, -85.0, 180.0, 85.0, 15, false);
+T::eq('oversized zone rejected', null, $bigId);
+T::ok('oversized zone names the count', str_starts_with($bigErr, 'code:too_big|'));
+T::ok('too_big renders a message, not a code', !str_contains(maps_zone_error_text($bigErr), 'code:'));
 $names = array_column(maps_zone_list(), 'name');
 T::ok('zone listed', in_array('P2 Test Zone', $names, true));
 T::eq('queued zone not ready', [], maps_ready_zones());
@@ -257,8 +266,16 @@ foreach (maps_zone_list() as $z) {
 T::eq('stale job failed', 'failed', $stale['status'] ?? null);
 T::eq('stale reason coded', 'code:stalled', $stale['error'] ?? null);
 
+// The detached kick is an internal switch (the e2e seed turns it off so no
+// worker races the browser specs): off answers false without detaching.
+set_setting('maps_worker_kick', '0');
+T::ok('kick stays down when switched off', maps_kick_worker() === false);
+
 // Full pipeline against a stub CLI (no network, no real binary): sizing →
-// extract with live progress → verify → atomic publish → ready.
+// extract with live progress → verify → atomic publish → ready. The CLI
+// engine is forced: elsewhere the PHP engine would dispatch instead (its own
+// hermetic suite is MapsPhpTest).
+putenv('DDMGMT_MAPS_ENGINE=cli');
 set_setting('maps_build_key', '20260918');
 set_setting('maps_build_at', (string)time());
 $seenEnv = null;
@@ -338,6 +355,7 @@ foreach ([$pid, $qid, $fid, $sid] as $cid) {
     $db->prepare('DELETE FROM map_zones WHERE id = ?')->execute([$cid]);
 }
 maps_cli_runner(null, true);
+putenv('DDMGMT_MAPS_ENGINE');
 $db->prepare('DELETE FROM osm_proxies')->execute();
 $pxIns = $db->prepare(
     'INSERT INTO osm_proxies (url, source, last_status, latency_ms, last_checked)
@@ -346,7 +364,7 @@ $pxIns = $db->prepare(
 foreach ($prevProxies as $px) {
     $pxIns->execute([$px['url'], $px['source'], $px['last_status'], $px['latency_ms'], $px['last_checked']]);
 }
-foreach (['maps_build_key', 'maps_build_at'] as $k) {
+foreach (['maps_build_key', 'maps_build_at', 'maps_worker_kick'] as $k) {
     if (!array_key_exists($k, $prevSettings)) {
         $db->prepare('DELETE FROM settings WHERE key_name = ?')->execute([$k]);
     }
@@ -361,5 +379,16 @@ if (!array_key_exists('map_provider', $prevSettings)) {
 }
 $cache = &_settings_store();
 $cache = null;
+
+// ── Zone colours: one palette for the map layers and the list swatches ────────
+$palette = MAPS_ZONE_COLORS;
+T::ok('zone palette: eight valid, distinct colours',
+      count($palette) === 8 && count(array_unique($palette)) === 8
+      && count(array_filter($palette, static fn(string $c): bool => preg_match('/^#[0-9a-f]{6}$/', $c) === 1)) === 8);
+T::eq('zone colour is chosen by id', 3, maps_zone_color_index(3));
+T::eq('zone colour wraps around the palette', 1, maps_zone_color_index(9));
+T::ok('zone colour is stable per id', maps_zone_color_index(41) === maps_zone_color_index(41));
+T::ok('every zone id maps inside the palette',
+      count(array_filter(range(1, 200), static fn(int $i): bool => maps_zone_color_index($i) >= 0 && maps_zone_color_index($i) < count($palette))) === 200);
 
 exit(T::done());

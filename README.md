@@ -28,7 +28,7 @@ all without the underlying data ever leaving the server in readable form.
 ![Log integrity](https://img.shields.io/badge/audit%20log-HMAC%20chained-blue?style=flat)
 
 ![PHPStan](https://img.shields.io/badge/PHPStan-level%205-4F5D95?style=flat)
-![Test suites](https://img.shields.io/badge/PHP%20test%20suites-30-success?style=flat)
+![Test suites](https://img.shields.io/badge/PHP%20test%20suites-45-success?style=flat)
 ![E2E](https://img.shields.io/badge/E2E-Playwright-45ba4b?style=flat&logo=playwright&logoColor=white)
 ![Coverage floor](https://img.shields.io/badge/coverage%20floor-%E2%89%A585%25-success?style=flat)
 ![Mutation probe](https://img.shields.io/badge/mutation%20probe-16%20mutants-success?style=flat)
@@ -62,7 +62,7 @@ all without the underlying data ever leaving the server in readable form.
 | | |
 |---|---|
 | **Get started** | [Overview](#overview) · [Quick start](#quick-start) · [Features](#features) · [Tech stack](#tech-stack) |
-| **Deploy** | [Docker](#docker) · [Setup (manual install)](#setup) · [Configuration reference](#configuration-reference) · [Requirements](#requirements) |
+| **Deploy** | [Docker](#docker) · [Setup (manual install)](#setup) · [Free shared hosting](#free-shared-hosting-no-docker-no-cron) · [Configuration reference](#configuration-reference) · [Requirements](#requirements) |
 | **Maps** | [Self-hosted maps](#self-hosted-maps-opt-in-zero-third-party-tile-contact) |
 | **Security** | [Threat model](#threat-model) · [Third-party code & external services](#third-party-code--external-services) |
 | **Quality** | [Tests](#tests) |
@@ -97,32 +97,11 @@ all without the underlying data ever leaving the server in readable form.
 
 ### How an order travels
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor C as Owner / Courier
-    participant A as App + database
-    actor R as Recipient
-
-    C->>A: Create order<br/>(pin, photos)
-    Note over A: Location encrypted,<br/>passphrase hashed
-    A-->>C: Passphrase shown once
-    C->>A: Mark delivered<br/>(TTL starts)
-    R->>A: Look up by token
-    R->>A: Unlock with passphrase<br/>(CSRF + rate limits)
-    A-->>R: Reveal map and photos<br/>(decrypted server-side)
-    R->>A: Confirm receipt
-    Note over A: Order, photos and<br/>events deleted
-```
+<img src="docs/diagrams/order-flow.svg" alt="Sequence: owner creates the order, the app encrypts the location and shows the passphrase once, the order is marked delivered, the recipient looks it up by token, unlocks it with the passphrase, sees the map and photos, confirms receipt, and everything is deleted." width="760">
 
 ### Order lifecycle
 
-```mermaid
-flowchart TB
-    N(["order created"]) --> P["preparing"]
-    P -- "deliver (TTL starts)" --> D["delivered"]
-    D -- "receipt confirmed<br/>closed by owner / courier<br/>TTL expired (cleanup sweep)" --> G(["deleted"])
-```
+<img src="docs/diagrams/order-lifecycle.svg" alt="Lifecycle: order created to preparing to delivered (TTL starts) to deleted on receipt, owner close, or expiry sweep." width="760">
 
 Every transition is a conditional `UPDATE` / row-locked transaction, so concurrent or replayed requests are harmless no-ops.
 Files are shredded only after the database transaction commits.
@@ -180,7 +159,7 @@ Prefer nginx or Caddy? Bare-metal? See [Docker](#docker) and [Setup](#setup).
 
 ### Operations
 
-- IP-based rate limiting with independent budgets per surface (pickup guessing, admin login, 2FA codes), per-account budgets on login and 2FA, and a per-session failure bucket for pickup. One global switch, attempt count (3–10, default 5) and window (5–60 min, default 15) in Settings
+- IP-based rate limiting with independent budgets per surface (pickup guessing, admin login, 2FA codes), per-account budgets on login and 2FA, and a per-session failure bucket for pickup (fixed at 5 failures per window, independent of the IP attempt count). One global switch, attempt count (3–10, default 5) and window (5–60 min, default 15) in Settings
 - Pseudo-cron cleanup on page visits: each request checks an hourly stamp, so at most one sweep per hour runs in-request (a cached settings lookup otherwise)
 - Real cron endpoint (`cron/cleanup.php`) for server-side scheduling — the Docker image runs it every 15 minutes on its own
 - Retention: order events for tokens that never matched an order are dropped after 30 days; the audit log after 365 days
@@ -225,6 +204,17 @@ is provided) generates a key and persists it on the `app-config` volume.
 The app is then on <http://localhost:2137> (`APP_PORT` in `.env` to change). Overrides live in `.env` (see `.env.example`) —
 DB password, port, AES key.
 
+**Version line in Settings.** Owners see the running build under Settings: `v1.5.0` for a tagged release, or `v1.5.0+8`
+with a **BETA** badge and a `hash · branch` line for anything past the last release tag (a build from `dev`). Commit messages are never recorded.
+The image has no `.git`, so the build host supplies it — prefix the build with the helper (any compose file):
+
+```sh
+eval "$(tools/build_info.sh --export)" && docker compose up -d --build
+```
+
+A plain `docker compose up --build` still works; Settings then says "unknown build". Nothing outside the owner-only
+Settings page (not `/healthz.php`, not the public or login pages) discloses it.
+
 ### Volumes
 
 | Volume | Holds | Lost on rebuild? |
@@ -263,6 +253,14 @@ One file, one command — works for a fresh install *and* for upgrading an exist
 mysql -u root -p < setup.sql
 ```
 
+> [!IMPORTANT]
+> **Upgrading from a version that stored order tokens in the clear** (anything before ADR-019): after loading the new
+> `setup.sql`, run `php tools/migrate_order_tokens.php --dry-run` and then without `--dry-run` (back up the database
+> first — it drops the plaintext columns). Until then, orders created before the upgrade cannot be found; new orders
+> work normally. On Docker the schema file is only auto-loaded on a database's first boot, so pipe it in yourself:
+> `docker compose exec -T db sh -c 'mariadb -uroot -p"$MARIADB_ROOT_PASSWORD" deaddrops' < setup.sql`, then
+> `docker compose exec app php tools/migrate_order_tokens.php`.
+
 ### 2. config.php and the AES-256 key
 
 ```bash
@@ -298,7 +296,7 @@ DB credentials work the same way via `DDMGMT_DB_HOST` / `DDMGMT_DB_PORT` / `DDMG
 </VirtualHost>
 ```
 
-Enable `mod_rewrite` and `mod_headers`, and set `AllowOverride All`.
+Enable `mod_rewrite` and `mod_headers`, and set `AllowOverride All`. Give the app its own virtual host: it cannot be served from a sub-path such as `/drop/` (see [Requirements](#requirements)).
 
 > [!IMPORTANT]
 > **nginx / Caddy installs — read this.** The shipped `.htaccess` files are an Apache-only mechanism: nginx and Caddy
@@ -328,7 +326,7 @@ On anything with real traffic, install real cron — pseudo-cron only guarantees
 takes the page-hit path out of the latency budget entirely. CLI only (`cron/` is denied from the web on every stack):
 
 ```cron
-# expiry sweep, log checkpoint, proxy re-probe
+# expiry sweep, log checkpoint, proxy re-probe (+ replaces failed discovered proxies)
 0 * * * * php /var/www/deaddrops/cron/cleanup.php
 # only with self-hosted maps: advances queued zone downloads
 */15 * * * * php /var/www/deaddrops/cron/maps_sync.php
@@ -345,10 +343,11 @@ lives on another host, encrypt the connection by pointing `DDMGMT_DB_SSL_CA` at 
 certificate (optional client cert/key: `DDMGMT_DB_SSL_CERT`, `DDMGMT_DB_SSL_KEY`; certificate verification is on by
 default and only explicitly disableable via `DDMGMT_DB_SSL_VERIFY_CERT=0` — don't, outside throwaway labs).
 
-Behind a reverse proxy or CDN, set `DDMGMT_TRUST_PROXY=1` so rate limiting and the audit log see the real client address
-from `CF-Connecting-IP` / `X-Forwarded-For` / `X-Real-IP`. Without that flag the headers are ignored — otherwise any
-client could spoof its IP and sidestep the limiter. Only enable it when the proxy overwrites (not appends to) these
-headers.
+Behind a reverse proxy or CDN, set `DDMGMT_TRUST_PROXY=1` so rate limiting and the audit log see the real client address.
+Exactly **one** header is read: `DDMGMT_CLIENT_IP_HEADER`, default `X-Forwarded-For` (last hop — the one your proxy
+appended). Set it to `CF-Connecting-IP` behind Cloudflare, or `X-Real-IP` if your proxy sets only that. Other client-IP
+headers are ignored, because a proxy only rewrites the header it knows and would pass a client-forged one through.
+Without the flag every header is ignored — otherwise any client could spoof its IP and sidestep the limiter.
 
 The flag alone is not enough: headers are honored only when the **direct connection peer** (`REMOTE_ADDR`) matches
 `DDMGMT_TRUSTED_PROXIES` — a comma-separated list of IPs or CIDR ranges. Unset, it defaults to loopback and RFC1918 space
@@ -357,7 +356,8 @@ If your proxy connects from public addresses, list them explicitly. A request wh
 proxy headers ignored (and logs one warning) even with the flag set — so a stale flag on an app that is directly
 reachable cannot be turned into free IP rotation by whoever finds it. The same peer gate covers `X-Forwarded-Proto`
 (HTTPS detection for the session cookie `secure` flag and HSTS): a forged proto from an untrusted peer cannot plant a
-`secure` cookie over plain HTTP.
+`secure` cookie over plain HTTP. Both headers follow one rule for multi-hop lists — the **last** entry, the one the trusted
+proxy itself wrote, is used, and a warning is logged when a list shows up (a sign the proxy appends instead of overwriting).
 
 <details>
 <summary><b>Rotating the AES key</b> — when, why and the exact procedure</summary>
@@ -368,14 +368,23 @@ Rotate when the key may have been exposed (leaked backup, departed admin, incide
 the people whose locations you hold — yearly is a reasonable default. The bundled tool makes it mechanical:
 
 ```bash
-# rehearse first: verifies every row decrypts with the old key, writes nothing
-php tools/rotate_aes_key.php --old=<OLD_64HEX> --new=<NEW_64HEX> --dry-run
+# keys go in on stdin (arguments would be visible in the process list / shell history)
+read -rs OLD; read -rs NEW
 
-# apply: re-encrypts orders.locations, pickup passwords and TOTP secrets,
-# verifies each row read-back under the new key, single transaction —
-# any undecryptable row aborts and rolls everything back
-php tools/rotate_aes_key.php --old=<OLD_64HEX> --new=<NEW_64HEX>
+# rehearse first: verifies every row decrypts with the old key, writes nothing
+printf '%s\n%s\n' "$OLD" "$NEW" | php tools/rotate_aes_key.php --keys-from-stdin --dry-run
+
+# apply: re-encrypts order locations (re-bound to the new token index) and TOTP
+# secrets, re-encrypts and re-indexes every order token (event and audit rows of
+# deleted orders lose their token index), verifies each row read-back under the new
+# key, locks every order/user row, single transaction — any undecryptable row aborts
+# and rolls everything back
+printf '%s\n%s\n' "$OLD" "$NEW" | php tools/rotate_aes_key.php --keys-from-stdin
 ```
+
+Only current-format data is rotated: legacy CBC rows, raw-master rows and recoverable pickup-password copies are refused —
+run `tools/migrate_cbc_to_gcm.php`, `tools/separate_keys.php` and `tools/purge_pickup_password_recovery.php` first.
+Locations written before row binding can be bound in place any time with `php tools/bind_locations.php`.
 
 Procedure:
 
@@ -409,13 +418,16 @@ values.
 | `DDMGMT_DB_USER` / `DDMGMT_DB_PASS` | `root` / *(empty)* | Database credentials |
 | `DDMGMT_DB_SSL_CA` / `_CERT` / `_KEY` | *(unset)* | TLS for a remote database |
 | `DDMGMT_DB_SSL_VERIFY_CERT` | `1` | Set `0` only in throwaway labs |
-| `DDMGMT_TRUST_PROXY` | `0` | Honor `X-Forwarded-*` / `CF-Connecting-IP` from a trusted peer |
+| `DDMGMT_TRUST_PROXY` | `0` | Honor `X-Forwarded-Proto` and the client-IP header from a trusted peer |
 | `DDMGMT_TRUSTED_PROXIES` | loopback + RFC1918 | Comma-separated IPs / CIDRs allowed to set proxy headers |
+| `DDMGMT_CLIENT_IP_HEADER` | `X-Forwarded-For` | The one header carrying the client IP: `X-Forwarded-For`, `CF-Connecting-IP` or `X-Real-IP` |
 | `DDMGMT_SETUP_TOKEN` | *(unset)* | When set, creating the first owner requires this token; when unset the first visitor claims the instance (logged as a warning) |
+| `DDMGMT_PROXY_HEAL` | `1` | `0` disables all *automatic* OSM proxy discovery — first-run seeding and replacing failed proxies (the Auto-discover button still works) |
+| `DDMGMT_PSEUDO_CRON` | `1` | `0` disables the page-visit pseudo-cron (for installs that run real cron) |
 | `DDMGMT_PMTILES_URL` / `DDMGMT_PMTILES_BIN` | *(unset)* | Use your own `pmtiles` CLI download / binary — opts out of the pinned SHA-256 (trust-on-first-use instead) |
 
 **Docker `.env` overrides:** `APP_PORT` (default `2137`), `DB_PASS` (default `deaddrop-db`), `DB_ROOT_PASS`
-(default `deaddrop-root`), plus `DDMGMT_AES_KEY_HEX`. Change the defaults before exposing the stack.
+(default `deaddrop-root`), plus `DDMGMT_AES_KEY_HEX`, `DDMGMT_PROXY_HEAL` and `DDMGMT_PSEUDO_CRON`. Change the defaults before exposing the stack.
 
 Runtime behavior (rate limits, session length, TTL, upload size, map provider, …) is configured in the admin **Settings**
 page, not in files.
@@ -424,15 +436,78 @@ page, not in files.
 
 ## Requirements
 
-- **PHP 8.2+** with `pdo_mysql`, `openssl`, `mbstring` and `gd` (JPEG, PNG and WebP support). `curl` is needed for the
-  optional proxy pool and auto-discovery
+- **PHP 8.2+** with `pdo_mysql`, `openssl`, `mbstring` and `gd` (JPEG, PNG and WebP support). The `curl`
+  extension is optional: without it the proxy pool and map downloads use the built-in socket engine (pool
+  probing just runs sequentially instead of in parallel)
 - **MySQL 5.7+ or MariaDB 10.3+** (CI-tested: MariaDB 11 and MySQL 8.0)
 - **Apache 2.4+** with `mod_rewrite`, `mod_headers` — or nginx / Caddy (Docker stacks; manual installs must replicate every
   deny block, see [Setup §3](#3-web-server))
+- **Served from the root of its own host** — a virtual host or subdomain (`https://drop.example.org/`), not a sub-path like `example.org/drop/`. Links, redirects and asset URLs are root-relative (`/admin/…`, `/uploads/…`, `Location: /`), so a sub-directory install or a reverse proxy that strips or adds a path prefix will break them
 - **Self-hosted maps only:** process execution (`proc_open`) for the `pmtiles` CLI, Linux x86_64 or arm64, and free disk
-  for the zones you draw
+  for the zones you draw (zone *downloads* only — the default OSM provider needs none of this)
+- **No Docker, cron or exec needed:** see [Free shared hosting](#free-shared-hosting-no-docker-no-cron)
 
 Stuck? Symptom → cause → fix lives in [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
+
+---
+
+## Free shared hosting (no Docker, no cron)
+
+The app is built to run on a plain PHP + MySQL shared host — the kind with FTP, phpMyAdmin, no shell, no cron and a
+locked-down `php.ini`. Everything that would normally lean on Docker, cron or process execution has a fallback, and
+**Settings → Hosting** (owners only) shows what this particular host can and cannot do.
+
+| Feature | Needs | On a host without it |
+|---|---|---|
+| Orders, admin panel, encrypted locations, photos, 2FA, 8 languages | PHP + MySQL | Works fully |
+| Expiry sweep, log checkpoints, cache and record pruning | cron | **Pseudo-cron**: any PHP page visit (public, admin or a JSON poll) runs the hourly pass *after* the response has been sent. Recipients never see an expired order anyway — the sweep only removes rows. On a very quiet site add a cron job for `cron/cleanup.php` if you can |
+| OpenStreetMap maps through the proxy pool | PHP sockets + `openssl` (`curl` only parallelises pool probing) | Works fully; without `curl` the pool is probed sequentially and Settings → Hosting shows `curl: limited` |
+| Proxy pool upkeep (first-run discovery, replacing failed proxies) | exec + CLI PHP for a detached job | Runs **inline after the response** in a time-budgeted pass (~22 s, a smaller sample) instead. If a host can never find a working proxy — outbound connections blocked, every list unreachable — routing is **switched off automatically after 3 empty attempts**, with an audit entry, a log warning and a notice in Settings, so maps do not stay dead; turn the toggle on to retry |
+| Self-hosted map zone **downloads** | nothing extra (pure-PHP engine: the queue POST and the progress polls carry the download, no cron, no detach) — the faster `pmtiles` CLI path needs `proc_open` + Linux | Downloads work wherever outbound HTTPS exists. The default OpenStreetMap provider does not need any of it |
+| Version line in Settings | a Docker build arg | Run `tools/build_info.sh --write` on a checkout to produce `build-info.json`, or it shows "unknown build" |
+
+**Set-up without a shell — two ways.** The one-file installer is the short path; the manual steps below it do the same thing by hand.
+
+**A. One-file installer (recommended).** Upload [`tools/install.min.php`](tools/install.min.php) to the web root over FTP and open it in a browser
+(`https://your-host/install.min.php`). It is the minified build of [`tools/install.php`](tools/install.php) — same wizard, smaller upload — regenerated and committed by CI after every push, so it never goes stale. A four-step wizard takes it from there:
+
+1. **Server check** — PHP version, extensions, disabled functions, writable folders, database reachability, with the fix next to each failing row.
+2. **Package** — pick a release; the installer downloads it itself (resumable, verified) over a direct connection. No proxy support by design: a host that cannot reach GitHub gets the manual-upload button instead.
+3. **Database + site setup** — create the empty database and user in the hosting panel first (the installer has no such privilege there), enter them, hit *Test connection*, then *Install now*: it writes `config.php` with a fresh random AES key, creates the storage dirs and imports the schema without the privileged statements.
+4. **Finish** — verify, then delete the installer (one click; it removes itself).
+
+The installer has no login, so until step 3 finishes it is open to anyone who finds it — run it straight through. Once
+`config.php` exists it **locks itself**: only the read-only server check and self-removal still answer, and setup never
+overwrites an existing `config.php`. To **upgrade** later, create an empty file named `INSTALL_UNLOCK` next to the
+installer (FTP / file manager) — that proves you control the files — then download + extract; `uploads/`, `tiles/`,
+`data/`, `cache/`, `logs/` and `backups/` are merged, never replaced, and the unlock file is removed afterwards.
+
+No shell, no phpMyAdmin import, no hand-written config. Without the `zip` extension the installer falls back to a manual upload-and-extract path instead of failing.
+
+**B. Manual install.** The same result by hand:
+
+1. **PHP 8.2 or newer** with `pdo_mysql`, `openssl`, `mbstring` and `gd`. Many free
+   hosts still offer 8.1 or older — check the control panel first; the app will not run there.
+2. Give the app **its own (sub)domain** — it cannot live under `/drop/` (see [Requirements](#requirements)). Free hosts hand out subdomains.
+3. Upload the files (FTP), create a database and import `setup.sql` with phpMyAdmin (it is idempotent — re-import it after upgrades).
+   If the panel user has no `CREATE` privilege (or forces a name like `user_xxx`): create the empty database in the panel,
+   point `config.php` at it, and use **Setup check** (`/admin/setup_check.php`) — its *Create / upgrade tables* button applies
+   the same schema without the privileged lines.
+4. Copy `config.php.example` to `config.php` and fill in the database credentials and a 64-hex `AES_KEY_HEX`
+   (`php -r "echo bin2hex(random_bytes(32));"` on any machine). Environment variables are optional — every value works as a constant.
+   **Back the key up.**
+5. Make `logs/`, `uploads/`, `cache/`, `data/` and `tiles/` writable for PHP (FTP chmod `755`, or `775` if the host runs PHP as a different user).
+6. Open `/admin/` and create the owner. Then look at **Setup check** (`/admin/setup_check.php` — every host capability
+   in one place, red rows first) and **Settings → Hosting**.
+
+**Switches** (`config.php` constants, or environment variables where you have them — the environment wins): 
+`define('DDMGMT_PSEUDO_CRON', false);` only if a real cron job runs `cron/cleanup.php`;
+`define('DDMGMT_PROXY_HEAL', false);` to never start proxy discovery on its own.
+
+**If the site answers `500` right after upload:** the shipped `.htaccess` starts with `Options -Indexes`, which some hosts
+refuse to accept (`AllowOverride` without `Options`). Delete that one line — every other directive is inside `IfModule`
+guards — and keep directory listing off in the host's panel instead. See also [Setup §3](#3-web-server): nginx-only hosts
+ignore `.htaccess` and need the deny rules replicated.
 
 ---
 
@@ -446,10 +521,10 @@ picker and public reveal alike).
 | Capability | How it works |
 |---|---|
 | **Zones** | Admin-drawn rectangles (name + west/south/east/north + z14 standard / z15 max detail). Each becomes one `tiles/zone_<id>_<token>.pmtiles` file carved from the daily Protomaps planet build — only the zone's bytes cross the wire, never the ~140 GB planet. The token is a 128-bit random part of the file name: the name itself is the access control, and legacy guessable names (`zone_<id>.pmtiles`) are denied |
-| **Zone editor** | The bbox can be typed or drawn directly on an OSM canvas in the same section (same-origin tiles via `tile_proxy.php`, so still zero third-party contact): drag to draw, drag the body to move, corners to resize; overlapping drafts warn with the shared-tiles percentage and existing zones render in red. A place search pans through the proxied Nominatim path |
+| **Zone editor** | The bbox can be typed or drawn directly on an OSM canvas in the same section (same-origin tiles via `tile_proxy.php`, so still zero third-party contact): drag to draw, drag the body to move, corners to resize; overlapping drafts warn with the shared-tiles percentage and existing zones render each in its own colour (the same swatch colour as in the zone list; dashed while still downloading). A place search pans through the proxied Nominatim path |
 | **Route consent per download** | Proxy pool (anonymous, can be extremely slow — pool proxies are volunteer-run) or direct (fast, reveals the server IP to the tile host). Proxy mode is fail-closed: no working pool proxy means a failed job, never silent direct |
 | **Sizing before downloading** | The worker dry-runs each zone for its exact byte count and refuses zones that don't fit the free disk (512 MiB headroom always kept). Deleting a zone frees its disk immediately; the worker measures, downloads with live speed/ETA, verifies, and publishes atomically |
-| **Worker** | `cron/maps_sync.php` (system cron recommended, e.g. every 15 min; the Settings page kicks it detached after queueing when the platform allows). Page visits never download — extracts can't resume, so a killed request would waste the whole transfer; the hourly pseudo-cron steward only fails jobs whose worker died silently (`maps_steward_if_due()` in `index.php`) |
+| **Worker** | Two engines. `cli` (system cron `cron/maps_sync.php`, e.g. every 15 min; the Settings page kicks it detached after queueing when the platform allows) where `proc_open` + Linux exist. Everywhere else the `php` engine: the queue POST finishes small zones inline within a wall-clock budget derived from `max_execution_time`, and every progress poll donates a resumable 8-second slice — downloads complete with no cron and no hanging request. Single spans never exceed the remaining budget's socket timeout, and zones covering more than 250,000 tiles are refused up front |
 | **Freshness** | The planet rebuilds daily and each zone remembers the build it was cut from. When the worker next learns a newer build, ready zones cut from older ones show an *Update available* badge with a **Refresh** button that re-queues them — the worker re-downloads and republishes atomically, so the old file keeps serving until the new one lands. Freshness is computed from the cached build key only; no page view ever fetches the build list |
 | **Public reveal** | With the self-hosted provider, a delivered order whose pin sits inside a ready zone renders the same MapLibre stack on the public reveal page (`reveal-map.js`, style inlined server-side — no new endpoint) instead of the OSM iframe. Only the covering zones' files are fetched, so zones elsewhere stay undisclosed; a pin outside every zone (or provider `osm`) keeps the OSM embed. The Google/Apple Maps links remain plain outbound links either way |
 | **`pmtiles` CLI** | Pinned v1.31.2 (Linux x86_64 / arm64), fetched automatically on first use over TLS and verified against built-in SHA-256 pins (archive and binary) *before* it is ever executed. Only when you override the download (`DDMGMT_PMTILES_URL` / `DDMGMT_PMTILES_BIN`) or run another architecture does the app fall back to a trust-on-first-use hash recorded in `maps_cli_sha256`. Address search still uses the proxied Nominatim path — self-hosted geocoding (100 GB+ PostGIS) is deliberately out of scope |
@@ -477,7 +552,7 @@ The model assumes adversaries ranging from opportunistic to well-resourced:
 |---|---|---|
 | S1 | Drop locations (encrypted at rest) | Core secret — physical safety of the recipient depends on it |
 | S2 | Pickup passwords | Gate location reveal |
-| S3 | Order tokens (16-char lookup codes) | Capability URLs — possession grants lookup access |
+| S3 | Order tokens (16-char lookup codes) | Capability URLs — possession grants lookup access (status and the password prompt), **not** the location: that still needs the pickup password. Never stored in the clear: a keyed HMAC index plus an encrypted copy (ADR-019) |
 | S4 | TOTP secrets | 2FA enrollment for owner/courier accounts |
 | S5 | Admin sessions & credentials | Full panel control |
 | S6 | Audit trail & application log integrity | Evidence — must survive tampering attempts (A5) |
@@ -485,22 +560,13 @@ The model assumes adversaries ranging from opportunistic to well-resourced:
 
 ### 3. Trust boundaries
 
-```mermaid
-flowchart TB
-    B(["Browser"]) -- "TLS (external)" --> W["Web server + PHP"]
-    W --> I["Public zone<br/>index.php · receive.php"]
-    W --> AD["Admin zone<br/>session + CSRF + 2FA + roles"]
-    I --> DB[("MySQL / MariaDB<br/>prepared statements only")]
-    AD --> DB
-    AD -. "server-side only" .-> OSM["OSM tiles / Nominatim<br/>(optional proxy pool)"]
-    B -. "map iframe:<br/>leaks visitor IP" .-> EMB["www.openstreetmap.org"]
-```
+<img src="docs/diagrams/trust-boundaries.svg" alt="Trust boundaries: browser over external TLS to web server plus PHP, fanning out to the public zone and the admin zone, both to MySQL over prepared statements only; the admin zone reaches OSM tiles and Nominatim server-side through the optional proxy pool, while the browser contacts openstreetmap.org directly for the map iframe, leaking the visitor IP." width="760">
 
 Server-local files (`config.php`, `includes/`, `logs/`, `uploads/`) are never served to browsers — see the filesystem boundary below.
 
 - **Public ↔ PHP**: no accounts — but sessions exist: the unlock form carries a single-use CSRF token (verified before any limiter budget is spent), and the reveal lives server-side sealed. Only token entropy + rate limiting protect S3 itself
 - **Admin ↔ PHP**: session cookie + CSRF token + TOTP; owner vs courier role split
-- **PHP ↔ MySQL**: prepared statements; the DB is *never* trusted to hold secrets in readable form (S1–S4 encrypted/hashed before insert)
+- **PHP ↔ MySQL**: prepared statements; the DB is *never* trusted to hold secrets in readable form (S1–S5 are encrypted, hashed or keyed before insert — order tokens included: a lookup index plus an encrypted copy, see ADR-019)
 - **PHP ↔ filesystem**: `.htaccess` denies direct web access to `includes/`, `logs/`, `cache/`, `cron/`, `tools/`, `tests/`, `data/`, `config.php` and friends (nginx/Caddy replicate the same denies — see the [setup warning](#3-web-server))
 - **PHP ↔ OSM**: server-side proxies so admin IPs never leave the server; fail-closed proxy pool optional
 
@@ -511,10 +577,11 @@ Server-local files (`config.php`, `includes/`, `logs/`, `uploads/`) are never se
 | SQL injection | PDO prepared statements throughout — zero string interpolation in SQL | S1–S5 | A1–A2 |
 | Password storage | bcrypt cost=12 via `password_hash()` / `password_verify()` | S5 | A4 |
 | Account takeover | TOTP 2FA (RFC 6238) — self-service per account, secret GCM-encrypted at rest. Passwordless accounts are claimed only with a single-use enrollment secret, never by username alone. Per-account attempt budgets on login and 2FA; password / 2FA resets end all of the account's sessions; hard 12-hour session ceiling | S5 | A1, A2 |
-| Location data at rest | AES-256-GCM (authenticated), random nonce per record; keys are HKDF purpose-subkeys of the master key — locations, TOTP secrets, reveal payloads and the log chain each use their own (ADR-016). Legacy CBC rows and raw-master rows are rejected at runtime — migrate with `tools/migrate_cbc_to_gcm.php` then `tools/separate_keys.php`. Master key lives only in `config.php`, env (`DDMGMT_AES_KEY_HEX`) or the `/config/aes_key_hex` file — never in the DB | S1, S4 | A4 |
-| Pickup password guessing | Dual budget enforced together: IP-based limiter (**fail-closed**: if the limiter DB is down, pickup and login are denied, not waved through) **and** a per-session failure bucket — whoever trips either is blocked; ≥64-bit generated passphrases (6 words + 4-digit + symbol), hash-only at rest, equalized-cost responses for unknown tokens | S2 | A1 |
+| Location data at rest | Location text, pin, instructions **and order notes** travel in one AES-256-GCM (authenticated) blob, random nonce per record (notes of orders saved before this lived in a plaintext column until their next save). **Drop photos are not encrypted on disk** — they are re-encoded, EXIF-stripped files under unguessable names, deleted with the order and by panic wipe; keys are HKDF purpose-subkeys of the master key — locations, TOTP secrets, reveal payloads, one-time session messages, the order-token index and copy, and the log chain each use their own (ADR-016). Legacy CBC rows and raw-master rows are rejected at runtime — migrate with `tools/migrate_cbc_to_gcm.php` then `tools/separate_keys.php`. Master key lives only in `config.php`, env (`DDMGMT_AES_KEY_HEX`) or the `/config/aes_key_hex` file — never in the DB | S1, S4 | A4 |
+| Order tokens at rest | Lookups go through `orders.token_hmac`: HMAC-SHA256 of the (lower-cased) token under its own HKDF subkey, unique-indexed. Events and the audit trail keep only that index. The admin panel's display copy is AES-256-GCM under a second subkey. A database dump therefore contains no usable token and cannot be used to test candidate tokens offline. Existing installs upgrade with `tools/migrate_order_tokens.php` (ADR-019) | S3 | A4 |
+| Pickup password guessing | Per-order budget (10 wrong passwords per window per token, from any address — a leaked link plus rotating IPs buys no more) plus a dual budget enforced together: IP-based limiter (IPv6 clients counted per /64) (**fail-closed**: if the limiter DB is down, pickup and login are denied, not waved through) **and** a per-session failure bucket (5 failures per window, its own constant — not tied to the IP attempt count) — whoever trips either is blocked; ≥64-bit generated passphrases (6 words + 4-digit + symbol), hash-only at rest, equalized-cost responses for unknown tokens | S2 | A1 |
 | Rate-limit bypass via spoofed `X-Forwarded-For` | Proxy headers are honored only when `DDMGMT_TRUST_PROXY=1` (opt-in for reverse-proxy/CDN installs) **and** the direct peer matches `DDMGMT_TRUSTED_PROXIES` (default: loopback + RFC1918); header values are validated as literal IPs and `REMOTE_ADDR` is the default source of truth | S2 | A1 |
-| Token enumeration | 16-char alphanumeric random tokens (~95 bits); unknown-token answers burn the same bcrypt cost and return the same body as wrong passwords when a credential was submitted; receipt requires the delivered state atomically; expired-but-not-yet-swept orders are treated as gone | S3 | A1 |
+| Token enumeration | 16-char alphanumeric random tokens (~83 bits effective — lookups are case-insensitive, so 36 symbols per position); unknown-token answers burn the same bcrypt cost and return the same body as wrong passwords when a credential was submitted; receipt requires the delivered state atomically; expired-but-not-yet-swept orders are treated as gone | S3 | A1 |
 | Session fixation / theft | `session_regenerate_id(true)` on login; `httponly`, `samesite=Strict`, `secure` when HTTPS | S5 | A1, A2 |
 | CSRF | 32-byte random token in session (64 hex chars), `hash_equals()` on every POST — public unlock forms included; single-use rotation, with a same-origin live-token endpoint so long-lived admin pages never go stale | S5, S7 | A2 |
 | XSS | `htmlspecialchars(..., ENT_QUOTES, 'UTF-8')` on all user-derived output; strict CSP with nonces | S5 | A1, A2 |
@@ -532,12 +599,13 @@ What remains after mitigations — stated plainly:
 - **A6 wins by definition.** An attacker with code execution reads the AES key, the DB, and the log-HMAC key from the same host; the log chain detects tampering but cannot prevent it. The design goal is: everything short of full host compromise stays defensible.
 - **TLS and WAF are external.** The app terminates neither; without HTTPS in front, A3 sees everything including pickup passwords. Deploy behind TLS (certbot, hosting certs, load balancer) and ideally a WAF/edge layer.
 - **OSM embed iframe** sends the *recipient's* IP to OpenStreetMap when viewing a delivered order's location — browser-side, outside app control. Zero third-party contact needs the [self-hosted map provider](#self-hosted-maps-opt-in-zero-third-party-tile-contact).
-- **Legacy rows are rejected at runtime — both kinds.** Pre-GCM AES-CBC rows and rows encrypted under the raw master key (pre-HKDF, ADR-016) are both refused. Run `php tools/migrate_cbc_to_gcm.php` (only if pre-GCM rows may exist) and then `php tools/separate_keys.php` after upgrading, dry-run first; until both complete, old orders and TOTP secrets are unreadable by the app — loudly, not silently.
+- **Legacy rows are rejected at runtime — three kinds.** Pre-GCM AES-CBC rows, rows encrypted under the raw master key (pre-HKDF, ADR-016) and orders whose token is still stored in the clear (pre-ADR-019) are all refused. After upgrading run `php tools/migrate_cbc_to_gcm.php` (only if pre-GCM rows may exist), `php tools/separate_keys.php` and `php tools/migrate_order_tokens.php`, dry-run first; until they complete, old orders and TOTP secrets are unreadable by the app — loudly, not silently (the hourly cleanup logs a `legacy_order_tokens` warning).
+- **A DB dump still shows structure, not secrets.** Order tokens are HMAC-indexed (ADR-019), but a reader still learns how many orders exist, their status and timestamps, and the IP and user agent of every logged event. Recovering a token needs the master key, which lives outside the database. Token lookups are case-insensitive (the index covers the lower-cased token, as the old column did), so two tokens that differ only in case would collide — the unique index refuses the second.
 - **Pickup passwords are hash-only.** Generated credentials appear exactly once (creation flash message) and can be replaced in the order editor, but never displayed again. `php tools/purge_pickup_password_recovery.php` clears the encrypted copies older versions stored.
 - **Panic mode destroys everything, evidence included** — orders, photos, event log, audit log, tile cache and on-disk logs; only accounts and settings survive. Partial filesystem failures are reported honestly and the wipe is re-runnable (ADR-015).
 - **File wipe is best-effort.** Overwriting with null bytes before `unlink()` raises the bar for casual recovery; copy-on-write filesystems, SSD wear-leveling and journaling may retain the original blocks. Full-disk encryption is the only real answer.
-- **Rate limiting is IP-based *plus* a per-session failure bucket**, which fixes both classic blind spots: strangers behind one NAT/VPN exit no longer lock each other out (separate session buckets), and an attacker must rotate IP *and* cookie per attempt. Still tunable in Settings; still no defense against truly industrial distributed guessing — the ≥64-bit passphrase and auto-expiry carry that.
-- **Availability is best-effort**: pseudo-cron cleanup runs on page hits unless a real cron calls `cron/cleanup.php` (the Docker image does so every 15 minutes); nothing protects against DDoS.
+- **Rate limiting is IP-based *plus* a per-session failure bucket**, which fixes both classic blind spots: strangers behind one NAT/VPN exit no longer lock each other out (separate session buckets), and an attacker must rotate IP *and* cookie per attempt. The IP budget and window are tunable in Settings (the session bucket follows the window, keeps its own threshold); still no defense against truly industrial distributed guessing — the ≥64-bit passphrase and auto-expiry carry that.
+- **Availability is best-effort**: pseudo-cron cleanup runs on hits to any PHP page (public, admin or a JSON poll — the kernel hooks it after the response is sent; `healthz.php` is excluded; `DDMGMT_PSEUDO_CRON=0` turns it off) unless a real cron calls `cron/cleanup.php` (the Docker image does so every 15 minutes); nothing protects against DDoS.
 
 ---
 
@@ -579,14 +647,14 @@ The public Content-Security-Policy allows exactly one external origin: `frame-sr
 | OSM tile hosts | Admin map tiles, cache misses only | This server's IP (or a pool proxy's) |
 | Protomaps (`build.protomaps.com`, `build-metadata.protomaps.dev`) | Self-hosted map zone downloads and freshness checks | This server's IP, or a pool proxy's — per the route you consent to per download |
 | GitHub releases (`github.com/protomaps/go-pmtiles`) | First use of the `pmtiles` CLI | This server's IP |
-| Public proxy lists (`raw.githubusercontent.com`), anonymity judges and public-IP lookup services | Only when the owner clicks **Auto-discover** | This server's IP — see below |
+| Public proxy lists (`raw.githubusercontent.com`), anonymity judges and public-IP lookup services | When the owner clicks **Auto-discover**; **automatically once the owner turns routing on** (an empty pool fails closed, so a first pool is discovered in the background); and when a discovered pool proxy has failed and is replaced (at most once per 10 minutes). Set `DDMGMT_PROXY_HEAL=0` or turn routing off in Settings to prevent the automatic runs | This server's IP — see below |
 
 <details>
 <summary><b>Proxy auto-discovery sources</b> — what each list contributes and how candidates are vetted</summary>
 
 <br>
 
-All fetched from GitHub raw by the server (never the browser) when the owner clicks **Auto-discover** in Settings → proxy pool. Candidates are probed against a real OSM tile; HTTP proxies from unrated sources must additionally pass a live anonymity check (below). Sources, and what each contributes (`includes/proxy.php` is the single place these are configured):
+All fetched from GitHub raw by the server (never the browser) when the owner clicks **Auto-discover** in Settings → proxy pool, and by the automatic replacement of failed proxies (below), which runs the very same discovery. Candidates are probed against a real OSM tile; HTTP proxies from unrated sources must additionally pass a live anonymity check (below). Sources, and what each contributes (`includes/proxy.php` is the single place these are configured):
 
 | Source | Repo | Provides | Anonymity metadata |
 |---|---|---|---|
@@ -597,7 +665,11 @@ All fetched from GitHub raw by the server (never the browser) when the owner cli
 
 **Anonymity judges.** HTTP proxies without a source-provided rating are verified live: the server fetches a header-echo page *through* the candidate proxy and rejects it if the echo contains the server's own IP in the origin or any forwarded header (`Via`, `X-Forwarded-For`, …). Judges used, in order: `httpbin.org/get`, `azenv.net/` (plain HTTP so the check also works through CONNECT-less proxies). The server's own public IP is looked up first, directly, from `api.ipify.org` with `httpbin.org/ip` as fallback; if it cannot be determined, all unrated HTTP candidates are dropped rather than trusted. SOCKS proxies are never header-injecting by protocol design and skip this check.
 
-**What this means for your server's exposure:** clicking Auto-discover makes your server's IP visible to GitHub (list fetch, direct — not proxied), to the public-IP lookup services, to every candidate proxy probed, and to the judge services. OSM itself is only contacted through accepted proxies while routing is enabled.
+**What this means for your server's exposure:** clicking Auto-discover (or an automatic replacement, below) makes your server's IP visible to GitHub (list fetch, direct — not proxied), to the public-IP lookup services, to every candidate proxy probed, and to the judge services. OSM itself is only contacted through accepted proxies while routing is enabled.
+
+**Failed proxies are replaced automatically.** While routing is enabled, a discovered pool entry that fails (seen by live traffic or by the stale re-probe below) is confirmed dead with a fresh probe, deleted, and replaced by a newly discovered proxy chosen by exactly the Auto-discover criteria (answers a real HTTPS OSM tile in under 3 s; anonymity check for unrated HTTP proxies). The work runs in a detached CLI job (`cron/proxy_heal.php`, also called from the cleanup cron), under a lock, at most once per 10 minutes — never inside a page request. Safeguards: **nothing is deleted until a replacement exists** (an outage where every proxy "fails" and discovery finds nothing leaves the pool untouched, and the pool never shrinks); a proxy that answers the confirmation probe is kept; entries you added by hand (`manual`) are never deleted automatically; with routing disabled nothing happens. Each swap is written to the audit log (`proxy_replace`). Because this reuses discovery, it makes the same outbound connections as the Auto-discover button.
+
+**Turning routing on fills the pool automatically.** OSM proxy routing is **off** by default for new installs (opt-in: it downloads third-party proxy lists and probes hundreds of unknown hosts; list entries pointing at loopback, private or reserved addresses are discarded). Once the owner enables it, the pool starts empty and an empty pool fails closed, so on the first run the same job discovers a first pool and stores everything Auto-discover would (`proxy_seed` in the audit log) — started at container boot, by the first page visit's pseudo-cron, or by the first OSM request, whichever comes first, with the same lock and cooldown. Until it finishes (typically a minute or two) OSM-backed map views answer `502` rather than reach OSM from the server's own address; if discovery finds nothing (no outbound network) it retries after the cooldown. Existing installs keep whatever the owner set. To opt out: turn routing off in Settings, or set `DDMGMT_PROXY_HEAL=0` (routing on + empty pool then simply stays failed-closed until you add proxies).
 
 **Stale entries are re-probed automatically.** A manually added proxy is only format-checked at insert, so a typo'd-but-well-formed URL would sit at `new` forever. Every cleanup pass (hourly pseudo-cron, or real cron) re-probes the 3 stalest entries — never checked, or not checked in 7 days — against a real OSM tile and updates their status, so the pool display reflects reality even for proxies live traffic never exercises.
 
@@ -611,7 +683,7 @@ A zero-dependency PHP suite (no PHPUnit — each file is a standalone script), a
 
 | Layer | What it proves | Run it |
 |---|---|---|
-| **PHP suites** — 30 | Crypto, auth, limits, state machine, maps, i18n, fail-closed branches, live-HTTP flows | `php tests/schema_loader.php && php tests/run_all.php` |
+| **PHP suites** — 45 | Crypto, auth, limits, state machine, maps, i18n, fail-closed branches, live-HTTP flows, web installer | `php tests/schema_loader.php && php tests/run_all.php` |
 | **Browser E2E** — 7 specs | What raw HTTP cannot see: no-JS paths, CSP-clean DOM, offline maps, mid-reveal UI | `npm ci && npx playwright install chromium && npm run e2e` |
 | **Coverage gate** | Line coverage floors over `includes/` under `pcov` | `composer install && php tests/coverage_runner.php` |
 | **Mutation probe** — 16 mutants | A tested guard versus a dead one | `php tools/mutation_probe.php` |
@@ -621,21 +693,22 @@ A zero-dependency PHP suite (no PHPUnit — each file is a standalone script), a
 The suite never touches your real database: `tests/bootstrap.php` forces `DDMGMT_DB_NAME=deaddrops_test` and points the app at TCP loopback unless you say otherwise.
 
 <details>
-<summary><b>The 30 PHP suites</b>, by area</summary>
+<summary><b>The 45 PHP suites</b>, by area</summary>
 
 <br>
 
 | Area | Suites |
 |---|---|
-| Crypto & keys | `CryptoTest` — AES-256-GCM roundtrip, tamper rejection, CBC/raw-key rejection, HKDF key separation |
+| Crypto & keys | `CryptoTest` — AES-256-GCM roundtrip, tamper rejection, CBC/raw-key rejection, HKDF key separation · `TokenIndexTest` — HMAC-indexed order tokens, no plaintext in any table, migration from the old schema, key rotation re-indexing |
 | Authentication | `AuthTest` (login / 2FA / session fixation / logout), `AuthorizationTest`, `AuthorizationHttpTest` (owner vs courier, IDOR and destructive-IDOR probes over live HTTP), `Verify2faTest`, `SetupPasswordTest`, `TotpTest` (RFC 4648 base32 + RFC 6238 vectors), `TotpReplayTest`, `CsrfTest` |
 | Rate limiting | `RateLimitTest` (budgets, scopes, window expiry, kill-switch), `RateLimitConcurrencyTest`, `RateLimitTzTest` |
 | Order lifecycle | `StateTransitionTest`, `StateRaceTest` (atomic transitions under contention), `CleanupTest` (expiry + photo shredding + limiter purging), `PanicTest`, `PublicFlowTest` (token lookup, unlock, PRG reveal, receipt, per-session bucket) |
 | Public pages & settings | `I18nTest`, `PublicLangTest` (public language choice vs admin account language), `SettingsTest` |
 | Uploads | `UploadHardeningTest`, `PhotoCapTest` |
 | Logging | `LoggerTest` — hash chain, continuity checkpoints, unusable-key behaviour |
-| Maps & proxy | `MapsTest`, `MapsFetchTest` (zone tokens, CLI pins, worker lock, orphan sweep), `ProxyTest` (anonymity gate, tile cache), `ProxyClientTest` (response size ceilings) |
-| Structure & guards | `KernelTest` (service manifest, CLI-only guards, web-server denies), `DispatchTest` (the thin admin dispatcher contract), `FailClosedTest` (every guard, limiter, wipe and decrypt path, plus the DB TLS option matrix) |
+| Maps & proxy | `MapsTest`, `MapsFetchTest` (zone tokens, CLI pins, worker lock, orphan sweep), `MapsPhpTest` (pure-PHP zone engine), `PmtilesTest` (PMTiles v3 framing), `ProxyTest` (anonymity gate, tile cache), `ProxyClientTest` (response size ceilings), `ProxyHealTest` (failed-proxy replacement: confirm, replace-never-just-delete, manual entries exempt, lock, cooldown) |
+| Structure & guards | `KernelTest` (service manifest, CLI-only guards, web-server denies), `AdminMobileTest` (phone layout contract: menu button, OSM badge rules, touch zone editor), `VersionTest` (release vs beta build line, owners only), `PseudoCronTest` (any page starts the hourly sweep, healthz doesn't, the env switch), `LogViewerTest` (Settings lists the structured log that Verify integrity checks), `ArrayInputTest` (every entry point is sent every parameter name as an array — no crash, no TypeError in the logs), `HostTest` (shared-hosting degradations: config-constant switches, no exec / CLI / cURL, curl-less proxy routing with sequential pool probing, inline proxy upkeep, automatic routing switch-off, pure-PHP zone downloads), `ProxyTransportTest` (proxy framing units plus loopback CONNECT/SOCKS stubs and live-TLS proofs through both tunnel types), `DispatchTest` (the thin admin dispatcher contract), `FailClosedTest` (every guard, limiter, wipe and decrypt path, plus the DB TLS option matrix) |
+| Web installer | `InstallerTest` (offline end-to-end of the one-file installer: server check, release download, schema setup, config write — plus proof the deleted proxy actions stay deleted), `InstallerLimitedEnvTest` (the same under a crippled `php.ini`: no curl, no exec, no ZipArchive), `InstallerMinTest` (the committed `.min` bundle is in sync, smaller, and passes the same smoke — including a socket-engine-pinned fetch) |
 
 </details>
 
@@ -754,7 +827,9 @@ DeadDropMGMT/
 │   ├── settings.php          Settings cache (one DB query per page load)
 │   ├── i18n.php              Translation engine (8 languages, CLDR plurals,
 │   │                         account preference + public ?lang= switcher)
-│   ├── proxy.php             OSM outbound proxy pool + free-proxy discovery + tile cache
+│   ├── proxy.php             OSM outbound proxy pool + free-proxy discovery + self-healing + tile cache
+│   ├── version.php           Build provenance: release vs beta (Settings → Version)
+│   ├── host.php              Host capability probes + config-constant switches (shared hosting)
 │   ├── maps.php              Self-hosted maps: zones, pmtiles CLI, worker, map style
 │   ├── analytics.php         Event logger
 │   ├── logger.php            Structured JSONL log + tamper-evident hash chain
@@ -765,7 +840,8 @@ DeadDropMGMT/
 │
 ├── cron/
 │   ├── cleanup.php           Expiry sweep, checkpoints, proxy re-probe (CLI only)
-│   └── maps_sync.php         Map zone download worker (CLI only)
+│   ├── maps_sync.php         Map zone download worker (CLI only)
+│   └── proxy_heal.php        Replaces failed discovered pool proxies (CLI only)
 │
 ├── logs/                     App + error log (blocked from web)
 ├── uploads/                  Order photos: served by URL, no listing,
@@ -777,7 +853,12 @@ DeadDropMGMT/
 ├── tests/                    Zero-dependency suite (see Tests above)
 ├── e2e/                      Playwright specs, seed script, offline map fixture
 ├── tools/                    CLI maintenance: key rotation/separation,
-│                             CBC→GCM migration, recovery purge, mutation probe
+│                             CBC→GCM and order-token migrations, location row binding
+│                             (bind_locations.php), recovery purge, mutation probe,
+│                             build_info.sh (version provenance for image builds),
+│                             install.php (one-file web installer for shell-less shared hosting),
+│                             install.min.php (its minified upload build — generated, CI-rebuilt),
+│                             build_installer_min.php (the generator: php tools/build_installer_min.php)
 ├── docker/                   Apache/nginx/Caddy front configs, entrypoint,
 │                             php.ini overrides, e2e journey
 ├── docs/                     ADRs + troubleshooting guide

@@ -1,10 +1,14 @@
 version: 2
+# Every ecosystem targets `dev`: master is protected and only receives
+# dev via release PRs, so bumps opened against master would bypass the
+# normal flow and leave dev behind.
 updates:
   # CI actions drift too — a compromised or outdated action version is a
   # supply-chain risk like any other dependency. Dependabot understands
   # SHA-pinned references and proposes the pinned form of the new version.
   - package-ecosystem: github-actions
     directory: /
+    target-branch: dev
     schedule:
       interval: weekly
 
@@ -12,6 +16,7 @@ updates:
   # design (ADR-001) — this keeps the tooling honest anyway.
   - package-ecosystem: composer
     directory: /
+    target-branch: dev
     schedule:
       interval: weekly
 
@@ -22,5 +27,15 @@ updates:
   # together with the weekly actions updates.
   - package-ecosystem: docker
     directory: /
+    target-branch: dev
+    schedule:
+      interval: weekly
+
+  # Service images in the compose files (mariadb, nginx, caddy), pinned by
+  # digest like the Dockerfile bases — without this entry nothing would ever
+  # propose their security updates.
+  - package-ecosystem: docker-compose
+    directory: /
+    target-branch: dev
     schedule:
       interval: weekly

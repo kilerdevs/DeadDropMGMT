@@ -35,7 +35,7 @@ $_active = 'users';
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <meta name="darkreader-lock">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Admin — <?= t('admin.users.title') ?></title><link rel="stylesheet" href="/admin/style.css">
+<title>Admin — <?= t('admin.users.title') ?></title><link rel="stylesheet" href="/admin/style.css?v=<?= admin_css_ver() ?>">
 </head>
 <body>
 <div class="shell">
@@ -78,6 +78,10 @@ $_active = 'users';
                                 <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
                                 <input type="hidden" name="action" value="reset_2fa">
                                 <input type="hidden" name="user_id" value="<?= (int)$owner['id'] ?>">
+                                <?php if ((int)$owner['id'] === current_user_id()): ?>
+                                <input type="password" name="current_password" required autocomplete="current-password"
+                                       placeholder="<?= htmlspecialchars(t('admin.users.current_password_placeholder'), ENT_QUOTES, 'UTF-8') ?>">
+                                <?php endif; ?>
                                 <button class="action-btn action-btn--danger"><?= t('admin.users.disable_2fa_button') ?></button>
                             </form>
                             <?php endif; ?>
@@ -88,6 +92,10 @@ $_active = 'users';
                                 <input type="hidden" name="action" value="change_password">
                                 <input type="hidden" name="user_id" value="<?= (int)$owner['id'] ?>">
                                 <div class="inline-pw-form">
+                                    <?php if ((int)$owner['id'] === current_user_id()): ?>
+                                    <input type="password" name="current_password" required autocomplete="current-password"
+                                           placeholder="<?= htmlspecialchars(t('admin.users.current_password_placeholder'), ENT_QUOTES, 'UTF-8') ?>">
+                                    <?php endif; ?>
                                     <input type="password" name="new_password" placeholder="<?= htmlspecialchars(t('admin.users.new_password_placeholder'), ENT_QUOTES, 'UTF-8') ?>" autocomplete="new-password">
                                     <button type="submit" class="action-btn"><?= t('admin.users.save_button') ?></button>
                                 </div>

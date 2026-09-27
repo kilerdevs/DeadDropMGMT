@@ -1,7 +1,9 @@
 config.php
-logs/
+logs/*
+!logs/.htaccess
 uploads/
 cache/osm_tiles/
+cache/sessions/
 data/maps/
 tiles/*.pmtiles
 tiles/*.part
@@ -16,3 +18,4 @@ coverage-html/
 node_modules/
 test-results/
 playwright-report/
+build-info.json

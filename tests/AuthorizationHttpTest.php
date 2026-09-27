@@ -18,7 +18,7 @@ $cmd  = escapeshellarg(PHP_BINARY)
 // Portable null device (same pattern as PublicFlow/StateRace): hardcoded NUL
 // would create a stray ./NUL file on Linux and stop suppressing output.
 $null = DIRECTORY_SEPARATOR === '\\' ? 'NUL' : '/dev/null';
-$proc = proc_open($cmd, [['pipe', 'r'], ['file', $null, 'w'], ['file', $null, 'w']], $p);
+$proc = proc_open(t_exec_cmd($cmd), [['pipe', 'r'], ['file', $null, 'w'], ['file', $null, 'w']], $p);
 register_shutdown_function(function () use ($proc): void {
     // Portable teardown: taskkill is Windows-only — on Linux an orphaned
     // php -S keeps the output pipe open and hangs the whole job.
@@ -76,7 +76,7 @@ if (!$up) { exit(T::done()); }
 // ── Seed: owner, two couriers, three orders ───────────────────────────────────
 $db = get_db();
 $db->prepare("DELETE FROM users WHERE username IN ('t_ah_owner','t_ah_courier_a','t_ah_courier_b')")->execute();
-$db->prepare("DELETE FROM orders WHERE order_token LIKE 'ahtoken%'")->execute();
+purge_orders_like($db, 'ahtoken');
 
 $hash = password_hash('AzPass123!', PASSWORD_BCRYPT);
 $mk   = static function (string $u, string $r) use ($db, $hash): int {
@@ -88,13 +88,13 @@ $courierA  = $mk('t_ah_courier_a', 'courier');
 $courierB  = $mk('t_ah_courier_b', 'courier');
 
 $ins = $db->prepare(
-    "INSERT INTO orders (created_by, order_token, pickup_password_hash, location_encrypted, location_iv,
+    "INSERT INTO orders (created_by, token_hmac, token_enc, token_iv, pickup_password_hash, location_encrypted, location_iv,
                          status, delivered_at, expires_at)
-     VALUES (?, ?, 'x', 'ZQ==', 'abababababababababababab', 'delivered', NOW(), NOW() + INTERVAL 24 HOUR)"
+     VALUES (?, ?, ?, ?, 'x', 'ZQ==', 'abababababababababababab', 'delivered', NOW(), NOW() + INTERVAL 24 HOUR)"
 );
-$ins->execute([$courierA, 'ahtokenA00000001']); $orderA = (int)$db->lastInsertId();
-$ins->execute([$courierB, 'ahtokenB00000002']); $orderB = (int)$db->lastInsertId();
-$ins->execute([null,       'ahtokenO00000003']); $orderO = (int)$db->lastInsertId();
+$ins->execute([$courierA, ...tk('ahtokenA00000001')]); $orderA = (int)$db->lastInsertId();
+$ins->execute([$courierB, ...tk('ahtokenB00000002')]); $orderB = (int)$db->lastInsertId();
+$ins->execute([null,       ...tk('ahtokenO00000003')]); $orderO = (int)$db->lastInsertId();
 
 $login = static function (string $user, string $pass) use ($B, $csrfOf): array {
     [, $b, $ck] = _az('GET', "$B/admin/index.php", null, '');
@@ -229,6 +229,21 @@ $ock = $login('t_ah_owner', 'AzPass123!')[0];
 [, $b] = _az('GET', "$B/admin/orders.php", null, $ock);
 $ocsrf = $csrfOf($b);
 T::ok('owner logged in', $ocsrf !== '');
+
+// ── Token display (ADR-019): the database holds only an index and an encrypted
+// copy, so every admin page that shows a token must open it — and none may 500.
+set_setting('analytics_enabled', '1');
+log_event('lookup', $orderO, 'ahtokenO00000003');
+audit('t_ah_tokview', $orderO, 'ahtokenO00000003');
+T::ok('orders page lists the readable token', str_contains($b, 'ahtokenO00000003'));
+[$stV, $bV] = _az('GET', "$B/admin/edit.php?id=$orderO", null, $ock);
+T::ok('edit page shows the readable token', $stV === 200 && str_contains($bV, 'ahtokenO00000003'));
+[$stV, $bV] = _az('GET', "$B/admin/analytics.php", null, $ock);
+T::ok('analytics page shows the readable token', $stV === 200 && str_contains($bV, 'ahtokenO00000003'));
+[$stV, $bV] = _az('GET', "$B/admin/audit_log.php", null, $ock);
+T::ok('audit log shows the readable token for a live order', $stV === 200 && str_contains($bV, 'ahtokenO00000003'));
+$db->prepare("DELETE FROM audit_log WHERE action = 't_ah_tokview'")->execute();
+$db->exec("DELETE FROM order_events WHERE event_type = 'lookup' AND order_id = $orderO");
 _az('POST', "$B/admin/delete.php", ['csrf_token' => $ocsrf, 'id' => $orderB, 'confirm' => '1'], $ock);
 T::ok('owner deletes foreign order (positive control)', !$orderBExists());
 
@@ -287,7 +302,7 @@ T::ok('admin.js refreshes the token before any POST form', str_contains((string)
 // .htaccess, so this proves the scripts' own SAPI guard.)
 foreach ([
     'tools/purge_pickup_password_recovery.php', 'tools/separate_keys.php', 'tools/migrate_cbc_to_gcm.php',
-    'tools/rotate_aes_key.php', 'tools/mutation_probe.php', 'docker/e2e_journey.php', 'e2e/seed.php',
+    'tools/rotate_aes_key.php', 'tools/mutation_probe.php', 'tools/build_installer_min.php', 'docker/e2e_journey.php', 'e2e/seed.php',
     'cron/cleanup.php', 'cron/maps_sync.php', 'tests/schema_loader.php', 'tests/bootstrap.php', 'tests/run_all.php',
 ] as $cliOnly) {
     [$stCli, $bCli] = _az('GET', "$B/$cliOnly", null, '');
@@ -341,7 +356,7 @@ set_setting('rate_limit_max', $prevMax);
 $db->exec("DELETE FROM rate_limits WHERE scope LIKE 'admin_login%'");
 
 // ── Cleanup ──────────────────────────────────────────────────────────────────
-$db->prepare("DELETE FROM orders WHERE order_token LIKE 'ahtoken%'")->execute();
+purge_orders_like($db, 'ahtoken');
 $db->prepare('DELETE FROM users WHERE id IN (?, ?, ?)')->execute([$ownerId, $courierA, $courierB]);
 
 exit(T::done());

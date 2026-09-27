@@ -1,0 +1,3 @@
+# Never web-served. Per-directory deny so protection does not depend on
+# mod_rewrite (the root .htaccess rules are skipped where it is absent).
+Require all denied

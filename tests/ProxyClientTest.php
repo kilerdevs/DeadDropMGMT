@@ -16,7 +16,12 @@ unset($_SERVER['NO_PROXY'], $_SERVER['no_proxy']);
 // stub only plays the remote endpoint. Discovery sources and public judges
 // stay untouched — no external traffic is generated.
 
-$port = 8700 + (int)(getmypid() % 300);
+// OS-assigned free port: the old 8700 + pid % 300 range overlapped the fixed
+// ports (8941-8946) and pid-derived ranges of other suites, so a server still
+// shutting down from an earlier suite could answer instead of this stub.
+$probe = stream_socket_server('tcp://127.0.0.1:0');
+$port = (int)explode(':', (string)stream_socket_get_name($probe, false))[1];
+fclose($probe);
 $root = dirname(__DIR__);
 $stubDir = sys_get_temp_dir() . '/ddmgmt_stub_' . getmypid();
 if (!is_dir($stubDir)) { mkdir($stubDir, 0700, true); }
@@ -36,7 +41,7 @@ $null = DIRECTORY_SEPARATOR === '\\' ? 'NUL' : '/dev/null';
 $cmd  = escapeshellarg(PHP_BINARY)
     . ' -d session.save_path=' . escapeshellarg(ini_get('session.save_path'))
     . " -S 127.0.0.1:$port " . escapeshellarg($router);
-$proc = proc_open($cmd, [['pipe', 'r'], ['file', $null, 'w'], ['file', $null, 'w']], $pipes);
+$proc = proc_open(t_exec_cmd($cmd), [['pipe', 'r'], ['file', $null, 'w'], ['file', $null, 'w']], $pipes);
 if (!is_resource($proc)) { fwrite(STDERR, "cannot spawn stub server\n"); exit(1); }
 register_shutdown_function(static function () use ($proc, $router, $stubDir): void {
     // SIGTERM ends php -S on POSIX; on Windows the listener survives

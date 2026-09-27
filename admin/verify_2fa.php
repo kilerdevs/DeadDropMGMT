@@ -26,16 +26,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // at the top: a wrong-code re-render below must embed the fresh
         // value, or the next attempt dies with "Invalid CSRF token".
         $csrf = generate_csrf();
-        $rl = rl_status('admin_2fa');
-        // Per-ACCOUNT budget next to the per-IP one: a stolen password plus
-        // rotating addresses must not buy unlimited six-digit guesses.
+        // Spend BEFORE verifying, atomically: check-then-count would let a
+        // burst of parallel guesses (one pending session each) all pass the
+        // check during the same window. Per-ACCOUNT budget next to the
+        // per-IP one: a stolen password plus rotating addresses must not buy
+        // unlimited six-digit guesses.
         $acctKey = 'u:' . $pending_uid;
-        $acctRl = rl_status('admin_2fa_acct', $acctKey);
-        if ($acctRl['blocked']) {
-            $rl = $acctRl;
-        }
-        if ($rl['blocked']) {
-            $error = t('admin.verify2fa.error.rate_limited', ['min' => (int)ceil($rl['remaining'] / 60)]);
+        $hit = rl_hit('admin_2fa');
+        $acctHit = rl_hit('admin_2fa_acct', null, null, $acctKey);
+        if ($hit['blocked'] || $acctHit['blocked']) {
+            $rem = $hit['blocked'] ? $hit['remaining'] : $acctHit['remaining'];
+            $error = t('admin.verify2fa.error.rate_limited', ['min' => (int)ceil($rem / 60)]);
         } else {
             try {
                 $stmt = get_db()->prepare(
@@ -60,6 +61,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $counter = ($user && $secret !== false) ? totp_verify_counter($secret, $code) : null;
             $claimed = $counter !== null && $user && totp_claim_counter((int)$user['id'], $counter);
             if ($user && $claimed) {
+                rl_refund('admin_2fa');               // this request was not a guess
                 rl_reset('admin_2fa_acct', $acctKey); // a valid code proves the real owner is here
                 admin_finish_login((int)$user['id'], $user['role'], $user['username'], true, $user['lang'] ?? 'en');
                 header('Location: /admin/orders.php');
@@ -71,16 +73,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // whether the account exists or its secret decrypts.
                 totp_verify(DUMMY_TOTP_SECRET, $code);
             }
-            $hit = rl_hit('admin_2fa');
-            rl_hit('admin_2fa_acct', null, null, $acctKey);
-            if ($hit['blocked']) {
-                $error = t('admin.verify2fa.error.rate_limited', ['min' => (int)ceil($hit['remaining'] / 60)]);
-            } else {
-                // Guessing visibility mirrors the password step: the audit
-                // row carries the targeted account, never the tried code.
-                audit('2fa_failed', $pending_uid, null, (string)($user['username'] ?? 'unknown'));
-                $error = t('admin.verify2fa.error.invalid_code');
-            }
+            // Guessing visibility mirrors the password step: the audit
+            // row carries the targeted account, never the tried code.
+            audit('2fa_failed', $pending_uid, null, (string)($user['username'] ?? 'unknown'));
+            $error = t('admin.verify2fa.error.invalid_code');
         }
     }
 }
@@ -92,7 +88,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <meta name="darkreader-lock">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Admin — <?= t('admin.verify2fa.title') ?></title><link rel="stylesheet" href="/admin/style.css">
+<title>Admin — <?= t('admin.verify2fa.title') ?></title><link rel="stylesheet" href="/admin/style.css?v=<?= admin_css_ver() ?>">
 </head>
 <body class="login-page">
 <div class="login-wrap">

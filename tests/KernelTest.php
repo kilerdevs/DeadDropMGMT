@@ -33,7 +33,7 @@ foreach (glob($root . '/includes/*.php') as $f) {
     }
     $services[] = strtolower(str_replace('\\', '/', (string)realpath($f)));
 }
-T::ok('service files found', count($services) === 15);
+T::ok('service files found', count($services) === 19);
 foreach ($services as $s) {
     T::ok('kernel loads ' . basename($s), isset($loaded[$s]));
 }
@@ -41,6 +41,7 @@ foreach ($services as $s) {
 // ── One callable per service ────────────────────────────────────────────────
 foreach ([
     'logger'      => 'app_log',
+    'host'        => 'host_flag',
     'db'          => 'get_db',
     'net'         => 'get_client_ip',
     'settings'    => 'get_setting',
@@ -52,9 +53,11 @@ foreach ([
     'analytics'   => 'log_event',
     'order_state' => 'order_delete_atomic',
     'proxy'       => 'osm_proxy_pool',
+    'pmtiles'     => 'pmtiles_tile_id',
     'maps'        => 'map_provider',
     'cleanup'     => 'run_cleanup_if_due',
     'wipe'        => 'do_panic_wipe',
+    'setup_check' => 'setup_runtime_checks',
 ] as $service => $fn) {
     T::ok("service $service exposes $fn()", function_exists($fn));
 }
@@ -81,26 +84,30 @@ foreach (glob($root . '/admin/*.php') as $f) {
     }
     $checked += _kernel_guarded($name, $src);
 }
-T::ok('admin entry pages scanned', $checked === 34);
+T::ok('admin entry pages scanned', $checked === 35);
 
 // ── Same rule for every other entry point: public pages, cron, CLI tools,
 // and the docker journey script. Deliberate exceptions (not scanned):
 // healthz.php answers liveness with zero dependencies by design,
-// config.php IS the base layer, and tests/* keep their own bootstrap.
+// config.php IS the base layer, tests/* keep their own bootstrap, and the
+// installer trio is standalone by design: tools/install.php runs where no
+// app exists yet (cannot require the kernel; a browser wizard, so it cannot
+// be CLI-only either), tools/install.min.php is its generated copy, and
+// tools/build_installer_min.php is a dev-time generator with its own guards
+// (covered by InstallerMinTest + the HTTP-inert probe instead).
+$noKernel = static fn(string $f): bool => !in_array(basename($f),
+    ['install.php', 'install.min.php', 'build_installer_min.php'], true);
 $others = array_merge(
     [$root . '/index.php', $root . '/receive.php', $root . '/cron/cleanup.php', $root . '/cron/maps_sync.php'],
-    glob($root . '/tools/*.php') ?: [],
+    array_values(array_filter(glob($root . '/tools/*.php') ?: [], $noKernel)),
     [$root . '/docker/e2e_journey.php'],
 );
-foreach ($others as $f) {
-    $checked += _kernel_guarded('entry ' . basename($f), (string)file_get_contents($f));
-}
-T::ok('non-admin entry points scanned', count($others) === 10);
+T::ok('non-admin entry points scanned', count($others) === 12);
 
 // ── CLI-only scripts refuse every non-CLI SAPI, and the web server config
 // keeps developer/ops material off the wire (Apache .htaccess, nginx, Caddy).
 $cliOnly = array_merge(
-    glob($root . '/tools/*.php') ?: [],
+    array_values(array_filter(glob($root . '/tools/*.php') ?: [], $noKernel)),
     glob($root . '/cron/*.php') ?: [],
     [$root . '/docker/e2e_journey.php', $root . '/e2e/seed.php'],
     glob($root . '/tests/*.php') ? array_values(array_filter(

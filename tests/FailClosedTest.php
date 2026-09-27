@@ -70,6 +70,12 @@ if ($httpsKept === null) {
 $_SERVER['REMOTE_ADDR'] = '127.0.0.1';
 $_SERVER['HTTP_X_FORWARDED_PROTO'] = 'http';
 T::ok('trusted proxy XFP http NOT https', !request_is_https());
+// Multi-hop lists follow the X-Forwarded-For rule: the LAST entry is the one
+// the trusted peer wrote. A client-supplied leading "https" must not win.
+$_SERVER['HTTP_X_FORWARDED_PROTO'] = 'https, http';
+T::ok('multi-hop XFP: forged leading https does not win', !request_is_https());
+$_SERVER['HTTP_X_FORWARDED_PROTO'] = 'http, https';
+T::ok('multi-hop XFP: peer-written trailing https counts', request_is_https());
 putenv('DDMGMT_TRUST_PROXY=0');
 unset($_SERVER['HTTP_X_FORWARDED_PROTO']);
 
@@ -224,9 +230,14 @@ $_SESSION = [];
 // ── Rate limiter: disabled short-circuit + fail-closed branches ─────────────
 set_setting('rate_limit_enabled', '0');
 T::eq('rl_status disabled short-circuit',
-      ['blocked' => false, 'remaining' => 0, 'count' => 0], rl_status('cov'));
+      ['blocked' => false, 'remaining' => 0, 'count' => 0], rl_status('public'));
 T::eq('rl_hit disabled short-circuit',
-      ['blocked' => false, 'remaining' => 0, 'count' => 0], rl_hit('cov'));
+      ['blocked' => false, 'remaining' => 0, 'count' => 0], rl_hit('public'));
+// The switch is the public IP budget only: account / login / 2FA budgets
+// keep counting (they used to be switched off with it).
+$covHit = rl_hit('admin_2fa_acct', null, null, 'u:cov-switch');
+T::ok('switch leaves account budgets on', $covHit['count'] >= 1);
+get_db()->exec("DELETE FROM rate_limits WHERE ip_address = 'u:cov-switch'");
 set_setting('rate_limit_enabled', '1');
 
 // Counter unreadable → status reports BLOCKED (fail closed)
@@ -428,6 +439,27 @@ $refused = 'mysql:host=127.0.0.1;port=1;dbname=deaddrops_test;charset=utf8mb4';
 T::throws('unreachable database throws PDOException',
           fn() => db_connect($refused, 'root', '', db_options('', '', '', true)),
           PDOException::class);
+
+// SET time_zone honored where allowed, degraded (never fatal) where the
+// host denies SET — cheap shared panels revoke it, and that must not 503
+// the app.
+T::eq('UTC session applies where allowed', true, db_init_session($db));
+// Credentials come from the environment like everywhere else (CI's database
+// has a root password, local dev does not) — otherwise this connection
+// itself fails and the test proves nothing about the SET fallback.
+$denyPass = getenv('DDMGMT_DB_PASS');
+$denyPdo = new class(
+    'mysql:host=' . (getenv('DDMGMT_DB_HOST') ?: '127.0.0.1')
+        . ';port=' . (getenv('DDMGMT_DB_PORT') ?: '3306')
+        . ';dbname=' . TEST_DB_NAME . ';charset=utf8mb4',
+    getenv('DDMGMT_DB_USER') ?: 'root',
+    $denyPass === false ? '' : $denyPass
+) extends PDO {
+    public function exec(string $statement): int|false {
+        throw new PDOException('Access denied; you need (at least one of) the SUPER privilege(s)');
+    }
+};
+T::eq('denied SET degrades to server zone', false, db_init_session($denyPdo));
 
 // Array-shaped request input fails into defaults, never TypeError — and the
 // coverage floor counts these arms while HTTP suites run where pcov cannot

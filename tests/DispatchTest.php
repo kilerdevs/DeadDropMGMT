@@ -67,7 +67,7 @@ $cmd  = escapeshellarg(PHP_BINARY)
       . ' -d session.save_path=' . escapeshellarg(ini_get('session.save_path'))
       . " -S 127.0.0.1:$port -t " . escapeshellarg($root);
 $null = DIRECTORY_SEPARATOR === '\\' ? 'NUL' : '/dev/null';
-$proc = proc_open($cmd, [['pipe', 'r'], ['file', $null, 'w'], ['file', $null, 'w']], $p);
+$proc = proc_open(t_exec_cmd($cmd), [['pipe', 'r'], ['file', $null, 'w'], ['file', $null, 'w']], $p);
 register_shutdown_function(function () use ($proc): void {
     $st = proc_get_status($proc);
     if (!empty($st['running'])) {
@@ -128,7 +128,7 @@ set_setting('rate_limit_window_min', '15');
 // ── Seed ────────────────────────────────────────────────────────────────────
 $db = get_db();
 $db->prepare("DELETE FROM users WHERE username LIKE 't_dt\\_%'")->execute();
-$db->prepare("DELETE FROM orders WHERE order_token LIKE 'tdtoken%'")->execute();
+purge_orders_like($db, 'tdtoken');
 $hash = password_hash('DtPass123!', PASSWORD_BCRYPT);
 $db->prepare("INSERT INTO users (username, password_hash, role) VALUES ('t_dt_owner', ?, 'owner')")->execute([$hash]);
 $ownerId = (int)$db->lastInsertId();
@@ -136,10 +136,10 @@ $db->prepare("INSERT INTO users (username, password_hash, role) VALUES ('t_dt_co
 $courierId = (int)$db->lastInsertId();
 $mkOrder = static function (int $by, string $tok, string $status) use ($db): int {
     $db->prepare(
-        "INSERT INTO orders (created_by, order_token, pickup_password_hash, location_encrypted, location_iv,
+        "INSERT INTO orders (created_by, token_hmac, token_enc, token_iv, pickup_password_hash, location_encrypted, location_iv,
                              status, delivered_at, expires_at)
-         VALUES (?, ?, 'x', 'ZQ==', 'abababababababababababab', ?, NULL, NOW() + INTERVAL 24 HOUR)"
-    )->execute([$by, $tok, $status]);
+         VALUES (?, ?, ?, ?, 'x', 'ZQ==', 'abababababababababababab', ?, NULL, NOW() + INTERVAL 24 HOUR)"
+    )->execute([$by, ...tk($tok), $status]);
     return (int)$db->lastInsertId();
 };
 $oidShim = $mkOrder($ownerId, 'tdtoken00000001', 'preparing');
@@ -274,7 +274,7 @@ T::ok('courier bounced from owner route', $st === 302 && str_contains($loc, '2fa
 
 // ── Cleanup ─────────────────────────────────────────────────────────────────
 $db->prepare("DELETE FROM users WHERE username LIKE 't_dt\\_%'")->execute();
-$db->prepare("DELETE FROM orders WHERE order_token LIKE 'tdtoken%'")->execute();
+purge_orders_like($db, 'tdtoken');
 set_setting('site_name', $oldSite);
 set_setting('rate_limit_max', (string)$oldMax);
 set_setting('rate_limit_window_min', (string)$oldWin);

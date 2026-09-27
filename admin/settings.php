@@ -58,7 +58,7 @@ $csrf = generate_csrf();
 // Analytics stats for the warning label
 try {
     $analytics_events = (int)get_db()->query("SELECT COUNT(*) FROM order_events WHERE event_type NOT LIKE 'admin_%'")->fetchColumn();
-    $analytics_orders = (int)get_db()->query('SELECT COUNT(DISTINCT order_token) FROM order_events WHERE order_token IS NOT NULL')->fetchColumn();
+    $analytics_orders = (int)get_db()->query('SELECT COUNT(DISTINCT token_hmac) FROM order_events WHERE token_hmac IS NOT NULL')->fetchColumn();
 } catch (Exception $e) {
     $analytics_events = 0;
     $analytics_orders = 0;
@@ -118,7 +118,7 @@ function s_label(array $s, string $key): string {
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <meta name="darkreader-lock">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Admin — <?= t('admin.settings.title') ?></title><link rel="stylesheet" href="/admin/style.css">
+<title>Admin — <?= t('admin.settings.title') ?></title><link rel="stylesheet" href="/admin/style.css?v=<?= admin_css_ver() ?>">
 <link rel="stylesheet" href="/admin/vendor/leaflet/leaflet.css">
 <meta name="csrf-token" content="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
 </head>
@@ -134,6 +134,30 @@ function s_label(array $s, string $key): string {
         <?php if ($error):   ?><div class="flash"><?= $error ?></div><?php endif; ?>
         <?php if ($success): ?><div class="flash ok"><?= $success ?></div><?php endif; ?>
         <!-- Flash mirrors t()-built session values; raw echo (see orders.php). -->
+
+        <?php $bi = build_info(); ?>
+        <!-- Build provenance: owners only (this page is require_owner()). -->
+        <div class="version-strip" id="version-strip">
+            <span class="version-label"><?= htmlspecialchars(t('admin.settings.version_label'), ENT_QUOTES, 'UTF-8') ?></span>
+            <?php if (!$bi['known']): ?>
+            <span class="version-muted"><?= htmlspecialchars(t('admin.settings.version_unknown'), ENT_QUOTES, 'UTF-8') ?></span>
+            <?php else: ?>
+            <span class="version-value"><?= $bi['version'] !== null
+                ? 'v' . htmlspecialchars($bi['version'], ENT_QUOTES, 'UTF-8') . ($bi['ahead'] > 0 ? '+' . (int)$bi['ahead'] : '')
+                : '&mdash;' ?></span>
+            <?php if ($bi['beta']): ?>
+            <span class="beta-badge" title="<?= htmlspecialchars(t('admin.settings.version_beta_hint'), ENT_QUOTES, 'UTF-8') ?>">BETA</span>
+            <span class="version-commit"><?php
+                // One line: hash, branch, and (when the tree was modified) a note.
+                $parts = [];
+                if ($bi['commit'] !== null) { $parts[] = '<code>' . htmlspecialchars($bi['commit'], ENT_QUOTES, 'UTF-8') . '</code>'; }
+                if ($bi['branch'] !== null) { $parts[] = '<span class="version-muted">' . htmlspecialchars($bi['branch'], ENT_QUOTES, 'UTF-8') . '</span>'; }
+                if ($bi['dirty']) { $parts[] = '<span class="version-muted">' . htmlspecialchars(t('admin.settings.version_dirty'), ENT_QUOTES, 'UTF-8') . '</span>'; }
+                echo implode(' <span class="version-muted">&middot;</span> ', $parts);
+            ?></span>
+            <?php endif; ?>
+            <?php endif; ?>
+        </div>
 
         <div class="form-panel settings-panel">
             <div autocomplete="off">
@@ -244,6 +268,9 @@ function s_label(array $s, string $key): string {
                     <?php if ($pxOn && !$proxy_pool): ?>
                     <div class="settings-warning"><?= t('admin.proxies.enabled_empty') ?></div>
                     <?php endif; ?>
+                    <?php if (!$pxOn && osm_proxy_auto_off_state() !== null): ?>
+                    <div class="settings-warning"><?= t('admin.proxies.auto_off') ?></div>
+                    <?php endif; ?>
 
                     <div class="proxies-hint"><?= t('admin.proxies.hint') ?></div>
 
@@ -288,6 +315,10 @@ function s_label(array $s, string $key): string {
                 <div class="settings-group">
                     <div class="settings-group-label"><?= htmlspecialchars(t('admin.maps.zones_section'), ENT_QUOTES, 'UTF-8') ?></div>
                     <div class="proxies-hint"><?= t('admin.maps.zones_hint') ?></div>
+                    <?php $zones_ok = maps_downloads_supported(); ?>
+                    <?php if (!$zones_ok): ?>
+                    <div class="settings-warning" id="maps-unsupported"><?= t('admin.maps.flash.unsupported') ?></div>
+                    <?php endif; ?>
                     <div class="maps-disk" id="maps-disk">
                         <?= htmlspecialchars(t('admin.maps.disk_free', ['x' => maps_fmt_bytes(maps_disk_free())]), ENT_QUOTES, 'UTF-8') ?>
                     </div>
@@ -310,12 +341,14 @@ function s_label(array $s, string $key): string {
                         </thead>
                         <tbody id="maps-tbody">
                         <?php foreach ($map_zones as $mz): ?>
-                        <tr data-id="<?= (int)$mz['id'] ?>"
+                        <tr class="mz-c<?= maps_zone_color_index((int)$mz['id']) ?>"
+                            data-status="<?= htmlspecialchars((string)$mz['status'], ENT_QUOTES, 'UTF-8') ?>"
+                            data-id="<?= (int)$mz['id'] ?>"
                             data-min-lon="<?= htmlspecialchars((string)$mz['min_lon'], ENT_QUOTES, 'UTF-8') ?>"
                             data-min-lat="<?= htmlspecialchars((string)$mz['min_lat'], ENT_QUOTES, 'UTF-8') ?>"
                             data-max-lon="<?= htmlspecialchars((string)$mz['max_lon'], ENT_QUOTES, 'UTF-8') ?>"
                             data-max-lat="<?= htmlspecialchars((string)$mz['max_lat'], ENT_QUOTES, 'UTF-8') ?>">
-                            <td class="px-url" data-label="<?= htmlspecialchars(t('admin.maps.th.zone'), ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars((string)$mz['name'], ENT_QUOTES, 'UTF-8') ?></td>
+                            <td class="px-url" data-label="<?= htmlspecialchars(t('admin.maps.th.zone'), ENT_QUOTES, 'UTF-8') ?>"><span class="mz-swatch" aria-hidden="true"></span><?= htmlspecialchars((string)$mz['name'], ENT_QUOTES, 'UTF-8') ?></td>
                             <td data-label="<?= htmlspecialchars(t('admin.maps.th.detail'), ENT_QUOTES, 'UTF-8') ?>">z<?= (int)$mz['maxzoom'] ?></td>
                             <td class="mz-status" data-label="<?= htmlspecialchars(t('admin.maps.th.status'), ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars(t('admin.maps.status.' . $mz['status']), ENT_QUOTES, 'UTF-8') ?><?php if (maps_zone_is_stale($mz)): ?> — <?= htmlspecialchars(t('admin.maps.stale_badge'), ENT_QUOTES, 'UTF-8') ?><?php endif; ?></td>
                             <td class="mz-size" data-label="<?= htmlspecialchars(t('admin.maps.th.size'), ENT_QUOTES, 'UTF-8') ?>"></td>
@@ -328,11 +361,12 @@ function s_label(array $s, string $key): string {
                         </tbody>
                     </table>
 
-                    <div class="form-group" style="margin-top:18px">
+                    <div class="form-group maps-add-group">
                         <div class="field-label"><?= t('admin.maps.add_title') ?></div>
                         <div class="maps-add-grid">
                             <label><?= htmlspecialchars(t('admin.maps.name_label'), ENT_QUOTES, 'UTF-8') ?>
-                                <input type="text" id="mz-name" maxlength="64" autocomplete="off"></label>
+                                <input type="text" id="mz-name" maxlength="64" autocomplete="off">
+                                <span class="mz-field-error" id="mz-name-error" role="alert" hidden></span></label>
                             <label><?= htmlspecialchars(t('admin.maps.maxzoom_label'), ENT_QUOTES, 'UTF-8') ?>
                                 <select id="mz-maxzoom">
                                     <option value="14"><?= t('admin.maps.z14') ?></option>
@@ -344,7 +378,7 @@ function s_label(array $s, string $key): string {
                             <input type="hidden" id="mz-max-lon">
                             <input type="hidden" id="mz-max-lat">
                         </div>
-                        <div class="field-label" style="margin-top:12px"><?= htmlspecialchars(t('admin.maps.editor_title'), ENT_QUOTES, 'UTF-8') ?></div>
+                        <div class="field-label maps-editor-title"><?= htmlspecialchars(t('admin.maps.editor_title'), ENT_QUOTES, 'UTF-8') ?></div>
                         <div class="proxies-hint"><?= t('admin.maps.editor_hint') ?></div>
                         <div class="maps-search-row">
                             <input type="text" id="mz-search" maxlength="200" autocomplete="off"
@@ -354,6 +388,7 @@ function s_label(array $s, string $key): string {
                             <button type="button" id="mz-clear" class="action-btn"><?= t('admin.maps.clear_button') ?></button>
                         </div>
                         <div id="mz-map" class="maps-editor-map"></div>
+                        <?php if (osm_proxy_enabled()) { require __DIR__ . '/osm_monit.php'; } ?>
                         <div class="maps-overlap" id="mz-overlap" hidden></div>
                         <div class="maps-overlap" id="mz-placelabel" hidden></div>
                         <fieldset class="maps-route">
@@ -363,37 +398,76 @@ function s_label(array $s, string $key): string {
                             <label><input type="radio" name="mz-via" value="0" <?= osm_proxy_enabled() ? '' : 'checked' ?>>
                                 <?= htmlspecialchars(t('admin.maps.via_proxy_no'), ENT_QUOTES, 'UTF-8') ?></label>
                         </fieldset>
-                        <button type="button" id="mz-add" class="action-btn"><?= t('admin.maps.queue_button') ?></button>
+                        <button type="button" id="mz-add" class="action-btn"<?= $zones_ok ? '' : ' disabled' ?>><?= t('admin.maps.queue_button') ?></button>
                     </div>
                 </div>
 
             </div>
         </div>
 
-        <!-- ── Error log viewer ──────────────────────────────────────────── -->
+        <!-- ── Hosting capabilities ─────────────────────────────────────── -->
+        <div class="divider"></div>
+        <div class="section-label host-section-label"><?= t('admin.host.section') ?></div>
+        <div class="host-list" id="host-list">
+            <?php foreach (host_capabilities() as $c): ?>
+            <?php
+                $hintKey = 'admin.host.' . $c['id'] . '.' . $c['status'];
+                $hint    = t($hintKey, ['n' => $c['note'], 'dirs' => $c['note']]);
+            ?>
+            <div class="host-row host-row--<?= $c['status'] ?>" data-cap="<?= $c['id'] ?>">
+                <span class="host-label"><?= t('admin.host.' . $c['id'] . '.label') ?></span>
+                <span class="host-status"><?= t('admin.host.' . $c['status']) ?></span>
+                <?php if ($hint !== $hintKey): ?><span class="host-hint"><?= $hint ?></span><?php endif; ?>
+            </div>
+            <?php endforeach; ?>
+        </div>
+
+        <!-- ── Log viewer ────────────────────────────────────────────────── -->
         <?php if (get_setting('show_error_log', '0') === '1'): ?>
         <?php
-        $log_all   = [];
-        $log_total = 0;
-        if (is_file(ERROR_LOG_PATH) && filesize(ERROR_LOG_PATH) > 0) {
-            $log_all   = file(ERROR_LOG_PATH, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-            $log_total = count($log_all);
-        }
-        $log_lines = array_reverse($log_all); // newest first, file line numbers preserved
+        // Structured log: the hash-chained file "Verify integrity" checks. It
+        // is shown first and in full sense — verifying entries nobody can see
+        // is what made the old panel (raw PHP error file only) look empty.
+        $app_view  = log_recent_entries(200);
+        $app_shown = count($app_view['entries']);
+
+        // Tail only (the file is unbounded between cleanup trims): the newest
+        // 500 lines, numbered from the end of the file.
+        [$log_all, $log_cut] = is_file(ERROR_LOG_PATH) ? log_tail_lines(ERROR_LOG_PATH) : [[], false];
+        $log_total = count($log_all);
+        $log_lines = array_reverse($log_all); // newest first
         ?>
         <div class="divider"></div>
-        <div class="section-label"><?= t('admin.settings.error_log_section') ?></div>
+        <div class="section-label"><?= htmlspecialchars(t('admin.settings.app_log_section'), ENT_QUOTES, 'UTF-8') ?></div>
         <div class="log-toolbar">
-            <span class="td-muted"><?= tn('admin.settings.log_line', $log_total, ['n' => number_format($log_total)]) ?></span>
+            <span class="td-muted"><?= tn('admin.settings.log_line', $app_view['total'], ['n' => number_format($app_view['total'])]) ?><?php if ($app_view['total'] > $app_shown): ?> &middot; <?= htmlspecialchars(t('admin.settings.log_showing_latest', ['n' => $app_shown]), ENT_QUOTES, 'UTF-8') ?><?php endif; ?></span>
             <div class="log-toolbar-actions">
-                <?php if ($log_total > 0): ?>
-                <a class="action-btn" href="/admin/download_log.php"><?= t('admin.settings.download_log_button') ?></a>
-                <?php if (is_file(APP_LOG_PATH)): ?>
+                <?php if ($app_view['total'] > 0): ?>
                 <a class="action-btn" href="/admin/download_log.php?file=app"><?= t('admin.settings.download_jsonl_button') ?></a>
-                <?php endif; ?>
                 <?php endif; ?>
                 <button type="button" class="action-btn" id="verify-log-btn"><?= t('admin.settings.verify_log_button') ?></button>
                 <span id="verify-log-result" class="td-muted"></span>
+            </div>
+        </div>
+        <?php if ($app_shown === 0): ?>
+        <div class="log-empty"><?= t('admin.settings.log_empty') ?></div>
+        <?php else: ?>
+        <div class="log-view" id="app-log-view">
+            <?php foreach ($app_view['entries'] as $e): ?>
+            <div class="log-line log-line--<?= htmlspecialchars($e['level'], ENT_QUOTES, 'UTF-8') ?>">
+                <span class="log-num"><?= $e['seq'] !== null ? (int)$e['seq'] : '' ?></span><span class="log-ts"><?= htmlspecialchars($e['ts'], ENT_QUOTES, 'UTF-8') ?></span><span class="log-lvl"><?= htmlspecialchars(strtoupper($e['level']), ENT_QUOTES, 'UTF-8') ?></span><span class="log-text"><?= htmlspecialchars($e['text'], ENT_QUOTES, 'UTF-8') ?></span>
+            </div>
+            <?php endforeach; ?>
+        </div>
+        <?php endif; ?>
+
+        <div class="section-label"><?= t('admin.settings.error_log_section') ?></div>
+        <div class="log-toolbar">
+            <span class="td-muted"><?= tn('admin.settings.log_line', $log_total, ['n' => number_format($log_total)]) ?><?php if ($log_cut): ?> &middot; <?= htmlspecialchars(t('admin.settings.log_showing_latest', ['n' => $log_total]), ENT_QUOTES, 'UTF-8') ?><?php endif; ?></span>
+            <div class="log-toolbar-actions">
+                <?php if ($log_total > 0): ?>
+                <a class="action-btn" href="/admin/download_log.php"><?= t('admin.settings.download_log_button') ?></a>
+                <?php endif; ?>
                 <form method="POST" action="/admin/settings.php">
                     <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
                     <input type="hidden" name="action" value="clear_log">
@@ -440,6 +514,8 @@ function s_label(array $s, string $key): string {
         'log_verify_ok'     => t('admin.settings.log_verify_ok'),
         'log_verify_fail'   => t('admin.settings.log_verify_fail'),
         'log_verify_empty'  => t('admin.settings.log_verify_empty'),
+        'log_verify_truncated'    => t('admin.settings.log_verify_truncated'),
+        'log_verify_cont_unknown' => t('admin.settings.log_verify_cont_unknown'),
         'mz_queued_kicked'  => t('admin.maps.queued_kicked'),
         'mz_queued_cron'    => t('admin.maps.queued_cron'),
         'mz_confirm_delete' => t('admin.maps.confirm_delete'),
@@ -455,6 +531,7 @@ function s_label(array $s, string $key): string {
         'mz_geo_error'      => t('admin.maps.js.geocode_error'),
         'mz_draw'           => t('admin.maps.draw_button'),
         'mz_draw_first'     => t('admin.maps.editor_title'),
+        'mz_name_required'  => t('admin.maps.err.bad_name'),
         'mz_drawing'        => t('admin.maps.drawing_button'),
         'mz_s_queued'      => t('admin.maps.status.queued'),
         'mz_s_sizing'      => t('admin.maps.status.sizing'),
@@ -464,6 +541,9 @@ function s_label(array $s, string $key): string {
         'mz_via_proxy'  => t('admin.maps.via.proxy'),
         'mz_via_direct' => t('admin.maps.via.direct'),
     ]) ?>;
+
+    // Zone colours: one palette for the map layers here and the CSS swatches.
+    var MZ_PALETTE = <?= json_encode(MAPS_ZONE_COLORS) ?>;
 
     // Confirm destructive form submissions
     document.addEventListener('submit', function (e) {
@@ -494,9 +574,43 @@ function s_label(array $s, string $key): string {
         popup.textContent = msg;
         popup.className = 'save-popup' + (isError ? ' error' : '') + ' visible';
         clearTimeout(popupTimer);
+        // Long messages stay up long enough to be read (about 55 ms a character).
+        var ms = Math.min(9000, Math.max(isError ? 3000 : 1400, String(msg).length * 55));
         popupTimer = setTimeout(function () {
             popup.classList.remove('visible');
-        }, isError ? 3000 : 1400);
+        }, ms);
+    }
+
+    // ── Token-safe POSTs ──────────────────────────────────────────────────────
+    // The server rotates the CSRF token on every verified request, and this
+    // page fires several kinds (autosaves, the zone status poll, proxy and zone
+    // actions). Two in flight at once means one is rejected — and a late reply
+    // can even put a stale token back. So every POST goes through ONE queue
+    // (a single token-consuming request at a time), takes the token from the
+    // reply, and if the server still refuses it (403), fetches the live token
+    // and tries once more.
+    var postQueue = Promise.resolve();
+    function postForm(url, fd) {
+        function send(token) {
+            fd.set('csrf_token', token);
+            return fetch(url, { method: 'POST', body: fd }).then(function (r) {
+                return r.json().then(function (j) {
+                    if (j && j.csrf) csrf = j.csrf;
+                    return { r: r, j: j };
+                });
+            });
+        }
+        function run() {
+            return send(csrf).then(function (res) {
+                if (res.r.status === 403 && window.ddmgmtFreshCsrf) {
+                    return window.ddmgmtFreshCsrf().then(send);
+                }
+                return res;
+            });
+        }
+        var p = postQueue.then(run, run);
+        postQueue = p.catch(function () {});
+        return p;
     }
 
     // ── Slider value formatter ────────────────────────────────────────────────
@@ -546,13 +660,11 @@ function s_label(array $s, string $key): string {
         if (err) { showPopup(err, true); return; }
 
         var fd = new FormData();
-        fd.append('csrf_token', csrf);
         fd.append('key', key);
         fd.append('value', value);
-        fetch('/admin/save_setting.php', { method: 'POST', body: fd })
-            .then(function (r) { return r.json(); })
+        postForm('/admin/save_setting.php', fd)
+            .then(function (res) { return res.j; })
             .then(function (d) {
-                if (d.csrf) csrf = d.csrf; // token rotated server-side on each save
                 if (d.ok) {
                     showPopup('✓ ' + I.saved, false);
                     setTimeout(function () { location.reload(); }, 600);
@@ -605,11 +717,10 @@ function s_label(array $s, string $key): string {
 
     function pxPost(action, extra) {
         var fd = new FormData();
-        fd.append('csrf_token', csrf);
         fd.append('action', action);
         if (extra) Object.keys(extra).forEach(function (k) { fd.append(k, extra[k]); });
-        return fetch('/admin/proxy_action.php', { method: 'POST', body: fd })
-            .then(function (r) { return r.json().then(function (j) { if (j.csrf) csrf = j.csrf; return { ok: r.ok, j: j }; }); })
+        return postForm('/admin/proxy_action.php', fd)
+            .then(function (res) { return { ok: res.r.ok, j: res.j }; })
             .catch(function () { return { ok: false, j: { error: I.connection_error } }; });
     }
 
@@ -664,11 +775,10 @@ function s_label(array $s, string $key): string {
 
     function mzPost(action, extra) {
         var fd = new FormData();
-        fd.append('csrf_token', csrf);
         fd.append('action', action);
         if (extra) Object.keys(extra).forEach(function (k) { fd.append(k, extra[k]); });
-        return fetch('/admin/maps_action.php', { method: 'POST', body: fd })
-            .then(function (r) { return r.json().then(function (j) { if (j.csrf) csrf = j.csrf; return { ok: r.ok, j: j }; }); })
+        return postForm('/admin/maps_action.php', fd)
+            .then(function (res) { return { ok: res.r.ok, j: res.j }; })
             .catch(function () { return { ok: false, j: { error: I.mz_request_failed } }; });
     }
 
@@ -709,6 +819,8 @@ function s_label(array $s, string $key): string {
         zones.forEach(function (z) {
             if (z.status === 'queued' || z.status === 'sizing' || z.status === 'downloading') active = true;
             var tr = document.createElement('tr');
+            tr.className = 'mz-c' + (z.id % MZ_PALETTE.length);
+            tr.dataset.status = z.status;
             tr.dataset.id = z.id;
             tr.dataset.minLon = z.min_lon;
             tr.dataset.minLat = z.min_lat;
@@ -745,7 +857,13 @@ function s_label(array $s, string $key): string {
             mzLabels.forEach(function (label, i) {
                 if (label && tr.children[i]) tr.children[i].dataset.label = label;
             });
-            tr.children[0].textContent = z.name;
+            // Zone name behind its colour swatch (same colour as on the map).
+            var sw = document.createElement('span');
+            sw.className = 'mz-swatch';
+            sw.setAttribute('aria-hidden', 'true');
+            tr.children[0].textContent = '';
+            tr.children[0].appendChild(sw);
+            tr.children[0].appendChild(document.createTextNode(z.name));
             tr.children[2].textContent = status;
             tr.children[3].textContent = size;
             tr.children[4].textContent = speed;
@@ -758,6 +876,7 @@ function s_label(array $s, string $key): string {
         // (Function declaration, hoisted: safe while the editor block below
         // has not executed yet — it no-ops on an empty draft.)
         if (typeof mzRefreshOverlap === 'function') mzRefreshOverlap();
+        if (typeof mzSyncZoneLayers === 'function') mzSyncZoneLayers();
         return active;
     }
 
@@ -819,9 +938,20 @@ function s_label(array $s, string $key): string {
                 showPopup(I.mz_draw_first, true);
                 return;
             }
+            // The name field sits far above the map and this button. Check it HERE
+            // and take the admin to it — scrolled into view, focused, marked, with
+            // the reason written next to it — instead of a toast that names a field
+            // nobody can see and vanishes in seconds.
+            var mzNameEl = document.getElementById('mz-name');
+            var zoneName = mzNameEl.value.trim();
+            if (zoneName === '' || zoneName.length > 64) {
+                mzNameProblem(I.mz_name_required);
+                return;
+            }
+            mzNameProblem('');
             mzAdd.disabled = true;
             mzPost('add', {
-                name: document.getElementById('mz-name').value,
+                name: zoneName,
                 min_lon: bbox.min_lon,
                 min_lat: bbox.min_lat,
                 max_lon: bbox.max_lon,
@@ -838,8 +968,24 @@ function s_label(array $s, string $key): string {
                 }
             });
         });
+        document.getElementById('mz-name').addEventListener('input', function () { mzNameProblem(''); });
     }
-    // ── Zone rectangle editor (OSM canvas, same-origin tiles only) ────────────
+    // Mark / unmark the zone-name field. With a message it also scrolls the field
+    // into view and focuses it (so typing starts right there).
+    function mzNameProblem(msg) {
+        var el = document.getElementById('mz-name');
+        var out = document.getElementById('mz-name-error');
+        if (!el || !out) return;
+        out.textContent = msg;
+        out.hidden = msg === '';
+        el.classList.toggle('mz-invalid', msg !== '');
+        el.setAttribute('aria-invalid', msg !== '' ? 'true' : 'false');
+        if (msg !== '') {
+            el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            el.focus({ preventScroll: true });
+        }
+    }
+    // ── Zone rectangle editor (OSM canvas, tiles via tile_proxy.php only) ────────────
     // Leaflet core has no editable rectangles, so this is hand-rolled: a
     // draft rectangle with four draggable corner handles. Dragging the body
     // moves it, corners resize against the opposite corner. Every change
@@ -878,6 +1024,9 @@ function s_label(array $s, string $key): string {
                 var b = {
                     min_lon: mzNum(tr.dataset.minLon), min_lat: mzNum(tr.dataset.minLat),
                     max_lon: mzNum(tr.dataset.maxLon), max_lat: mzNum(tr.dataset.maxLat),
+                    name: tr.children[0] ? tr.children[0].textContent.trim() : '',
+                    id: parseInt(tr.dataset.id || '0', 10),
+                    status: tr.dataset.status || '',
                 };
                 if (b.min_lon !== null && b.min_lat !== null && b.max_lon !== null && b.max_lat !== null) {
                     out.push(b);
@@ -893,11 +1042,46 @@ function s_label(array $s, string $key): string {
             if (area <= 0) return 0;
             return Math.min(1, (w * h) / area);
         }
-        // Existing zones as red context rectangles (read-only).
-        mzExistingZones().forEach(function (b) {
-            L.rectangle([[b.min_lat, b.min_lon], [b.max_lat, b.max_lon]],
-                { color: '#c0392b', weight: 2, fillOpacity: 0.08, interactive: false }).addTo(mzMap);
-        });
+        // Existing zones as read-only context rectangles, each in its own colour
+        // (the swatch colour in the list) and carrying its name as a permanent
+        // centred label. Ready zones are solid; zones still downloading or
+        // failed are dashed and lighter. The status poll re-renders the table
+        // rows, so the layers follow: they are rebuilt whenever the set of
+        // zones (id, name, box, status) changes and left alone otherwise.
+        var mzZoneLayers = [];
+        var mzZoneSig = null;
+        function mzSyncZoneLayers() {
+            var zones = mzExistingZones();
+            var sig = JSON.stringify(zones);
+            if (sig === mzZoneSig) return;
+            mzZoneSig = sig;
+            mzZoneLayers.forEach(function (l) { mzMap.removeLayer(l); });
+            mzZoneLayers = zones.map(function (b) {
+                var color = MZ_PALETTE[b.id % MZ_PALETTE.length];
+                var ready = b.status === 'ready';
+                var r = L.rectangle([[b.min_lat, b.min_lon], [b.max_lat, b.max_lon]], {
+                    color: color, weight: 2, interactive: false,
+                    dashArray: ready ? null : '6 4',
+                    fillColor: color, fillOpacity: ready ? 0.16 : 0.05,
+                }).addTo(mzMap);
+                if (b.name) {
+                    // The label's frame takes the zone colour once it is on the map
+                    // (palette class, not an inline style: style-src has no
+                    // 'unsafe-inline', so element.style writes are blocked).
+                    r.on('tooltipopen', function (e) {
+                        var el = e.tooltip.getElement();
+                        if (el) el.classList.add('mz-c' + (b.id % MZ_PALETTE.length));
+                    });
+                    // A DOM node, never the raw string: Leaflet renders string
+                    // tooltip content as HTML (CVE-2025-69993, no fixed release).
+                    var mzLbl = document.createElement('span');
+                    mzLbl.textContent = b.name;
+                    r.bindTooltip(mzLbl, { permanent: true, direction: 'center', className: 'mz-zone-label' });
+                }
+                return r;
+            });
+        }
+        mzSyncZoneLayers();
 
         function mzReadDraft() {
             if (!mzDraft) return null;
@@ -964,67 +1148,101 @@ function s_label(array $s, string $key): string {
             if (mzOverlap) mzOverlap.hidden = true;
             if (mzPlaceLabel) mzPlaceLabel.hidden = true;
         }
+        // Pointer tracking shared by drawing, corner resize and body move.
+        // Pointer Events cover mouse, touch and pen with one code path —
+        // Leaflet only synthesises mouse events for taps, so a finger drag
+        // never reached the old mousemove handlers and nothing could be drawn
+        // on a phone. Listeners sit on the document so the gesture survives
+        // the finger leaving the (small) map, and map panning is suspended
+        // for its duration.
+        function mzTrack(ev, onMove, onEnd) {
+            var id = ev.pointerId;
+            mzMap.dragging.disable();
+            function finish(e, cancelled) {
+                document.removeEventListener('pointermove', move);
+                document.removeEventListener('pointerup', up);
+                document.removeEventListener('pointercancel', cancel);
+                onEnd(mzMap.mouseEventToLatLng(e), cancelled);
+                if (!mzDrawing) mzMap.dragging.enable();
+            }
+            function move(e) { if (e.pointerId === id) onMove(mzMap.mouseEventToLatLng(e)); }
+            function up(e) { if (e.pointerId === id) finish(e, false); }
+            function cancel(e) { if (e.pointerId === id) finish(e, true); }
+            document.addEventListener('pointermove', move);
+            document.addEventListener('pointerup', up);
+            document.addEventListener('pointercancel', cancel);
+        }
+        function mzPrimary(e) {
+            return e.isPrimary && !(e.pointerType === 'mouse' && e.button !== 0);
+        }
+        // The four corner circles always sit on the four corners of the
+        // draft, whichever one the finger is dragging (they are identical).
+        function mzPlaceHandles() {
+            if (!mzDraft) return;
+            var b = mzDraft.getBounds();
+            var pos = { sw: b.getSouthWest(), nw: b.getNorthWest(),
+                        ne: b.getNorthEast(), se: b.getSouthEast() };
+            mzHandles.forEach(function (h) { h.setLatLng(pos[h.mzCorner]); });
+        }
         function mzAddHandles() {
             mzClearHandles();
             if (!mzDraft) return;
             var b = mzDraft.getBounds();
+            // Fingertip-sized on touch screens, precise on a mouse.
+            var radius = window.matchMedia && window.matchMedia('(pointer: coarse)').matches ? 14 : 8;
             [['sw', b.getSouthWest()], ['nw', b.getNorthWest()],
              ['ne', b.getNorthEast()], ['se', b.getSouthEast()]].forEach(function (pair) {
                 var h = L.circleMarker(pair[1], {
-                    radius: 8, color: '#1a73e8', fillColor: '#fff',
+                    radius: radius, color: '#1a73e8', fillColor: '#fff',
                     fillOpacity: 1, weight: 3,
                 }).addTo(mzMap);
                 h.mzCorner = pair[0];
-                h.on('mousedown', function (e) {
-                    mzMap.dragging.disable();
-                    mzMap.on('mousemove', mzOnHandleDrag, h);
-                    mzMap.once('mouseup', function () {
-                        mzMap.off('mousemove', mzOnHandleDrag, h);
-                        mzMap.dragging.enable();
-                        mzSyncInputs();
+                var el = h.getElement();
+                if (el) {
+                    el.classList.add('mz-no-touch');
+                    el.addEventListener('pointerdown', function (e) {
+                        if (mzDrawing || !mzDraft || !mzPrimary(e)) return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        // Resize against the corner opposite the one grabbed;
+                        // fixed for the whole gesture so dragging past it flips
+                        // the rectangle instead of collapsing it.
+                        var bb = mzDraft.getBounds();
+                        var opp = { sw: bb.getNorthEast(), nw: bb.getSouthEast(),
+                                    ne: bb.getSouthWest(), se: bb.getNorthWest() }[h.mzCorner];
+                        mzTrack(e, function (ll) {
+                            mzDraft.setBounds([opp, ll]);
+                            mzPlaceHandles();
+                            mzSyncInputs();
+                        }, function () { mzSyncInputs(); });
                     });
-                    L.DomEvent.stopPropagation(e);
-                });
+                }
                 mzHandles.push(h);
             });
-        }
-        // `this` is the dragged handle: resize against the opposite corner.
-        function mzOnHandleDrag(e) {
-            if (!mzDraft) return;
-            var b = mzDraft.getBounds();
-            var opp = { sw: b.getNorthEast(), nw: b.getSouthEast(),
-                        ne: b.getSouthWest(), se: b.getNorthWest() }[this.mzCorner];
-            mzDraft.setBounds([opp, e.latlng]);
-            mzAddHandles();
-            mzSyncInputs();
         }
         function mzSetDraft(bounds) {
             mzClearDraft();
             mzDraft = L.rectangle(bounds, { color: '#1a73e8', weight: 2 }).addTo(mzMap);
             mzAddHandles();
-            mzDraft.on('mousedown', function (e) {
+            var body = mzDraft.getElement();
+            if (body) {
+                body.classList.add('mz-no-touch');
                 // Move the whole rectangle; corners have their own handlers.
-                mzMap.dragging.disable();
-                var start = e.latlng, orig = mzDraft.getBounds();
-                function move(ev) {
-                    var dLat = ev.latlng.lat - start.lat, dLng = ev.latlng.lng - start.lng;
-                    mzDraft.setBounds([
-                        [orig.getSouth() + dLat, orig.getWest() + dLng],
-                        [orig.getNorth() + dLat, orig.getEast() + dLng],
-                    ]);
-                    mzHandles.forEach(function (h) { h.setLatLng(h.getLatLng().add([dLat, dLng])); });
-                    start = ev.latlng;
-                    orig = mzDraft.getBounds();
-                }
-                mzMap.on('mousemove', move);
-                mzMap.once('mouseup', function () {
-                    mzMap.off('mousemove', move);
-                    mzMap.dragging.enable();
-                    mzAddHandles();
-                    mzSyncInputs();
+                body.addEventListener('pointerdown', function (e) {
+                    if (mzDrawing || !mzDraft || !mzPrimary(e)) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    var start = mzMap.mouseEventToLatLng(e), orig = mzDraft.getBounds();
+                    mzTrack(e, function (ll) {
+                        var dLat = ll.lat - start.lat, dLng = ll.lng - start.lng;
+                        mzDraft.setBounds([
+                            [orig.getSouth() + dLat, orig.getWest() + dLng],
+                            [orig.getNorth() + dLat, orig.getEast() + dLng],
+                        ]);
+                        mzPlaceHandles();
+                    }, function () { mzSyncInputs(); });
                 });
-                L.DomEvent.stopPropagation(e);
-            });
+            }
             mzSyncInputs();
         }
 
@@ -1034,7 +1252,12 @@ function s_label(array $s, string $key): string {
                 mzDrawBtn.textContent = on ? I.mz_drawing : I.mz_draw;
                 mzDrawBtn.classList.toggle('action-btn--active', on);
             }
-            mzMapEl.style.cursor = on ? 'crosshair' : '';
+            // Draw mode owns the gesture: no panning, and touch-action off so
+            // the browser does not scroll the page under the finger.
+            // (Cursor lives in .maps-editor-map.mz-drawing: style-src blocks
+            // element.style writes, so it cannot be set from JS.)
+            mzMapEl.classList.toggle('mz-drawing', on);
+            if (on) mzMap.dragging.disable(); else mzMap.dragging.enable();
         }
         if (mzDrawBtn) {
             mzDrawBtn.addEventListener('click', function () { mzSetDrawing(!mzDrawing); });
@@ -1045,18 +1268,16 @@ function s_label(array $s, string $key): string {
                 mzClearDraft();
             });
         }
-        mzMap.on('mousedown', function (e) {
-            if (!mzDrawing) return;
-            mzMap.dragging.disable();
-            var start = e.latlng, temp = L.rectangle([start, start], { color: '#1a73e8', weight: 2, dashArray: '4 4' }).addTo(mzMap);
-            function draw(ev) { temp.setBounds([start, ev.latlng]); }
-            mzMap.on('mousemove', draw);
-            mzMap.once('mouseup', function (ev) {
-                mzMap.off('mousemove', draw);
+        mzMapEl.addEventListener('pointerdown', function (e) {
+            if (!mzDrawing || !mzPrimary(e)) return;
+            if (e.target.closest && e.target.closest('.leaflet-control')) return;
+            e.preventDefault();
+            var start = mzMap.mouseEventToLatLng(e);
+            var temp = L.rectangle([start, start], { color: '#1a73e8', weight: 2, dashArray: '4 4' }).addTo(mzMap);
+            mzTrack(e, function (ll) { temp.setBounds([start, ll]); }, function (end, cancelled) {
                 mzMap.removeLayer(temp);
-                mzMap.dragging.enable();
                 mzSetDrawing(false);
-                var end = (ev && ev.latlng) || start;
+                if (cancelled) return;
                 if (Math.abs(end.lat - start.lat) < 1e-7 || Math.abs(end.lng - start.lng) < 1e-7) return;
                 mzSetDraft([start, end]);
             });
@@ -1122,16 +1343,24 @@ function s_label(array $s, string $key): string {
                 .then(function (r) { return r.json(); })
                 .then(function (j) {
                     if (j.csrf) csrf = j.csrf;
-                    if (j.valid && !j.checked) {
-                        // Nothing chained yet: "intact — 0 verified" read as a pass
-                        // on the error log above, which this check never covers.
-                        vResult.textContent = I.log_verify_empty;
-                    } else if (j.valid) {
-                        vResult.textContent = I.log_verify_ok.replace('{n}', j.checked);
-                    } else {
+                    if (!j.valid) {
                         vResult.textContent = (I.log_verify_fail
                             .replace('{n}', j.broken_line || '?')
                             .replace('{r}', j.reason || '')) + ' (' + j.checked + ')';
+                    } else if (j.continuity === 'truncated') {
+                        // A chain that verifies can still have lost its tail (or the
+                        // whole file): only the DB checkpoint can tell.
+                        vResult.textContent = I.log_verify_truncated
+                            .replace('{n}', j.continuity_anchor_seq || '?');
+                    } else if (!j.checked) {
+                        // Nothing chained yet: "intact — 0 verified" read as a pass
+                        // on the error log above, which this check never covers.
+                        vResult.textContent = I.log_verify_empty;
+                    } else {
+                        vResult.textContent = I.log_verify_ok.replace('{n}', j.checked)
+                            + (j.continuity === 'error'
+                                ? ' · ' + I.log_verify_cont_unknown.replace('{r}', j.continuity_detail || '')
+                                : '');
                     }
                 })
                 .catch(function () { vResult.textContent = I.connection_error; })

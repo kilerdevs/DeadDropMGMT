@@ -115,7 +115,7 @@ if ($action === 'delete_courier') {
 // ── Change password ───────────────────────────────────────────────────────────
 if ($action === 'change_password') {
     $uid      = (int)($_POST['user_id']      ?? 0);
-    $password = (string)($_POST['new_password'] ?? '');
+    $password = post_string('new_password');
 
     if ($uid <= 0) {
         $_SESSION['flash']    = t('admin.common.invalid_request');
@@ -131,6 +131,13 @@ if ($action === 'change_password') {
     }
     if (!password_length_ok($password)) {
         $_SESSION['flash']    = t('admin.common.password_too_long');
+        $_SESSION['flash_ok'] = false;
+        header('Location: /admin/users.php');
+        exit;
+    }
+
+    if (!admin_self_reauth_ok($uid, post_string('current_password'))) {
+        $_SESSION['flash']    = t('admin.users.flash.reauth_failed');
         $_SESSION['flash_ok'] = false;
         header('Location: /admin/users.php');
         exit;
@@ -171,6 +178,12 @@ if ($action === 'reset_2fa') {
     $uid = (int)($_POST['user_id'] ?? 0);
     if ($uid <= 0) {
         $_SESSION['flash']    = t('admin.common.invalid_request');
+        $_SESSION['flash_ok'] = false;
+        header('Location: /admin/users.php');
+        exit;
+    }
+    if (!admin_self_reauth_ok($uid, post_string('current_password'))) {
+        $_SESSION['flash']    = t('admin.users.flash.reauth_failed');
         $_SESSION['flash_ok'] = false;
         header('Location: /admin/users.php');
         exit;

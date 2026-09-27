@@ -2,18 +2,19 @@
 /**
  * Dead Drop map-zone sync - CLI worker (and detached background job).
  *
- * Advances queued map zones one at a time: CLI ensure → planet build →
- * dry-run sizing → disk check → extract with live progress → verify →
- * atomic publish. Long-running by design (minutes to hours through pool
- * proxies); run it from system cron and/or let the admin UI kick it
- * detached after queueing:
+ * Advances queued map zones one at a time: engine ensure → planet build →
+ * sizing → disk check → extract with live progress → verify → atomic
+ * publish (CLI binary on capable hosts, pure-PHP pipeline otherwise).
+ * Long-running by design (minutes to hours through pool proxies); run it
+ * from system cron and/or let the admin UI kick it detached after queueing:
  *
  * Cron example (every 15 minutes):
  *     php /path/to/cron/maps_sync.php
  *
- * Never invoked from a page visit: extracts cannot resume, so a killed web
- * request would waste the whole transfer. Stalled jobs are failed by the
- * hourly maps_steward() instead (see includes/maps.php).
+ * Never invoked from a page visit: a killed CLI extract cannot resume, so a
+ * killed web request would waste the whole transfer (the PHP engine instead
+ * advances in resumable slices from the queue POST and the status poll).
+ * Stalled jobs are failed by the hourly maps_steward() instead.
  */
 declare(strict_types=1);
 
@@ -27,7 +28,14 @@ if (PHP_SAPI !== 'cli') {
 define('BASE_DIR', dirname(__DIR__));
 require_once BASE_DIR . '/includes/kernel.php';
 
-@set_time_limit(0);
+// Guarded: hosts that disable set_time_limit answer function_exists(false),
+// and a bare call would fatal the worker before it even locks.
+if (function_exists('set_time_limit')) {
+    try {
+        @set_time_limit(0);
+    } catch (Throwable) {
+    }
+}
 
 [$locked, $holder] = maps_worker_lock();
 if (!$locked) {

@@ -47,14 +47,28 @@ try {
     $db = get_db();
     // Named lock makes the empty-table check + insert atomic across concurrent
     // requests — two simultaneous claimants can no longer both observe zero
-    // users and both proceed to INSERT.
-    if (!$db->query("SELECT GET_LOCK('deaddrop_owner_bootstrap', 5)")->fetchColumn()) {
+    // users and both proceed to INSERT. Hosts without the LOCK privilege
+    // (ProxySQL/Vitess frontends, some shared panels) answer NULL or throw:
+    // that degrades to no mutual exclusion instead of blocking setup — the
+    // UNIQUE(username) constraint still serializes same-name races into a
+    // clean "taken" error, and the attempt is logged loudly.
+    $haveLock = false;
+    try {
+        $got = $db->query("SELECT GET_LOCK('deaddrop_owner_bootstrap', 5)")->fetchColumn();
+    } catch (Exception $e) {
+        $got = null;
+    }
+    if ($got === false || $got === null) {
+        log_warn('bootstrap_no_lock', ['msg' => 'GET_LOCK unavailable on this host; owner bootstrap proceeds without mutual exclusion']);
+    } elseif (!(bool)$got) {
         // Lost the race for the lock — but that does NOT mean the instance
         // is claimed. A second claimant timing out here used to be told
         // "already initialized" while the table was still empty; check.
         $claimed = (int)$db->query('SELECT COUNT(*) FROM users')->fetchColumn() !== 0;
         _bootstrap_back(t($claimed ? 'admin.bootstrap.error.initialized'
                                    : 'admin.bootstrap.error.busy'));
+    } else {
+        $haveLock = true;
     }
     try {
         if ((int)$db->query('SELECT COUNT(*) FROM users')->fetchColumn() !== 0) {
@@ -81,7 +95,15 @@ try {
         // clobber lastInsertId, pointing the setup step at the wrong row.
         $new_user_id = (int)$db->lastInsertId();
     } finally {
-        $db->exec("DO RELEASE_LOCK('deaddrop_owner_bootstrap')");
+        // Guarded: without the lock there is nothing to release, and a
+        // failed RELEASE must never clobber a successful INSERT above.
+        if ($haveLock) {
+            try {
+                $db->exec("DO RELEASE_LOCK('deaddrop_owner_bootstrap')");
+            } catch (Exception $e) {
+                log_warn('bootstrap_release_lock', ['msg' => $e->getMessage()]);
+            }
+        }
     }
 } catch (Exception $e) {
     if (str_contains($e->getMessage(), 'Duplicate')) {
@@ -94,9 +116,9 @@ try {
 audit('owner_bootstrap', null, null, $username);
 
 // One-time display of the enrollment secret on the set-password screen,
-// sealed like the TOTP pending secret (single-use credential crossing a
+// sealed like any flash message (single-use credential crossing a
 // redirect via the session — never plaintext at rest).
-$_SESSION['enrollment_flash'] = encrypt_secret(t('admin.bootstrap.enrollment_note', ['secret' => $enrollment]));
+$_SESSION['enrollment_flash'] = encrypt_flash(t('admin.bootstrap.enrollment_note', ['secret' => $enrollment]));
 
 session_regenerate_id(true);
 $_SESSION['pending_setup_user_id'] = $new_user_id;

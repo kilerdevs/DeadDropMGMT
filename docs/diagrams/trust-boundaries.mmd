@@ -1,0 +1,8 @@
+flowchart TB
+    B(["Browser"]) -- "TLS (external)" --> W["Web server + PHP"]
+    W --> I["Public zone<br/>index.php · receive.php"]
+    W --> AD["Admin zone<br/>session + CSRF + 2FA + roles"]
+    I --> DB[("MySQL / MariaDB<br/>prepared statements only")]
+    AD --> DB
+    AD -. "server-side only" .-> OSM["OSM tiles / Nominatim<br/>(optional proxy pool)"]
+    B -. "map iframe:<br/>leaks visitor IP" .-> EMB["www.openstreetmap.org"]

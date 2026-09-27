@@ -61,7 +61,7 @@ for ($t = 0; $t < 10 && $port === 0; $t++) {
     $cmd = escapeshellarg(PHP_BINARY)
         . ' -d session.save_path=' . escapeshellarg(ini_get('session.save_path'))
         . " -S 127.0.0.1:$cand " . escapeshellarg($router);
-    $try = proc_open($cmd, [['pipe', 'r'], ['file', $null, 'w'], ['file', $null, 'w']], $pipes);
+    $try = proc_open(t_exec_cmd($cmd), [['pipe', 'r'], ['file', $null, 'w'], ['file', $null, 'w']], $pipes);
     if (!is_resource($try)) {
         continue;
     }
@@ -303,6 +303,9 @@ T::eq('cli under CLI SAPI is the running binary', PHP_BINARY, $cli);
 $db->prepare('DELETE FROM map_zones WHERE id = ?')->execute([$rid]);
 
 // ── process_one failure arms (stub runner, no network) ──────────────────────
+// These pin the CLI pipeline: force it even where the PHP engine would
+// otherwise dispatch (the PHP path has its own hermetic suite, MapsPhpTest).
+putenv('DDMGMT_MAPS_ENGINE=cli');
 set_setting('maps_build_key', '20260918');
 set_setting('maps_build_at', (string)time());
 
@@ -429,6 +432,7 @@ $drow = get_db()->query('SELECT * FROM map_zones WHERE id = ' . (int)$did)->fetc
 maps_cli_runner(null, true);
 T::ok('absurd size fails on disk', !$ok && $err === 'code:disk_short');
 get_db()->prepare('DELETE FROM map_zones WHERE id = ?')->execute([$did]);
+putenv('DDMGMT_MAPS_ENGINE');
 
 // Without a known CLI triplet there is no download URL to fetch.
 if (maps_arch() === null) {

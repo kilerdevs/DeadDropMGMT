@@ -24,11 +24,18 @@ $db = get_db();
 // Generous budgets: the browser specs assert happy paths and validation
 // errors — the limiter's math belongs to the PHP suites (RateLimitTest).
 set_setting('rate_limit_max', '1000');
+// Routing is on by default and would start real proxy discovery on the first
+// request; the browser specs must stay hermetic (no third-party traffic).
+set_setting('osm_proxy_enabled', '0');
+// The queueing actions kick a detached worker where the host allows it; in
+// e2e that worker would race the specs (a refreshed zone must stay queued).
+// Off here keeps the queue owned by the specs alone.
+set_setting('maps_worker_kick', '0');
 set_setting('rate_limit_window_min', '60');
 set_setting('default_lang', 'en');
 
 $db->prepare("DELETE FROM users WHERE username = 'e2e_owner'")->execute();
-$db->prepare("DELETE FROM orders WHERE order_token LIKE 'E2E%'")->execute();
+purge_orders_like($db, 'E2E');
 $db->exec("DELETE FROM rate_limits WHERE scope = 'public'");
 
 $db->prepare('INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)')
@@ -41,15 +48,15 @@ $enc = encrypt_location_data([
     'instructions' => 'E2E kod do bramy 9876',
 ]);
 $ins = $db->prepare(
-    'INSERT INTO orders (order_token, pickup_password_hash, location_encrypted, location_iv, status, delivered_at, expires_at, notes)
-     VALUES (?, ?, ?, ?, ?, ?, NOW() + INTERVAL 24 HOUR, ?)'
+    'INSERT INTO orders (token_hmac, token_enc, token_iv, pickup_password_hash, location_encrypted, location_iv, status, delivered_at, expires_at, notes)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW() + INTERVAL 24 HOUR, ?)'
 );
 $pw = password_hash('E2eReveal1!', PASSWORD_BCRYPT);
-$ins->execute(['E2ELANGDELIVER01', $pw, $enc['ciphertext'], $enc['iv'], 'delivered', date('Y-m-d H:i:s'), 'E2E notka']);
-$ins->execute(['E2EFLOWDELIVER01', $pw, $enc['ciphertext'], $enc['iv'], 'delivered', date('Y-m-d H:i:s'), '']);
-$ins->execute(['E2EFLOWDELIVER02', $pw, $enc['ciphertext'], $enc['iv'], 'delivered', date('Y-m-d H:i:s'), '']);
-$ins->execute(['E2EFLOWPREP00001', $pw, $enc['ciphertext'], $enc['iv'], 'preparing', null, '']);
-$ins->execute(['E2EADMDELIV00001', $pw, $enc['ciphertext'], $enc['iv'], 'delivered', date('Y-m-d H:i:s'), '']);
+$ins->execute([...tk('E2ELANGDELIVER01'), $pw, $enc['ciphertext'], $enc['iv'], 'delivered', date('Y-m-d H:i:s'), 'E2E notka']);
+$ins->execute([...tk('E2EFLOWDELIVER01'), $pw, $enc['ciphertext'], $enc['iv'], 'delivered', date('Y-m-d H:i:s'), '']);
+$ins->execute([...tk('E2EFLOWDELIVER02'), $pw, $enc['ciphertext'], $enc['iv'], 'delivered', date('Y-m-d H:i:s'), '']);
+$ins->execute([...tk('E2EFLOWPREP00001'), $pw, $enc['ciphertext'], $enc['iv'], 'preparing', null, '']);
+$ins->execute([...tk('E2EADMDELIV00001'), $pw, $enc['ciphertext'], $enc['iv'], 'delivered', date('Y-m-d H:i:s'), '']);
 
 // Self-hosted reveal fixture (Phase 4): a ready zone covering the seeded
 // Warsaw point (52.2297, 21.0122), backed by the committed micro.pmtiles

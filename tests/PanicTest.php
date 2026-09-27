@@ -21,10 +21,10 @@ foreach (glob_list($up . '/*', GLOB_ONLYDIR) as $d) { @rmdir($d); }
 $mkOrder = static function (string $token, string $status) use ($db): int {
     $delivered = $status === 'delivered' ? 'NOW()' : 'NULL';
     $db->prepare(
-        "INSERT INTO orders (order_token, pickup_password_hash, location_encrypted, location_iv,
+        "INSERT INTO orders (token_hmac, token_enc, token_iv, pickup_password_hash, location_encrypted, location_iv,
                              status, delivered_at, expires_at)
-         VALUES (?, 'x', 'ZQ==', 'abababababababababababab', '$status', $delivered, NOW() + INTERVAL 24 HOUR)"
-    )->execute([$token]);
+         VALUES (?, ?, ?, 'x', 'ZQ==', 'abababababababababababab', '$status', $delivered, NOW() + INTERVAL 24 HOUR)"
+    )->execute(tk($token));
     return (int)$db->lastInsertId();
 };
 
@@ -106,6 +106,23 @@ T::ok('tile cache files destroyed', !is_file("$tileRoot/19/291234/171234.png") &
 T::eq('tile files counted apart from photos', 1, $tw['tiles']);
 T::eq('photo count unaffected by tiles', 0, $tw['files']);
 T::ok('tile cache root kept', is_dir($tileRoot));
+
+// Database dumps in backups/ hold every order the wipe just deleted: they
+// die too; the directory's deny file stays.
+$bkDir = dirname(__DIR__) . '/backups';
+@mkdir($bkDir, 0770, true);
+$bkHt = is_file("$bkDir/.htaccess");
+if (!$bkHt) {
+    file_put_contents("$bkDir/.htaccess", "Require all denied\n");
+}
+file_put_contents("$bkDir/pre-t_panic.sql", 'dump');
+$bw = do_panic_wipe();
+T::ok('database dumps destroyed', !is_file("$bkDir/pre-t_panic.sql"));
+T::ok('backups deny file kept', is_file("$bkDir/.htaccess"));
+T::eq('dumps counted as destroyed files', 1, $bw['files']);
+if (!$bkHt) {
+    @unlink("$bkDir/.htaccess");
+}
 
 // Partial failure must be OBSERVABLE: an undeletable file is reported, not
 // hidden behind a success message; and the retry finishes the job.

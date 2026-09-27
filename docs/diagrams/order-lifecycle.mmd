@@ -1,0 +1,4 @@
+flowchart TB
+    N(["order created"]) --> P["preparing"]
+    P -- "deliver (TTL starts)" --> D["delivered"]
+    D -- "receipt confirmed<br/>closed by owner / courier<br/>TTL expired (cleanup sweep)" --> G(["deleted"])

@@ -10,6 +10,9 @@ require_once dirname(__DIR__) . '/config.php';
 //   master ─┬─ location-v1    orders.location_encrypted
 //           ├─ totp-v1        users.totp_secret_enc
 //           ├─ reveal-v1      sealed session payloads
+//           ├─ flash-v1       one-time messages parked in the session
+//           ├─ token-index-v1 HMAC lookup index of order tokens (orders/events/audit)
+//           ├─ token-v1       orders.token_enc (display copy of the order token)
 //           └─ log-hmac-v1    app.log integrity chain
 //
 // Compromise or rotation of one subsystem's key no longer couples the others.
@@ -55,6 +58,9 @@ function _derived_key(string $info): string {
 function _location_key(): string    { return _derived_key('deaddrop:location-v1'); }
 function _totp_key(): string        { return _derived_key('deaddrop:totp-v1'); }
 function _reveal_key(): string      { return _derived_key('deaddrop:reveal-v1'); }
+function _flash_key(): string       { return _derived_key('deaddrop:flash-v1'); }
+function _token_index_key(): string { return _derived_key('deaddrop:token-index-v1'); }
+function _token_key(): string       { return _derived_key('deaddrop:token-v1'); }
 
 // ── Raw encrypt / decrypt ─────────────────────────────────────────────────────
 // AES-256-GCM only (authenticated). Storage format: ciphertext column holds
@@ -65,22 +71,44 @@ function _reveal_key(): string      { return _derived_key('deaddrop:reveal-v1');
 // tools/separate_keys.php. Unauthenticated or legacy-keyed data is never used
 // for new writes.
 
-function encrypt_location(string $plaintext): array {
+// Row binding (AAD). A location ciphertext written with $bind (the order's
+// token_hmac) authenticates that binding too: copied onto another order's
+// row it no longer opens, so someone able to WRITE the database cannot make
+// one recipient's reveal show another drop. Bound values carry the "b1:"
+// prefix (base64 never contains ':'); a stripped prefix fails the tag, so
+// there is no downgrade. Unprefixed values are pre-binding rows, still read
+// until re-saved or re-bound (tools/bind_locations.php).
+const LOCATION_BIND_PREFIX = 'b1:';
+
+function _location_aad(string $bind): string {
+    return 'deaddrop:location|' . $bind;
+}
+
+function encrypt_location(string $plaintext, ?string $bind = null): array {
     $key   = _location_key();
     $nonce = random_bytes(12);
     $tag   = '';
-    $ct    = openssl_encrypt($plaintext, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $nonce, $tag);
+    $aad   = ($bind !== null && $bind !== '') ? _location_aad($bind) : '';
+    $ct    = openssl_encrypt($plaintext, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $nonce, $tag, $aad);
     if ($ct === false) {
         throw new RuntimeException('Encryption failed.');
     }
     return [
-        'ciphertext' => base64_encode($ct . $tag),
+        'ciphertext' => ($aad !== '' ? LOCATION_BIND_PREFIX : '') . base64_encode($ct . $tag),
         'iv'         => bin2hex($nonce),
     ];
 }
 
-function decrypt_location(string $ciphertext_b64, string $iv_hex): string|false {
+function decrypt_location(string $ciphertext_b64, string $iv_hex, ?string $bind = null): string|false {
     $key = _location_key();
+    $aad = '';
+    if (str_starts_with($ciphertext_b64, LOCATION_BIND_PREFIX)) {
+        if ($bind === null || $bind === '') {
+            return false; // a bound value never opens without its row identity
+        }
+        $ciphertext_b64 = substr($ciphertext_b64, strlen(LOCATION_BIND_PREFIX));
+        $aad = _location_aad($bind);
+    }
     $raw = base64_decode($ciphertext_b64, true);
     // Length 24 alone does not imply valid hex: hex2bin() answers false on
     // non-hex input and openssl_decrypt() would TypeError instead of failing
@@ -94,36 +122,134 @@ function decrypt_location(string $ciphertext_b64, string $iv_hex): string|false 
     $nonce = hex2bin($iv_hex);
     $ct    = substr($raw, 0, -16);
     $tag   = substr($raw, -16);
-    return openssl_decrypt($ct, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $nonce, $tag);
+    return openssl_decrypt($ct, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $nonce, $tag, $aad);
 }
 
 // ── TOTP secrets (own subkey — a 2FA secret leak must not expose locations) ───
 
-function encrypt_secret(string $plaintext): array {
+function _seal_gcm(string $key, string $plaintext): array {
     $nonce = random_bytes(12);
     $tag   = '';
-    $ct    = openssl_encrypt($plaintext, 'aes-256-gcm', _totp_key(), OPENSSL_RAW_DATA, $nonce, $tag);
+    $ct    = openssl_encrypt($plaintext, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $nonce, $tag);
     if ($ct === false) {
         throw new RuntimeException('Encryption failed.');
     }
     return ['ciphertext' => base64_encode($ct . $tag), 'iv' => bin2hex($nonce)];
 }
 
-function decrypt_secret(string $ciphertext_b64, string $iv_hex): string|false {
+function _open_gcm(string $key, string $ciphertext_b64, string $iv_hex): string|false {
     $raw = base64_decode($ciphertext_b64, true);
     if ($raw === false || strlen($iv_hex) !== 24 || !ctype_xdigit($iv_hex) || strlen($raw) < 16) {
         return false;
     }
     return openssl_decrypt(
-        substr($raw, 0, -16), 'aes-256-gcm', _totp_key(),
+        substr($raw, 0, -16), 'aes-256-gcm', $key,
         OPENSSL_RAW_DATA, hex2bin($iv_hex), substr($raw, -16)
     );
 }
 
-// ── Structured location data (JSON inside AES) ────────────────────────────────
-// Schema: {"text":"...","lat":null,"lng":null,"instructions":""}
+function encrypt_secret(string $plaintext): array {
+    return _seal_gcm(_totp_key(), $plaintext);
+}
 
-function encrypt_location_data(array $data): array {
+function decrypt_secret(string $ciphertext_b64, string $iv_hex): string|false {
+    return _open_gcm(_totp_key(), $ciphertext_b64, $iv_hex);
+}
+
+// ── One-time session messages (own subkey — a flash is not a TOTP secret) ─────
+// Generated passwords and enrollment secrets cross a redirect inside the
+// session. They are sealed under flash-v1, not the TOTP subkey, so the two
+// purposes stay cryptographically separate (ADR-016). Sessions are transient:
+// a blob sealed by an earlier build simply fails to open and the message is
+// lost once — nothing to migrate.
+
+function encrypt_flash(string $plaintext): array {
+    return _seal_gcm(_flash_key(), $plaintext);
+}
+
+function decrypt_flash(string $ciphertext_b64, string $iv_hex): string|false {
+    return _open_gcm(_flash_key(), $ciphertext_b64, $iv_hex);
+}
+
+// ── Order tokens (HMAC-indexed lookup, ADR-019) ───────────────────────────────
+// The database never holds an order token in the clear. Lookups go through a
+// keyed index — HMAC-SHA256 under its own subkey — so a DB reader holding a
+// dump cannot enumerate live capability URLs, and the token still finds its
+// row with one indexed equality match. The admin panel needs to DISPLAY the
+// token again later, so orders also carry an AES-GCM copy under a second
+// subkey; events and the audit trail keep only the index.
+//
+// The index is computed over the LOWER-CASED token: the column this replaces
+// compared case-insensitively (utf8mb4_unicode_ci), and a recipient typing a
+// code from a note must not fail on caps lock.
+
+function token_index(string $token): string {
+    return hash_hmac('sha256', strtolower($token), _token_index_key());
+}
+
+function encrypt_token(string $token): array {
+    return _seal_gcm(_token_key(), $token);
+}
+
+function decrypt_token(string $ciphertext_b64, string $iv_hex): string|false {
+    return _open_gcm(_token_key(), $ciphertext_b64, $iv_hex);
+}
+
+/**
+ * The three orders columns that stand in for the token.
+ * @return array{token_hmac:string, token_enc:string, token_iv:string}
+ */
+function token_columns(string $token): array {
+    $e = encrypt_token($token);
+    return ['token_hmac' => token_index($token), 'token_enc' => $e['ciphertext'], 'token_iv' => $e['iv']];
+}
+
+/** Index for an optional token: null and '' mean "no token" and stay NULL. */
+function token_index_or_null(?string $token): ?string {
+    return ($token === null || $token === '') ? null : token_index($token);
+}
+
+/** Display copy of a row's token, or null when it cannot be opened. */
+function order_token_plain(array $row): ?string {
+    $ct = $row['token_enc'] ?? null;
+    $iv = $row['token_iv'] ?? null;
+    if (!is_string($ct) || !is_string($iv) || $ct === '' || $iv === '') {
+        return null;
+    }
+    try {
+        $plain = decrypt_token($ct, $iv);
+    } catch (Throwable $e) {
+        return null; // unusable key: the caller shows a placeholder
+    }
+    if (!is_string($plain)) {
+        return null;
+    }
+    // The copy must belong to THIS row: token_enc swapped in from another
+    // order (database write access) would otherwise show the admin the wrong
+    // delivery link. The index is keyed, so the check cannot be forged.
+    $idx = $row['token_hmac'] ?? null;
+    if (is_string($idx) && $idx !== '' && !hash_equals($idx, token_index($plain))) {
+        return null;
+    }
+    return $plain;
+}
+
+/**
+ * What the admin panel shows for a token: the readable copy when there is one,
+ * otherwise "#" plus the first 8 hex of the index — enough to tell two rows of
+ * the same (deleted, or unreadable) order apart without revealing anything.
+ */
+function token_label(?string $plain, ?string $index): string {
+    if ($plain !== null && $plain !== '') {
+        return $plain;
+    }
+    return ($index !== null && $index !== '') ? '#' . substr($index, 0, 8) : '—';
+}
+
+// ── Structured location data (JSON inside AES) ────────────────────────────────
+// Schema: {"text":"...","lat":null,"lng":null,"instructions":"","notes":""}
+
+function encrypt_location_data(array $data, ?string $bind = null): array {
     $defaults = ['text' => '', 'lat' => null, 'lng' => null, 'instructions' => ''];
     // json_encode() answers false on invalid UTF-8 — passing that into
     // encrypt_location(string) would TypeError instead of failing loudly.
@@ -131,11 +257,13 @@ function encrypt_location_data(array $data): array {
     if ($json === false) {
         throw new RuntimeException('Location data is not valid UTF-8.');
     }
-    return encrypt_location($json);
+    return encrypt_location($json, $bind);
 }
 
-function decrypt_location_data(string $ciphertext_b64, string $iv_hex): array|false {
-    $plain = decrypt_location($ciphertext_b64, $iv_hex);
+// $bind: the row's token_hmac (see encrypt_location) — required to open a
+// bound value, ignored for pre-binding ones.
+function decrypt_location_data(string $ciphertext_b64, string $iv_hex, ?string $bind = null): array|false {
+    $plain = decrypt_location($ciphertext_b64, $iv_hex, $bind);
     if ($plain === false) {
         return false;
     }
@@ -146,6 +274,16 @@ function decrypt_location_data(string $ciphertext_b64, string $iv_hex): array|fa
     }
     // Backwards-compatible: plain string from old records
     return ['text' => $plain, 'lat' => null, 'lng' => null, 'instructions' => ''];
+}
+
+// Order notes live inside the encrypted location blob ('notes'). Rows
+// written before that keep them in the plaintext orders.notes column until
+// their next save — read either, encrypted copy first.
+function order_notes_plain(array $order, array|false $loc): string {
+    if (is_array($loc) && isset($loc['notes']) && is_string($loc['notes']) && $loc['notes'] !== '') {
+        return $loc['notes'];
+    }
+    return (string)($order['notes'] ?? '');
 }
 
 // ── Sealed session payloads ───────────────────────────────────────────────────
@@ -202,9 +340,12 @@ function verify_password(string $password, string $hash): bool {
 }
 
 // ── Order capability tokens ───────────────────────────────────────────────────
-// 16 chars over [0-9a-zA-Z] (62 symbols): 16 × log2(62) ≈ 95.3 bits. Tokens
-// gate location reveals, so they get the full alphanumeric space — hex-only
-// generation would leave ~31 bits of the documented budget on the floor.
+// 16 chars over [0-9a-zA-Z] (62 symbols). Lookups are case-INSENSITIVE
+// (token_index() lower-cases, so a recipient's caps lock never fails), which
+// means a guesser only has to cover 36 symbols per position: the effective
+// budget is 16 × log2(36) ≈ 82.7 bits, not the 95.3 the raw alphabet
+// suggests — still far beyond any online or offline search. Hex-only
+// generation would have left 64 bits.
 // Validators accept ctype_alnum (index.php, receive.php), so previously
 // issued hex tokens keep working: they are a subset of this alphabet.
 function generate_order_token(int $len = 16): string {
@@ -272,6 +413,25 @@ function generate_passphrase(): string {
 }
 
 // ── Photo upload helper ───────────────────────────────────────────────────────
+
+// Record a photo saved by save_uploaded_photo(). The file is already on disk
+// (public under an unguessable name): when the row cannot be written — the
+// order vanished meanwhile, a transaction is rolling back — the file goes too,
+// instead of lingering unreferenced where no cleanup ever looks.
+function store_order_photo(PDO $db, int $order_id, string $rel): void {
+    try {
+        $db->prepare('INSERT INTO order_photos (order_id, filename) VALUES (?, ?)')->execute([$order_id, $rel]);
+    } catch (Throwable $e) {
+        discard_order_photo_file($rel);
+        throw $e;
+    }
+}
+
+function discard_order_photo_file(string $rel): void {
+    if (preg_match('#^\d+/[0-9a-f]+\.(jpg|jpeg|png|webp|gif)$#i', $rel) === 1) {
+        overwrite_and_unlink(dirname(__DIR__) . '/uploads/' . $rel);
+    }
+}
 
 function save_uploaded_photo(array $file_entry, int $order_id, int $max_bytes = 12582912): string|false {
     if ($file_entry['error'] !== UPLOAD_ERR_OK) {

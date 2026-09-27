@@ -16,7 +16,9 @@ function do_cleanup(): int {
     // covers both the real cron and the pseudo-cron path.
     log_checkpoint_write();
     _purge_stale_records();
+    _warn_legacy_tokens();
     osm_tile_cache_prune();
+    error_log_trim();
     return cleanup_expired_orders();
 }
 
@@ -31,7 +33,7 @@ function _purge_stale_records(): void {
         $db = get_db();
         $db->prepare(
             'DELETE e FROM order_events e
-             LEFT JOIN orders o ON o.id = e.order_id OR o.order_token = e.order_token
+             LEFT JOIN orders o ON o.id = e.order_id OR o.token_hmac = e.token_hmac
              WHERE o.id IS NULL AND e.created_at < (NOW() - INTERVAL ' . ORPHAN_EVENT_RETENTION_DAYS . ' DAY)'
         )->execute();
         $db->prepare(
@@ -39,6 +41,28 @@ function _purge_stale_records(): void {
         )->execute();
     } catch (Throwable $e) {
         log_err('Record purge failed: ' . $e->getMessage());
+    }
+}
+
+// Orders that predate hashed tokens (ADR-019) cannot be found by the app until
+// tools/migrate_order_tokens.php has moved them over. Say so once per sweep —
+// a recipient's "not found" would otherwise be the only symptom.
+function _warn_legacy_tokens(): void {
+    try {
+        $db = get_db();
+        $has = (int)$db->query(
+            "SELECT COUNT(*) FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'orders' AND COLUMN_NAME = 'order_token'"
+        )->fetchColumn();
+        if ($has === 0) {
+            return;
+        }
+        $n = (int)$db->query('SELECT COUNT(*) FROM orders WHERE order_token IS NOT NULL AND token_hmac IS NULL')->fetchColumn();
+        if ($n > 0) {
+            log_warn('legacy_order_tokens', ['msg' => $n . ' order(s) still carry a plaintext token and cannot be looked up — run: php tools/migrate_order_tokens.php']);
+        }
+    } catch (Throwable $e) {
+        log_err('Legacy token check failed: ' . $e->getMessage());
     }
 }
 
@@ -108,6 +132,9 @@ function _run_cleanup_pass(): void {
         // never throws): proxies nobody exercised must not keep a fresh
         // 'ok' forever. Real-cron installs get this via cron/cleanup.php.
         osm_proxy_revalidate_stale();
+        // Failures found above (or by live traffic) are healed by a detached
+        // job: discovery takes far too long to run inside a page visit.
+        osm_proxy_heal_kick();
     } catch (Throwable $e) {
         log_err('Cleanup error: ' . $e->getMessage());
     }
@@ -122,4 +149,71 @@ function run_cleanup_if_due(float $chance = 1.0): void {
     if (!_cleanup_roll($chance)) return;
     $ran = true;
     _run_cleanup_pass();
+}
+
+// ── Pseudo-cron entry point ───────────────────────────────────────────────────
+// Registered by the kernel for EVERY web request, so any PHP page — public,
+// admin, receipt, a JSON poll — can be the visit that starts the hourly
+// maintenance; an install only ever used through /admin/ still gets it.
+// Runs AFTER the response is on its way (fastcgi_finish_request under FPM, an
+// explicit buffer flush elsewhere) so the visitor never waits for a sweep,
+// and keeps going if the visitor disconnects. Both slots are hourly-stamped
+// and Throwable-guarded, so a request that finds nothing due costs one
+// integer comparison against the already-loaded settings.
+//
+// DDMGMT_PSEUDO_CRON=0 (environment variable, or a constant of that name in
+// config.php on hosts that cannot set variables) turns it off for installs
+// that run real cron (cron/cleanup.php). CLI never runs it: cron and tools
+// call the passes they need themselves.
+function pseudo_cron_enabled(): bool {
+    return PHP_SAPI !== 'cli' && host_flag('DDMGMT_PSEUDO_CRON', true);
+}
+
+// Hand the response to the client before any maintenance starts. Under FPM
+// fastcgi_finish_request frees the worker's client at once; elsewhere every
+// output buffer above $keepLevels is flushed. $keepLevels and $fcgi are test
+// seams: a suite that owns an outer buffer (the coverage runner) must not have
+// it flushed, and a CLI has no fastcgi_finish_request.
+function pseudo_cron_finish_response(int $keepLevels = 0, ?callable $fcgi = null): void {
+    $fcgi ??= function_exists('fastcgi_finish_request') ? 'fastcgi_finish_request' : null;
+    if ($fcgi !== null) {
+        @$fcgi();
+        return;
+    }
+    while (ob_get_level() > $keepLevels) {
+        @ob_end_flush();
+    }
+    @flush();
+}
+
+// The maintenance slots, each isolated: one that throws is logged and the
+// rest still run. Defaults: the hourly sweep, the stalled-zone steward (never
+// downloads here), and the proxy pool upkeep — a detached job where the host
+// allows one, a time-budgeted inline pass where it does not (no exec, no CLI).
+/** @param list<callable>|null $slots */
+function pseudo_cron_work(?array $slots = null): void {
+    $slots ??= ['run_cleanup_if_due', 'maps_steward_if_due', 'osm_proxy_heal_pseudo_cron'];
+    foreach ($slots as $slot) {
+        try {
+            $slot();
+        } catch (Throwable $e) {
+            log_err('Pseudo-cron: ' . $e->getMessage());
+        }
+    }
+}
+
+// $force / $finish / $slots: test seams (the CLI never runs it for real).
+/** @param list<callable>|null $slots */
+function pseudo_cron_run(bool $force = false, ?callable $finish = null, ?array $slots = null): void {
+    if (!$force && !pseudo_cron_enabled()) {
+        return;
+    }
+    ignore_user_abort(true);
+    // Release the session lock first: a sweep can take seconds, and the same
+    // visitor's next request (a poll, a click) must not queue behind it.
+    if (session_status() === PHP_SESSION_ACTIVE) {
+        session_write_close();
+    }
+    ($finish ?? 'pseudo_cron_finish_response')();
+    pseudo_cron_work($slots);
 }

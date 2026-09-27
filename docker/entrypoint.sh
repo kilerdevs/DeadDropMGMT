@@ -9,6 +9,21 @@ DOCROOT=/var/www/html
 CONFIG="$DOCROOT/config.php"
 TEMPLATE=/usr/local/share/config.php.template
 
+# FPM stacks (nginx/Caddy) keep the docroot in a named volume shared with the
+# web container. Docker seeds a named volume from the image only while it is
+# EMPTY, so after `up --build` FPM would keep running the old code — security
+# fixes included — forever. Refresh the code from the image's pristine copy on
+# every start; runtime state (config.php, uploads, logs, cache, tiles, data,
+# backups) is left alone. The Apache image has no such copy and skips this.
+if [ -d /usr/src/ddmgmt ]; then
+    echo "[entrypoint] refreshing application code in the shared docroot"
+    find "$DOCROOT" -mindepth 1 -maxdepth 1 \
+        ! -name config.php ! -name uploads ! -name logs ! -name cache \
+        ! -name tiles ! -name data ! -name backups \
+        -exec rm -rf {} +
+    cp -a /usr/src/ddmgmt/. "$DOCROOT/"
+fi
+
 FIRST_BOOT=0
 if [ ! -f "$CONFIG" ]; then
     echo "[entrypoint] rendering config.php from template"
@@ -47,11 +62,25 @@ fi
 printf 'expose_php = Off\n' > /usr/local/etc/php/conf.d/zz-ddmgmt-hardening.ini
 
 mkdir -p "$DOCROOT/logs" "$DOCROOT/uploads" "$DOCROOT/cache/osm_tiles"
+# The logs volume predates logs/.htaccess on existing stacks; seed it so the
+# folder is denied per-directory (and Setup check stays green).
+[ -f "$DOCROOT/logs/.htaccess" ] || printf 'Require all denied\n' > "$DOCROOT/logs/.htaccess"
 chown -R www-data:www-data "$DOCROOT/logs" "$DOCROOT/uploads" "$DOCROOT/cache" /config
 
 if [ "${DDMGMT_DB_PASS:-}" = "deaddrop-db" ]; then
     echo "[entrypoint] WARNING: DDMGMT_DB_PASS is the published default — set DB_PASS in .env before exposing this stack" >&2
 fi
+
+# When the owner has turned OSM proxy routing on (it is off by default) and
+# the pool is empty (fails closed), discover a first pool now instead of
+# waiting for the first page visit or the 15-minute timer below. Detached,
+# Throwable-guarded and a one-SELECT no-op when routing is off or the pool
+# already exists.
+# DDMGMT_PROXY_HEAL=0 turns automatic discovery off.
+(
+    sleep 20
+    runuser -u www-data -- php "$DOCROOT/cron/proxy_heal.php" >/dev/null 2>&1 || true
+) &
 
 # Real maintenance timer. The page-visit pseudo-cron is only a fallback: this
 # loop deletes expired orders, prunes rate-limit rows, the tile cache and old

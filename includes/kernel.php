@@ -28,6 +28,7 @@ require_once dirname(__DIR__) . '/config.php';
 // braces rather than load-bearing.
 foreach ([
     'logger',
+    'host',
     'db',
     'net',
     'settings',
@@ -39,11 +40,22 @@ foreach ([
     'analytics',
     'order_state',
     'proxy',
+    'pmtiles',
     'maps',
     'cleanup',
     'wipe',
+    'version',
+    'setup_check',
 ] as $service) {
     require_once __DIR__ . '/' . $service . '.php';
+}
+
+// ── Pseudo-cron ─────────────────────────────────────────────────────────────
+// Any web request that loads the kernel may run the hourly maintenance, after
+// its response has been sent (see pseudo_cron_run()). Off for CLI and when
+// DDMGMT_PSEUDO_CRON=0.
+if (pseudo_cron_enabled()) {
+    register_shutdown_function('pseudo_cron_run');
 }
 
 // ── Last-resort error boundary ──────────────────────────────────────────────

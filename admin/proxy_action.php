@@ -22,7 +22,7 @@ switch ($action) {
 
     // ── Add one proxy manually ────────────────────────────────────────────────
     case 'add': {
-        $url = osm_proxy_normalize((string)($_POST['url'] ?? ''));
+        $url = osm_proxy_normalize(post_string('url'));
         if ($url === null) {
             json_out(['error' => t('admin.proxies.flash.invalid_url')], 422);
         }
@@ -34,7 +34,7 @@ switch ($action) {
                 json_out(['error' => t('admin.proxies.flash.duplicate')], 409);
             }
             $db->prepare('INSERT INTO osm_proxies (url, source) VALUES (?, "manual")')->execute([$url]);
-            audit('proxy_add', null, null, $url);
+            audit('proxy_add', null, null, osm_proxy_redact($url));
             json_out(['ok' => true]);
         } catch (Exception $e) {
             log_err('Proxy add: ' . $e->getMessage());
