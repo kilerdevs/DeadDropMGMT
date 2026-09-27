@@ -85,6 +85,12 @@ function transport_order(string $url, array $proxy): array {
     return $order;
 }
 function http_fetch(string $url, array $proxy, string $method = 'GET'): array {
+    // Local files never travel a proxy — routing one there would either fail
+    // or, worse, silently succeed direct (cURL ignores proxies for file://)
+    // and produce false verdicts in judge/discover test hooks.
+    if (str_starts_with($url, 'file://') && $proxy['type'] !== 'none') {
+        return ['error' => 'proxies do not apply to file:// URLs'];
+    }
     $order = transport_order($url, $proxy);
     if ($order === []) return ['error' => 'no HTTP transport on this host (need cURL, allow_url_fopen, or sockets)'];
     $last = 'unreachable';
@@ -133,9 +139,13 @@ function curl_hop(string $url, array $proxy, string $method): array {
     if ($proxy['type'] === 'http') {
         curl_setopt($ch, CURLOPT_PROXY, $proxy['host'] . ':' . $proxy['port']);
         curl_setopt($ch, CURLOPT_PROXYTYPE, CURLPROXY_HTTP);
+        // Explicit route always wins: without this, a host-level NO_PROXY
+        // would silently bypass the pool proxy (fail-open leak).
+        curl_setopt($ch, CURLOPT_NOPROXY, '');
     } elseif ($proxy['type'] === 'socks5') {
         curl_setopt($ch, CURLOPT_PROXY, $proxy['host'] . ':' . $proxy['port']);
         curl_setopt($ch, CURLOPT_PROXYTYPE, CURLPROXY_SOCKS5_HOSTNAME); // remote DNS: no leak
+        curl_setopt($ch, CURLOPT_NOPROXY, '');
     }
     if ($proxy['user'] !== '') curl_setopt($ch, CURLOPT_PROXYUSERPWD, $proxy['user'] . ':' . $proxy['pass']);
     $raw = curl_exec($ch);
@@ -460,7 +470,7 @@ function ix_sock_hop(string $url, array $proxy, string $method): array {
                 }
                 $buf .= $chunk;
             }
-            if ($want !== null && strlen($body) !== $want) { $close(); return ['error' => 'body length mismatch']; }
+            if (is_int($want) && strlen($body) !== $want) { $close(); return ['error' => 'body length mismatch']; }
         }
         $close();
         return [$code, $fields, $body];
@@ -544,7 +554,10 @@ function cap_checks(): array {
 }
 
 // ── schema splitter/apply (same rules as includes/setup_check.php) ───────────
-function schema_statements(string $sql, bool $keepCreate = false): array {
+// ── Schema splitter/apply (same rules as includes/setup_check.php, but the
+// installer is standalone and can never load the kernel — so ix_-prefixed,
+// never colliding with the service layer, per KernelTest's contract).
+function ix_schema_statements(string $sql, bool $keepCreate = false): array {
     $out = [];
     foreach (array_filter(array_map('trim', explode(';', $sql))) as $stmt) {
         $body = implode("\n", array_filter(explode("\n", $stmt),
@@ -557,7 +570,7 @@ function schema_statements(string $sql, bool $keepCreate = false): array {
     }
     return $out;
 }
-function schema_apply(PDO $pdo, array $stmts): array {
+function ix_schema_apply(PDO $pdo, array $stmts): array {
     $n = 0;
     foreach ($stmts as $body) {
         try {
@@ -569,6 +582,43 @@ function schema_apply(PDO $pdo, array $stmts): array {
         }
     }
     return ['applied' => $n, 'error' => '', 'statement' => ''];
+}
+
+// ── Anonymity judging (ported from proxy_judge_anonymous / proxy_public_ip) ─
+// Same decision table as the app: SOCKS is header-anonymous by protocol,
+// rated lists are trusted, unrated HTTP must prove our IP stays out of the
+// request headers. Learning our own IP makes a DIRECT clearnet connection
+// (ipify/httpbin) — the UI logs this openly; it happens only on owner
+// clicks (Discover/Test), never per request.
+const IX_JUDGES = ['http://httpbin.org/get', 'http://azenv.net/'];
+function ix_url_to_proxy(string $url): ?array {
+    if (!preg_match('#^(\w+)://([^/:]+):(\d+)$#', $url, $m)) return null;
+    if (!in_array(strtolower($m[1]), ['http', 'https', 'socks4', 'socks5', 'socks5h'], true)) return null;
+    return ['type' => strtolower($m[1]), 'host' => $m[2], 'port' => (int)$m[3], 'user' => '', 'pass' => ''];
+}
+function ix_our_ip(): ?string {
+    $direct = ['type' => 'none', 'host' => '', 'port' => 0, 'user' => '', 'pass' => ''];
+    foreach (['https://api.ipify.org?format=text', 'http://httpbin.org/ip'] as $u) {
+        $r = http_fetch($u, $direct);
+        if (isset($r['error']) || $r[0] !== 200) continue;
+        if (preg_match('/\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b/', $r[2], $m)) return $m[1];
+    }
+    return null;
+}
+// 'clean' = judges reached and none saw our IP; 'leak' = a judge saw it;
+// 'unknown' = no judge reachable through this proxy (unproven = unusable).
+function ix_judge(string $pxUrl, string $ourIp, array $judges): string {
+    $px = ix_url_to_proxy($pxUrl);
+    if ($px === null) return 'unknown';
+    $seen = false;
+    foreach ($judges as $j) {
+        if (!is_string($j) || !preg_match('#^https?://#i', $j)) continue;
+        $r = http_fetch($j, $px);
+        if (isset($r['error']) || $r[0] < 200 || $r[0] >= 300) continue;
+        $seen = true;
+        if (str_contains($r[2], $ourIp)) return 'leak';
+    }
+    return $seen ? 'clean' : 'unknown';
 }
 
 // ── action dispatch ──────────────────────────────────────────────────────────
@@ -645,39 +695,134 @@ if ($action !== '') {
         if (isset($r['error'])) jout(['ok' => false, 'error' => $r['error'], 'ms' => $ms, 'via' => $r['via'] ?? '?']);
         jout(['ok' => true, 'code' => $r[0], 'bytes' => strlen($r[2]), 'ms' => $ms, 'via' => $r['via'] ?? '?']);
     }
-    // Public proxy discovery (same community sources as the app's
-    // proxy_discover): fetches the Proxifly list over the current route,
-    // keeps SOCKS + rated-anonymous HTTP entries, returns candidates
-    // UNTESTED — the UI probes each through fetch before pooling it.
+    // Public proxy discovery — the same community sources as the app's
+    // proxy_discover() (Proxifly rated JSON + monosans hourly plain lists),
+    // fetched over the current route. Needs ONE working route (direct on any
+    // real host); a host with no route at all cannot download any list, and
+    // must use the upload-zip path instead. Same anonymity round as the app:
+    // SOCKS entries are header-anonymous by protocol, rated entries trusted,
+    // unrated HTTP judged live while budget lasts; PROVEN leaks are dropped,
+    // unjudged-in-time stay flagged unverified for the UI to judge on demand.
     if ($action === 'discover') {
         $proxy = read_proxy();
-        $src = trim((string)($_POST['src'] ?? ''));
-        if ($src === '') $src = 'https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/all/data.json';
-        if (!preg_match('#^https?://#i', $src) && !str_starts_with($src, 'file://')) jer('not an http(s) URL');
-        $r = http_fetch($src, $proxy);
-        if (isset($r['error'])) jer('list download failed: ' . $r['error'] . ' — discovery needs a working route first (direct or a manual proxy).');
-        if ($r[0] !== 200) jer('list source answered HTTP ' . $r[0]);
-        $list = json_decode($r[2], true);
-        if (!is_array($list)) jer('list source returned garbage');
+        $t0 = microtime(true);
+        $srcs = [
+            ['name' => 'proxifly', 'url' => 'https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/all/data.json', 'type' => 'proxifly', 'rated' => true],
+            ['name' => 'monosans', 'url' => 'https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt', 'type' => 'plain', 'proto' => 'http', 'rated' => false],
+            ['name' => 'monosans', 'url' => 'https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks4.txt', 'type' => 'plain', 'proto' => 'socks4', 'rated' => true],
+            ['name' => 'monosans', 'url' => 'https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt', 'type' => 'plain', 'proto' => 'socks5', 'rated' => true],
+        ];
+        $only = trim((string)($_POST['src'] ?? ''));
+        if ($only !== '') {
+            // Test hook (and power users): single custom list instead.
+            $isJson = substr($only, -5) === '.json';
+            $srcs = [['name' => 'custom', 'url' => $only, 'type' => $isJson ? 'proxifly' : 'plain', 'proto' => 'http', 'rated' => $isJson]];
+        }
+        $judges = json_decode((string)($_POST['judges'] ?? ''), true);
+        if (!is_array($judges) || $judges === []) $judges = IX_JUDGES;
+        $ourIpFixed = trim((string)($_POST['our_ip'] ?? ''));
         $out = [];
         $seen = [];
-        foreach ($list as $entry) {
-            if (!is_array($entry)) continue;
-            $proto = strtolower((string)($entry['protocol'] ?? ''));
-            if ($proto === '') continue;
-            $anon = strtolower((string)($entry['anonymity'] ?? ''));
-            if (!str_starts_with($proto, 'socks') && !in_array($anon, ['anonymous', 'elite'], true)) continue;
-            $ip = (string)($entry['ip'] ?? '');
-            $port = (string)($entry['port'] ?? '');
-            if ($ip === '' || $port === '') continue;
-            $norm = ix_norm($proto . '://' . $ip . ':' . $port);
-            if ($norm === null || isset($seen[$norm])) continue;
-            $seen[$norm] = true;
-            $out[] = ['url' => $norm, 'source' => 'proxifly'];
-            if (count($out) >= 40) break;
+        $log = [];
+        foreach ($srcs as $src) {
+            if (microtime(true) - $t0 > 18) {
+                $log[] = 'budget spent — remaining lists skipped (retry for more)';
+                break;
+            }
+            if (!preg_match('#^https?://#i', $src['url']) && !str_starts_with($src['url'], 'file://')) {
+                continue;
+            }
+            $r = http_fetch($src['url'], $proxy);
+            if (isset($r['error']) || $r[0] !== 200) {
+                $log[] = $src['name'] . '/' . basename((string)parse_url($src['url'], PHP_URL_PATH)) . ': ' . (isset($r['error']) ? $r['error'] : 'HTTP ' . $r[0]);
+                continue;
+            }
+            $n = 0;
+            if ($src['type'] === 'proxifly') {
+                $list = json_decode($r[2], true);
+                if (!is_array($list)) {
+                    $log[] = 'proxifly: garbage response';
+                    continue;
+                }
+                foreach ($list as $entry) {
+                    if (!is_array($entry)) continue;
+                    $proto = strtolower((string)($entry['protocol'] ?? ''));
+                    if ($proto === '') continue;
+                    $anon = strtolower((string)($entry['anonymity'] ?? ''));
+                    if (!str_starts_with($proto, 'socks') && !in_array($anon, ['anonymous', 'elite'], true)) continue;
+                    $norm = ix_norm($proto . '://' . (string)($entry['ip'] ?? '') . ':' . (string)($entry['port'] ?? ''));
+                    if ($norm === null || isset($seen[$norm])) continue;
+                    $seen[$norm] = true;
+                    $out[] = ['url' => $norm, 'source' => 'proxifly', 'rated' => true, 'judged' => false, 'anonymous' => false];
+                    $n++;
+                    if (count($out) >= 60) break;
+                }
+            } else {
+                foreach (preg_split('/\r?\n/', trim($r[2])) ?: [] as $line) {
+                    if (!preg_match('/\b(\d{1,3}(?:\.\d{1,3}){3}:\d{2,5})\b/', $line, $m)) continue;
+                    $norm = ix_norm($src['proto'] . '://' . $m[1]);
+                    if ($norm === null || isset($seen[$norm])) continue;
+                    $seen[$norm] = true;
+                    $out[] = ['url' => $norm, 'source' => $src['name'], 'rated' => $src['rated'], 'judged' => false, 'anonymous' => false];
+                    $n++;
+                    if (count($out) >= 60) break;
+                }
+            }
+            $log[] = $src['name'] . ': ' . $n . ' candidates via ' . ($r['via'] ?? '?');
+            if (count($out) >= 60) break;
         }
-        jout(['ok' => true, 'candidates' => $out, 'via' => $r['via'] ?? '?',
-            'log' => count($out) . ' candidates (untested — probe them before use)']);
+        // Anonymity round for unrated HTTP while budget lasts (SOCKS needs
+        // none, rated is trusted). Proven leaks are dropped on the spot.
+        $leaked = 0;
+        $toJudge = [];
+        foreach ($out as $i => $c) {
+            if (!$c['rated'] && str_starts_with($c['url'], 'http://')) $toJudge[] = $i;
+            if (count($toJudge) >= 8) break;
+        }
+        if ($toJudge !== []) {
+            $ourIp = $ourIpFixed !== '' ? $ourIpFixed : ix_our_ip();
+            if ($ourIpFixed === '' && $ourIp !== null) $log[] = 'server IP learned via ipify (' . $ourIp . ') — direct, one-time, to verify proxies hide it';
+            if ($ourIp === null) {
+                $log[] = 'own IP unknowable (no direct route) — HTTP candidates stay unverified';
+            } else {
+                foreach ($toJudge as $i) {
+                    if (microtime(true) - $t0 > 26) {
+                        $log[] = 'judge budget spent — rest stay unverified';
+                        break;
+                    }
+                    $st = ix_judge($out[$i]['url'], $ourIp, $judges);
+                    if ($st === 'leak') {
+                        $leaked++;
+                        unset($out[$i]);
+                    } elseif ($st === 'clean') {
+                        $out[$i]['judged'] = true;
+                        $out[$i]['anonymous'] = true;
+                    }
+                }
+                $out = array_values($out);
+                if ($leaked > 0) $log[] = $leaked . ' leaking proxies dropped';
+            }
+        }
+        if ($out === []) jer('no candidates from any list. ' . implode(' ', $log));
+        jout(['ok' => true, 'candidates' => $out, 'log' => array_merge($log, [count($out) . ' candidates (probe them through fetch before use)'])]);
+    }
+    // Single-proxy anonymity verdict (Test-button chain + tests). Learns our
+    // IP directly unless our_ip is posted (same disclosure note as above).
+    if ($action === 'judge') {
+        $px = trim((string)($_POST['px'] ?? ''));
+        if (ix_url_to_proxy($px) === null) jer('not a proxy URL (need scheme://host:port)');
+        $judges = json_decode((string)($_POST['judges'] ?? ''), true);
+        if (!is_array($judges) || $judges === []) $judges = IX_JUDGES;
+        $ourIp = trim((string)($_POST['our_ip'] ?? ''));
+        $learned = false;
+        if ($ourIp === '') {
+            $ourIp = ix_our_ip();
+            $learned = true;
+        }
+        if ($ourIp === null) jer('own IP unknowable (no direct route) — cannot verify');
+        $st = ix_judge($px, $ourIp, $judges);
+        jout(['ok' => true, 'state' => $st, 'ip' => $ourIp, 'learned_ip' => $learned,
+            'log' => $learned ? 'server IP learned via ipify (' . $ourIp . ') — direct, one-time' : 'verified against posted IP']);
     }
     if ($action === 'upload') {
         if (!class_exists('ZipArchive')) jer('ZipArchive missing — enable the zip extension in the panel first.');
@@ -736,6 +881,7 @@ if ($action !== '') {
         } catch (PDOException $e) {
             jer('connect failed: ' . $e->getMessage() . ' — create the database + user in the panel first (the installer has no CREATE DATABASE privilege there).');
         }
+        /** @var PDO $pdo connection live past this point (jer() exits, it never returns) */
         $ver = (string)$pdo->query('SELECT VERSION()')->fetchColumn();
         if ($action === 'dbtest') {
             $have = [];
@@ -778,8 +924,8 @@ if ($action !== '') {
             jer('cannot write config.php — directory not writable?');
         $log[] = 'config.php written (AES key generated fresh)';
         // 3. schema
-        $stmts = schema_statements((string)file_get_contents(base() . '/setup.sql'));
-        $res = schema_apply($pdo, $stmts);
+        $stmts = ix_schema_statements((string)file_get_contents(base() . '/setup.sql'));
+        $res = ix_schema_apply($pdo, $stmts);
         $log[] = 'schema: ' . $res['applied'] . '/' . count($stmts) . ' statements applied';
         if ($res['error'] !== '') jer('schema failed after ' . $res['applied'] . ' statements: ' . $res['error'] . ' — statement: ' . substr($res['statement'], 0, 200));
         // 4. verify
@@ -797,8 +943,9 @@ if ($action !== '') {
         foreach (INST_TABLES as $t) if (($engines[$t] ?? 'INNODB') !== 'INNODB') $badEng[] = $t . ':' . $engines[$t];
         if ($badEng !== []) $log[] = 'WARNING non-InnoDB tables: ' . implode(', ', $badEng) . ' (ask host to default to InnoDB)';
         // 5. session fallback dir + server note
-    $sp = eini('session.save_path');
-        $log[] = ($sp === '' || is_writable($sp)) ? 'sessions: default path usable'
+        $sp = eini('session.save_path');
+        // @: the path may sit outside open_basedir — report, don't warn.
+        $log[] = ($sp === '' || @is_writable($sp)) ? 'sessions: default path usable'
             : 'sessions: default NOT writable — app auto-falls back to cache/sessions (pre-created)';
         $sw = (string)($_SERVER['SERVER_SOFTWARE'] ?? '');
         if (stripos($sw, 'apache') === false)
@@ -864,6 +1011,7 @@ button.ghost:hover{background:transparent;color:var(--text)}
 button.sm{padding:8px 18px;font-size:10px;margin:8px 8px 0 0}
 button:disabled{opacity:.35;cursor:default}button:disabled:hover{background:transparent;color:var(--text);border-color:var(--border)}
 button.ghost:disabled:hover{color:var(--muted)}
+button.btn-big{display:block;width:100%;padding:18px;font-size:13px;border-color:var(--text);margin:16px 0 8px}
 .row{display:flex;gap:12px;align-items:baseline;padding:8px 0;border-top:1px solid var(--border);font-size:13px}
 .st{margin-left:auto;flex:0 0 auto;font-family:ui-monospace,'IBM Plex Mono',Menlo,Consolas,monospace;font-size:10px;letter-spacing:.12em;text-transform:uppercase}
 .st-ok{color:var(--info)}.st-fail{color:var(--error)}.st-warn{color:var(--warn)}.st-info{color:var(--muted)}
@@ -902,20 +1050,12 @@ code{font-family:ui-monospace,'IBM Plex Mono',Menlo,Consolas,monospace;font-size
 <label>Version</label><select id="ver"><option value="">Loading versions from GitHub…</option></select>
 <label>…or paste a release zip URL manually</label><input type="text" id="url" placeholder="https://github.com/…/archive/refs/tags/v1.5.0.zip">
 <div class="sec">Route: how this server reaches GitHub</div>
-<p class="hint">Direct first; when the host cannot reach github.com, add proxies to the pool and switch to auto (tried in order) or pin one. Every request — versions, download, discovery — uses the route shown here. SOCKS resolves hostnames at the proxy (no local DNS leak).</p>
-<label>Mode</label><select id="mode"><option value="direct">direct (no proxy)</option><option value="auto">auto — try pool in order</option></select>
+<p class="hint">Direct works on any normal host. When it doesn't — or when you want every request proxied — discover free public proxies (same community lists the app itself uses) and route through the tested pool. SOCKS resolves hostnames at the proxy (no local DNS leak).</p>
+<div><button class="btn-big" id="bdisc">Discover public proxies</button></div>
+<div class="hint" id="discnote">Untested candidates land in the pool below — probe them before use. Auto mode serves pool proxies only and fails closed (never falls back to direct); unverified HTTP stays out until verified, leaks are dropped.</div>
+<label>Mode</label><select id="mode"><option value="direct">direct (no proxy)</option><option value="auto">auto — pool only, fail closed</option></select>
 <div id="pool"></div>
-<div class="sec">Add proxy</div>
-<div class="grid3">
-<div><label>Type</label><select id="pt"><option value="http">HTTP</option><option value="socks5">SOCKS5</option><option value="socks4">SOCKS4</option></select></div>
-<div><label>Host</label><input type="text" id="ph" placeholder="127.0.0.1"></div>
-<div><label>Port</label><input type="number" id="pp" placeholder="1080"></div>
-</div>
-<div class="grid2">
-<div><label>User (optional)</label><input type="text" id="pu"></div>
-<div><label>Password (optional)</label><input type="password" id="pw"></div>
-</div>
-<div><button class="ghost" id="badd">Add to pool</button><button class="ghost" id="bdisc">Discover public proxies</button><button class="ghost hidden" id="btestall">Test all</button></div>
+<div><button class="ghost hidden" id="btestall">Test all untested</button></div>
 <div class="bar"><i id="dbar"></i></div><div class="hint" id="dtxt"></div>
 <div><button id="bdl">Download</button><button class="ghost" id="bup">Upload a zip instead…</button><input type="file" id="fup" accept=".zip" class="hidden"></div>
 <div id="dlbtns" class="hidden"><label><input type="checkbox" id="keepcfg" checked> Keep existing config.php (upgrade mode)</label><br><button id="bex">Extract into this directory</button></div>
@@ -961,17 +1101,38 @@ var f=files||fd(data||{});f.append("action",action);
 return fetch("?action="+encodeURIComponent(action),{method:"POST",body:f}).then(function(r){return r.json()}).catch(function(e){return {ok:false,error:"request failed: "+e}});
 }
 function get(action,qs){return fetch("?action="+encodeURIComponent(action)+(qs||""),{method:"GET"}).then(function(r){return r.json()}).catch(function(e){return {ok:false,error:"request failed: "+e}})}
-/* proxy pool: [{t,h,p,u,w,src,st}] st = untested|ok|fail (+ms). persisted. */
+/* proxy pool: [{t,h,p,src,rated,st,anon,ms}] st = untested|ok|slow|fail|leak;
+   anon = proto|rated|verified|unverified|leak. persisted. */
 var pool=[];try{pool=JSON.parse(localStorage.getItem("ddm_inst_px")||"[]")}catch(e){pool=[]}
 if(!Array.isArray(pool))pool=[];
-var lastGood=null;
+var lastGood=null,ourIp=null;
 function savePool(){try{localStorage.setItem("ddm_inst_px",JSON.stringify(pool))}catch(e){}}
 function routeName(p){return p?p.t+"://"+p.h+":"+p.p+(p.u?" (auth)":""):"direct"}
+function anonName(p){
+if(p.anon==="proto")return "protocol-anon";
+if(p.anon==="rated")return "rated-list";
+if(p.anon==="verified")return "verified";
+if(p.anon==="leak")return "LEAK";
+return "unverified";
+}
+/* Fail-closed auto: leaks, failures, and unverified HTTP never serve traffic.
+   Order: working, then untested, slow last. Pinned mode is the owner's
+   explicit choice (warned when it leaks). */
+function poolUsable(p){
+if(!p||p.st==="fail"||p.st==="leak"||p.anon==="leak")return false;
+if(p.t==="http"&&!p.rated&&p.anon!=="verified")return false;
+return true;
+}
 function routes(){
 var m=$("mode").value;
-if(m==="direct"||!pool.length)return [null];
+if(m==="direct")return [null];
 if(m.indexOf("px:")===0){var p=pool[+m.slice(3)];return [p||null]}
-return pool.slice();
+var us=pool.filter(function(p){return poolUsable(p)&&p.st==="ok"});
+var un=pool.filter(function(p){return poolUsable(p)&&p.st==="untested"});
+var sl=pool.filter(function(p){return poolUsable(p)&&p.st==="slow"});
+var all=us.concat(un,sl);
+if(!all.length)log("pool has no usable proxy — using direct for this request","warn");
+return all.length?all:[null];
 }
 function pxObj(p){return p?{proxy_type:p.t,proxy_host:p.h,proxy_port:p.p,proxy_user:p.u||"",proxy_pass:p.w||""}:{proxy_type:"none"}}
 function renderPool(){
@@ -979,24 +1140,40 @@ var h="",m=$("mode"),keep=m.value;
 m.innerHTML='<option value="direct">direct (no proxy)</option><option value="auto">auto — try pool in order</option>';
 pool.forEach(function(p,i){
 var o=document.createElement("option");o.value="px:"+i;o.textContent=routeName(p);m.appendChild(o);
-var st=p.st==="ok"?"ok ("+p.ms+" ms)":(p.st||"untested");
-h+='<div class="pxrow"><span class="u">'+routeName(p)+'</span><span class="src">'+(p.src||"manual")+'</span><span class="st st-'+(p.st==="ok"?"ok":p.st==="fail"?"fail":"info")+'">'+st+'</span><span><button class="sm" data-t="'+i+'">test</button><button class="sm" data-u="'+i+'">use</button><button class="sm" data-d="'+i+'">del</button></span></div>';
+var st=p.st==="ok"?"ok ("+p.ms+" ms)":p.st==="slow"?"slow ("+p.ms+" ms)":(p.st||"untested");
+var stc=p.st==="ok"?"ok":p.st==="slow"?"warn":(p.st==="fail"||p.st==="leak"||p.anon==="leak")?"fail":"info";
+h+='<div class="pxrow"><span class="u">'+routeName(p)+'</span><span class="src">'+(p.src||"manual")+' · '+anonName(p)+'</span><span class="st st-'+stc+'">'+st+'</span><span><button class="sm" data-t="'+i+'">test</button><button class="sm" data-u="'+i+'">use</button><button class="sm" data-d="'+i+'">del</button></span></div>';
 });
-if(!pool.length)h='<p class="hint">Pool empty — direct unless you add proxies.</p>';
+if(!pool.length)h='<p class="hint">Pool empty — hit Discover above, or stay direct.</p>';
 $("pool").innerHTML=h;
 if(keep==="auto"||keep==="direct"||keep.indexOf("px:")===0)m.value=keep;
 $("btestall").classList.toggle("hidden",!pool.length);
 Array.prototype.forEach.call($("pool").querySelectorAll("[data-t]"),function(b){b.onclick=function(){testPx(pool[+b.getAttribute("data-t")])}});
-Array.prototype.forEach.call($("pool").querySelectorAll("[data-u]"),function(b){b.onclick=function(){$("mode").value="px:"+b.getAttribute("data-u");log("route pinned: "+routeName(pool[+b.getAttribute("data-u")]),"info");loadTags()}});
+Array.prototype.forEach.call($("pool").querySelectorAll("[data-u]"),function(b){b.onclick=function(){var p=pool[+b.getAttribute("data-u")];$("mode").value="px:"+b.getAttribute("data-u");log("route pinned: "+routeName(p)+(p.anon==="leak"||(p.t==="http"&&!p.rated&&p.anon!=="verified")?" — WARNING: leaks or unverified, your explicit choice":""),"info");loadTags()}});
 Array.prototype.forEach.call($("pool").querySelectorAll("[data-d]"),function(b){b.onclick=function(){pool.splice(+b.getAttribute("data-d"),1);savePool();renderPool()}});
 }
 function testPx(p,cb){
 if(!p){if(cb)cb(null);return}
 log("probing "+routeName(p)+"…","info");
 api("fetch",Object.assign({url:"https://api.github.com/repos/kilerdevs/DeadDropMGMT/tags"},pxObj(p))).then(function(r){
-if(r.ok&&r.code===200){p.st="ok";p.ms=r.ms;lastGood=p;log("proxy OK: "+routeName(p)+" — HTTP 200, "+r.bytes+" B, "+r.ms+" ms via "+r.via,"ok")}
-else{p.st="fail";log("proxy FAIL: "+routeName(p)+" — "+(r.error||("HTTP "+r.code))+" ("+r.ms+" ms)","fail")}
-savePool();renderPool();if(cb)cb(p.st==="ok"?p:null);
+if(!r.ok||r.code!==200){p.st="fail";log("proxy FAIL: "+routeName(p)+" — "+(r.error||("HTTP "+r.code))+" ("+r.ms+" ms)","fail");savePool();renderPool();if(cb)cb(null);return}
+p.ms=r.ms;
+p.st=r.ms>3000?"slow":"ok";
+lastGood=p;
+log("proxy "+p.st.toUpperCase()+": "+routeName(p)+" — HTTP 200, "+r.bytes+" B, "+r.ms+" ms via "+r.via,p.st==="ok"?"ok":"warn");
+if(p.t!=="http"){p.anon="proto";savePool();renderPool();if(cb)cb(p);return} // SOCKS: anonymous by protocol
+if(p.rated){p.anon="rated";savePool();renderPool();log("anonymity: rated list entry — trusted per app policy","info");if(cb)cb(p);return}
+log("anonymity: unrated HTTP — verifying via header-echo judge…","info");
+var j={px:p.t+"://"+p.h+":"+p.p};
+if(ourIp)j.our_ip=ourIp;
+api("judge",j).then(function(g){
+if(g.ip)ourIp=g.ip;
+if(!g.ok){p.anon="unverified";log("judge failed: "+(g.error||"unknown"),"warn")}
+else if(g.state==="clean"){p.anon="verified";log("anonymity VERIFIED: "+routeName(p)+" hides our IP","ok")}
+else if(g.state==="leak"){p.anon="leak";p.st="leak";if(lastGood===p)lastGood=null;log("anonymity LEAK: "+routeName(p)+" exposes our IP — dropped from auto","fail")}
+else{p.anon="unverified";log("anonymity unverified: no judge reachable through it","warn")}
+savePool();renderPool();if(cb)cb(p.anon==="leak"?null:p);
+});
 });
 }
 var stw={ok:"ok",fail:"blocked",warn:"limited",info:"info"};
@@ -1045,29 +1222,25 @@ log("versions via "+(r.via||"?")+": "+r.tags.map(function(t){return t.tag}).join
 })();
 }
 $("mode").onchange=function(){renderPool();loadTags()};
-$("badd").onclick=function(){
-var h=$("ph").value.trim(),p=+$("pp").value;
-if(!h||!p){log("proxy host + port required","warn");return}
-pool.push({t:$("pt").value,h:h,p:p,u:$("pu").value,w:$("pw").value,src:"manual",st:"untested"});
-savePool();renderPool();log("proxy added: "+routeName(pool[pool.length-1]),"info");
-testPx(pool[pool.length-1]);
-};
 $("bdisc").onclick=function(){
 var list=routes(),i=0;
-log("discovering public proxies (needs one working route)…","info");$("bdisc").disabled=true;
+log("discovering public proxies (same lists the app uses)…","info");$("bdisc").disabled=true;
 (function next(){
-if(i>=list.length){$("bdisc").disabled=false;log("discovery failed on every route","fail");return}
+if(i>=list.length){$("bdisc").disabled=false;log("discovery failed on every route — this host has no route to GitHub at all; use the upload-zip path instead","fail");return}
 var px=pxObj(list[i]);i++;
 api("discover",px).then(function(r){
 if(r.ok&&r.candidates&&r.candidates.length){
+(r.log||[]).forEach(function(m){log("discover: "+m,"info")});
 var n=0;r.candidates.forEach(function(c){
 var m=c.url.match(/^(\w+):\/\/([^:]+):(\d+)$/);
 if(!m)return;
 if(pool.some(function(p){return p.t===m[1]&&p.h===m[2]&&+p.p===+m[3]}))return;
-pool.push({t:m[1],h:m[2],p:+m[3],u:"",w:"",src:c.source||"discovered",st:"untested"});n++;
+pool.push({t:m[1],h:m[2],p:+m[3],u:"",w:"",src:c.source||"discovered",rated:!!c.rated,
+anon:m[1].indexOf("socks")===0?"proto":c.rated?"rated":"unverified",
+judged:!!c.anonymous,st:"untested"});n++;
 });
 savePool();renderPool();$("bdisc").disabled=false;
-log("discovered "+n+" new candidates via "+(r.via||"?")+" — testing all…","ok");
+log("discovered "+n+" new candidates — testing all…","ok");
 testAll();
 }else{log("discovery route failed: "+(r.error||"empty"),"warn");next()}
 });
@@ -1096,14 +1269,18 @@ var url=$("url").value.trim();
 if(!url){if(!$("ver").value){log("pick a version or paste a URL","warn");return}
 url=$("ver").value==="MASTER"?"<?= INST_MASTER_ZIP ?>":$("ver").value}
 log("downloading "+url+" (one request, a few MB)…","info");$("bdl").disabled=true;$("dtxt").textContent="downloading…";
-var d=Object.assign({url:url},pxObj(lastGood||routes()[0]||null));
-log("download route: "+routeName(lastGood||routes()[0]||null),"info");
-api("download",d).then(function(r){
-$("bdl").disabled=false;
-if(!r.ok){log("download failed: "+r.error,"fail");$("dtxt").textContent="failed";return}
+var list=lastGood?[lastGood].concat(routes().filter(function(p){return p!==lastGood})):routes(),i=0;
+(function next(){
+if(i>=list.length){$("bdl").disabled=false;$("dtxt").textContent="failed";log("download failed on every route","fail");return}
+var rt=list[i];i++;
+log("download route: "+routeName(rt),"info");
+api("download",Object.assign({url:url},pxObj(rt))).then(function(r){
+if(!r.ok){log("route failed: "+r.error,"warn");next();return}
 $("dbar").style.width="100%";$("dtxt").textContent=Math.round(r.size/1024)+" KB";
-log(r.log+" via "+(r.via||"?"),"ok");$("dlbtns").classList.remove("hidden");
+if(rt)lastGood=rt;
+log(r.log+" via "+(r.via||"?"),"ok");$("dlbtns").classList.remove("hidden");$("bdl").disabled=false;
 });
+})();
 };
 $("bex").onclick=function(){
 log("extracting…","info");$("bex").disabled=true;

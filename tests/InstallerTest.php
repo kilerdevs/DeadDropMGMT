@@ -138,6 +138,8 @@ file_put_contents($stub . '/proxifly.json', json_encode([
     ['protocol' => 'http', 'anonymity' => 'elite', 'ip' => '127.0.0.1', 'port' => '8080'],
     ['protocol' => 'http', 'anonymity' => 'transparent', 'ip' => '1.2.3.4', 'port' => '80'],
 ]));
+file_put_contents($stub . '/plain.txt', "127.0.0.1:8080\nnot-a-proxy\n");
+file_put_contents($stub . '/judge-clean.txt', '{"headers":{"Host":"example"}}');
 if (class_exists('ZipArchive')) {
     $z = new ZipArchive();
     $zp = $stub . '/pkg.zip';
@@ -178,6 +180,24 @@ T::ok('unreachable host names a reason', ($badFetch['error'] ?? '') !== '');
 [$code, $disc] = ix_run($work, [], ['action' => 'discover', 'src' => $base . '/proxifly.json', 'proxy_type' => 'none']);
 T::eq('discover keeps socks5 + elite, drops transparent', 2, count($disc['candidates'] ?? []));
 T::ok('discover normalizes to scheme://ip:port', str_starts_with(($disc['candidates'][0]['url'] ?? ''), 'socks5://'));
+T::ok('discover flags rated entries', ($disc['candidates'][0]['rated'] ?? false) === true);
+// Unrated HTTP through a dead proxy: judge unreachable → kept but unverified.
+// Needs the HTTP stub (file:// must never travel a proxy — the installer
+// refuses that combination so verdicts stay honest).
+if ($server === null) {
+    T::ok('SKIP proxy-verdict asserts (no HTTP stub here)', true);
+} else {
+    [$code, $disc2] = ix_run($work, [], ['action' => 'discover', 'src' => $base . '/plain.txt', 'proxy_type' => 'none',
+        'judges' => json_encode([$base . '/judge-clean.txt']), 'our_ip' => '9.9.9.9']);
+    T::eq('plain-list candidate kept', 'http://127.0.0.1:8080', $disc2['candidates'][0]['url'] ?? null);
+    T::eq('plain-list candidate unrated', false, $disc2['candidates'][0]['rated'] ?? null);
+    T::eq('unreachable judge leaves it unverified', false, $disc2['candidates'][0]['judged'] ?? null);
+    [$code, $jUnk] = ix_run($work, [], ['action' => 'judge', 'px' => 'http://127.0.0.1:9',
+        'judges' => json_encode([$base . '/judge-clean.txt']), 'our_ip' => '9.9.9.9']);
+    T::eq('judge through dead proxy is unknown', 'unknown', $jUnk['state'] ?? null);
+}
+[$code, $jBad] = ix_run($work, [], ['action' => 'judge', 'px' => 'not-a-proxy']);
+T::eq('judge refuses garbage', false, $jBad['ok'] ?? true);
 
 // ── 3. download (zip ok, non-zip rejected) ───────────────────────────────────
 [$code, $dl] = ix_run($work, [], ['action' => 'download', 'url' => $base . '/pkg.zip', 'proxy_type' => 'none']);
@@ -244,7 +264,7 @@ if (!$canDb) {
             ['users','orders','order_photos','osm_proxies','map_zones','order_events','rate_limits','audit_log','settings','log_checkpoints'], $have)));
         $cfg = (string)file_get_contents($work . '/config.php');
         T::ok('config.php names the database', str_contains($cfg, "'$scratch'"));
-        T::ok('config.php holds a fresh 64-hex key', preg_match("/[0-9a-f]{64}/", $cfg) === 1);
+        T::ok('config.php holds a fresh 64-hex key', preg_match('/[0-9a-f]{64}/', $cfg) === 1);
         foreach (['logs','cache/osm_tiles','cache/sessions','tiles','data/maps','uploads'] as $d) {
             T::ok('dir created: ' . $d, is_dir($work . '/' . $d));
         }
