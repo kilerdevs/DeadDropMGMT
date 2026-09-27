@@ -231,7 +231,7 @@ function bim_main(array $argv): int {
     $check = in_array('--check', $argv, true);
     $raw = file_get_contents(BIM_SRC);
     if (!is_string($raw)) {
-        fwrite(STDERR, "cannot read " . BIM_SRC . "\n");
+        fwrite(STDERR, 'cannot read ' . BIM_SRC . "\n");
         return 2;
     }
     $src = str_replace(["\r\n", "\r"], "\n", $raw);
@@ -245,10 +245,10 @@ function bim_main(array $argv): int {
         $have = file_get_contents(BIM_DST);
         $haveNorm = is_string($have) ? str_replace(["\r\n", "\r"], "\n", $have) : '';
         if ($haveNorm !== $out) {
-            fwrite(STDERR, "tools/install.min.php is stale — run: php tools/build_installer_min.php\n");
+            fwrite(STDERR, 'tools/install.min.php is stale — run: php tools/build_installer_min.php' . "\n");
             return 1;
         }
-        fwrite(STDOUT, "install.min.php in sync (" . strlen($out) . " bytes)\n");
+        fwrite(STDOUT, 'install.min.php in sync (' . strlen($out) . " bytes)\n");
         return 0;
     }
     if (file_put_contents(BIM_DST, $out) === false) {
