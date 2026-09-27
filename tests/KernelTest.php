@@ -129,6 +129,17 @@ foreach (['cron', 'tools', 'tests', 'docker', 'e2e', 'backups', 'data'] as $bloc
 }
 T::ok('Apache blocks setup.sql and config.php.example', str_contains($htaccess, 'setup\.sql') && str_contains($htaccess, 'config\\.php\\.example'));
 
+// ── Compression parity: text assets gzip/deflate on all three servers,
+// while already-compressed bytes (uploads, .pmtiles, tile PNGs) and Range
+// requests stay untouched.
+T::ok('Apache grants pbf/pmtiles/json statically', str_contains($htaccess, 'pbf|pmtiles|json'));
+T::ok('Apache types pbf as protobuf', str_contains($htaccess, 'application/x-protobuf'));
+T::ok('Apache deflates svg+protobuf, not uploads/pmtiles',
+    str_contains($htaccess, 'AddOutputFilterByType DEFLATE') && str_contains($htaccess, 'image/svg+xml application/x-protobuf'));
+T::ok('nginx gzips text assets', str_contains($nginx, 'gzip on;') && str_contains($nginx, 'gzip_types'));
+T::ok('Caddy encodes compressible types', str_contains($caddy, 'encode @encodable'));
+T::ok('Caddy never compresses tiles/uploads', str_contains($caddy, 'not path /admin/tile_proxy.php /tiles/* /uploads/* /cache/*'));
+
 // ── No function collisions with the service layer ───────────────────────────
 // PHP function names are case-insensitive: an entry script defining T()
 // fatals against i18n's t() the moment the kernel loads it (silent 255

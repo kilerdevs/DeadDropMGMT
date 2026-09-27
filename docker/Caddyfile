@@ -32,6 +32,17 @@
 	# Static files and error pages never pass through PHP's header layer.
 	header X-Content-Type-Options "nosniff"
 
+	# Bandwidth for recipients on phones: compress text assets (maplibre-gl.js
+	# 1 MB -> ~265 KB). Tile PNGs (tile_proxy.php), /tiles/*.pmtiles and
+	# /uploads/* are already compressed — and compression breaks Range
+	# requests — so they are excluded; everything else compressible by
+	# extension is fair game, including dynamic HTML (*.php).
+	@encodable {
+		path *.js *.mjs *.css *.html *.htm *.php *.svg *.json *.txt *.xml
+		not path /admin/tile_proxy.php /tiles/* /uploads/* /cache/*
+	}
+	encode @encodable zstd gzip
+
 	# Same capability-URL reasoning as the Apache/nginx notes: bearer links
 	# must not persist in caches.
 	@uploads path /uploads/*

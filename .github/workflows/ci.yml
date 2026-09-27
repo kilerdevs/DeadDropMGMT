@@ -1,5 +1,13 @@
 name: CI
 
+concurrency:
+  # The same commit runs as push:dev AND pull_request; a release fans out to
+  # three full 13-job runs. Sharing one group per ref stops the pile-up
+  # (queued test jobs waited ~60 s in run 36345330215). Master runs to
+  # completion — cancelling a release build mid-deploy is worse than waiting.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
 on:
   push:
     branches: [master, dev]
@@ -387,6 +395,8 @@ jobs:
           only-fixed: true
           fail-build: true
           output-format: table
+          # The vuln DB download+install is ~90 s of every scan; cache it.
+          cache-db: true
 
       - name: Scan FPM image (Grype)
         uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
@@ -396,6 +406,7 @@ jobs:
           only-fixed: true
           fail-build: true
           output-format: table
+          cache-db: true
 
       # SBOM (CycloneDX) for both images — the inventory that makes the CVE
       # scans auditable and gives downstream deployers something to diff.

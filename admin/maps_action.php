@@ -18,6 +18,22 @@ if (!verify_csrf($_POST['csrf_token'] ?? '')) {
 
 $action = $_POST['action'] ?? '';
 
+// Long worker calls (poll slice, inline finish) must not hold the session
+// lock: the status poll fires every 3 s, and every other admin request from
+// this owner — tiles included — would queue behind the download. Closing
+// first persists verify_csrf()'s rotation and frees the lock; re-opening
+// afterwards lets json_out() mint the next token into a live session.
+// Reads of $_SESSION (audit, guards) above already ran; maps_* use no
+// session state at all.
+$withoutSessionLock = static function (callable $fn): void {
+    session_write_close();
+    try {
+        $fn();
+    } finally {
+        start_secure_session();
+    }
+};
+
 switch ($action) {
 
     // ── Queue one zone ──────────────────────────────────────────────────────
@@ -52,7 +68,7 @@ switch ($action) {
         $kicked = maps_kick_worker();
         audit('maps_zone_queue', null, null, "id={$id}");
         // No detached worker can exist on PHP-engine hosts: finish inline.
-        maps_php_inline($id);
+        $withoutSessionLock(static function () use ($id): void { maps_php_inline($id); });
         json_out(['ok' => true, 'id' => $id, 'kicked' => $kicked]);
     }
 
@@ -76,7 +92,7 @@ switch ($action) {
         }
         $kicked = maps_kick_worker();
         audit('maps_zone_retry', null, null, "id={$id}");
-        maps_php_inline($id);
+        $withoutSessionLock(static function () use ($id): void { maps_php_inline($id); });
         json_out(['ok' => true, 'kicked' => $kicked]);
     }
 
@@ -93,7 +109,7 @@ switch ($action) {
         }
         $kicked = maps_kick_worker();
         audit('maps_zone_refresh', null, null, "id={$id}");
-        maps_php_inline($id);
+        $withoutSessionLock(static function () use ($id): void { maps_php_inline($id); });
         json_out(['ok' => true, 'kicked' => $kicked]);
     }
 
@@ -101,7 +117,7 @@ switch ($action) {
     case 'status': {
         // PHP-engine hosts donate a short slice per poll so the queue moves
         // with no cron, no detach and no hanging POST (rows re-read below).
-        maps_php_poll_slice();
+        $withoutSessionLock(static function (): void { maps_php_poll_slice(); });
         $zones = [];
         foreach (maps_zone_list() as $z) {
             $zones[] = [
