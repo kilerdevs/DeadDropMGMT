@@ -616,9 +616,13 @@ register_shutdown_function(static function () use ($stubProcs, $kill, $stubDir):
 });
 
 // ── curl-less concurrent probe ──────────────────────────────────────────────
-$probe = proxy_multi_probe_streams([$connectPx, 'http://127.0.0.1:9', 'bogus://x'], $originBase . '/tile', 4, 3);
-T::eq('streams probe: working proxy answers 200', 200, $probe[$connectPx][0] ?? 0);
-T::ok('streams probe: latency field sane', ($probe[$connectPx][1] ?? -1) >= 0);
+// Fresh CONNECT stub: the shared one tunnelled live TLS above, including the
+// deliberately failed wrong-CA handshake, and a single-threaded stub still
+// draining that tunnel timed this 3 s probe out (flaky on CI, PHP 8.4).
+$probePx = 'http://127.0.0.1:' . $bootConnect();
+$probe = proxy_multi_probe_streams([$probePx, 'http://127.0.0.1:9', 'bogus://x'], $originBase . '/tile', 4, 3);
+T::eq('streams probe: working proxy answers 200', 200, $probe[$probePx][0] ?? 0);
+T::ok('streams probe: latency field sane', ($probe[$probePx][1] ?? -1) >= 0);
 T::eq('streams probe: dead proxy is [0,0]', [0, 0], $probe['http://127.0.0.1:9']);
 T::eq('streams probe: garbage proxy is [0,0]', [0, 0], $probe['bogus://x']);
 $probeTls = proxy_multi_probe_streams([$socksPx], $liveTile, 12, 5);
