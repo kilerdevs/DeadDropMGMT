@@ -9,6 +9,8 @@ All notable changes to DeadDropMGMT are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-09-27
+
 ### Added
 - **One-file web installer** (`tools/install.php`): shell-less shared-hosting
   setup in a single upload. Open the file in a browser and a four-step wizard
@@ -56,6 +58,97 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   extension (fail-closed as before; pool probing just runs sequentially).
   Covered by a new `ProxyTransportTest` (framing units, loopback CONNECT/SOCKS
   stubs, live-TLS proofs through both tunnel types).
+- `ArrayInputTest`: a permanent guard for array-shaped input. Every entry
+  point is sent every parameter name the code reads as `name[]=x`, GET and
+  POST, as a logged-in owner, and the answer and the logs must stay clean —
+  the class of bug behind the old `htmlspecialchars(): Argument #1 must be of
+  type string, array given` error (fixed earlier via `post_string()` /
+  `get_string()`). It fails on the pre-fix `index.php`.
+- **Runs on free shared hosting** (no Docker, no cron, no exec, no CLI PHP, no
+  way to set environment variables). A new capability layer
+  (`includes/host.php`) is consulted by everything that used to assume them:
+  the proxy pool upkeep runs **inline after the response** in a time-budgeted
+  pass when no detached job can be started; discovery fetches its lists and the
+  public-IP probe through the built-in socket engine, so neither cURL nor
+  `allow_url_fopen` is required; a host that can never find a working proxy
+  has routing **switched off automatically after three empty discoveries**
+  (audit + warning + Settings notice) instead of staying wedged fail-closed;
+  without cURL routing still applies and OSM requests still go through the
+  pool — only pool probing runs sequentially; map-zone **downloads** (which
+  genuinely need `proc_open` and Linux for the CLI fast path, and otherwise
+  ride the pure-PHP engine) are refused up front with a clear message
+  and a disabled Queue button. `DDMGMT_PSEUDO_CRON` / `DDMGMT_PROXY_HEAL` can be
+  `define()`d in `config.php`. **Settings → Hosting** lists what the host
+  allows and what each gap costs. A non-Docker install gets its version line
+  from `tools/build_info.sh --write` (`build-info.json`, web-denied). New README
+  section "Free shared hosting" and a troubleshooting entry.
+- Failed proxies are replaced automatically. While OSM proxy routing is
+  enabled, a discovered pool entry that fails is confirmed dead with a fresh
+  probe, deleted and swapped for a newly discovered proxy chosen by exactly the
+  Auto-discover criteria. Runs as a detached CLI job (`cron/proxy_heal.php`,
+  also invoked by the cleanup cron) under a lock and a 10-minute cooldown,
+  never inside a request. Nothing is deleted until a replacement exists (an
+  outage cannot wipe the pool, which never shrinks), recovered proxies are
+  kept, `manual` entries are never removed, each swap is audited
+  (`proxy_replace`). It reuses discovery, so it makes the same outbound
+  connections as the Auto-discover button — see the README privacy table.
+- Settings shows the running version to owners: `vX.Y.Z` for a tagged release,
+  or `vX.Y.Z+N` with a **BETA** badge and a one-line `hash · branch` for
+  builds past the last release tag (builds from `dev`); commit messages are
+  never recorded. The build host records
+  it with `tools/build_info.sh --export` (the image has no `.git`); a plain
+  build shows "unknown build". Not exposed on any public or unauthenticated
+  page.
+
+### Changed
+- **Breaking — client IP header.** With `DDMGMT_TRUST_PROXY=1` exactly one
+  header is read: `DDMGMT_CLIENT_IP_HEADER` (default `X-Forwarded-For`, last
+  hop). `CF-Connecting-IP` / `X-Real-IP` were tried first and could be forged
+  through a proxy that does not set them; behind Cloudflare set
+  `DDMGMT_CLIENT_IP_HEADER=CF-Connecting-IP`.
+- **OSM proxy routing is off by default** for new installs (opt-in: it
+  downloads public proxy lists and probes hundreds of unknown hosts).
+  Existing installs keep their stored setting.
+- Settings → Maps: **every zone has its own colour**, on the OSM zone map and
+  as a swatch in the zone list, so a rectangle can be matched to its row at a
+  glance (stable per zone; eight-colour palette, blue left for the rectangle
+  being drawn). Ready zones are drawn solid; zones still queued, sizing,
+  downloading or failed are dashed and lighter, with a hollow swatch, and the
+  status text is coloured too (ready green, in progress amber, failed red).
+- The OSM proxy status is a small caption **directly under the map** it
+  describes (order pickers and the zone editor) instead of a fixed overlay at
+  the top: it no longer covers page content, and a failover shows the skipped
+  proxies on a second, muted, capped line.
+- **OSM proxy routing is on by default** (new installs; existing installs keep
+  their setting) and the pool is **discovered automatically on the first run**:
+  an empty pool fails closed, so the same background job that replaces failed
+  proxies seeds a first pool with exactly what the Auto-discover button would
+  store (`proxy_seed` in the audit log) — started at container boot, by the
+  first page visit or by the first OSM request. Until it finishes, OSM-backed
+  maps answer 502 instead of leaking the server address. This makes the same
+  outbound connections as the button, so it is opt-out: routing off in
+  Settings, or `DDMGMT_PROXY_HEAL=0`.
+- The pseudo-cron now runs from **any PHP page** (public, admin, receipt, JSON
+  polls), not just the public index, and after the response has been sent, so
+  an install used only through `/admin/` still gets its hourly maintenance and
+  no visitor waits for a sweep. `healthz.php` stays code-free;
+  `DDMGMT_PSEUDO_CRON=0` turns it off for installs with real cron.
+- **Upgrade step required for existing installs:** after loading the new
+  `setup.sql`, run `php tools/migrate_order_tokens.php` (dry-run first, back
+  up the database — it drops the plaintext token columns). Until it has run,
+  orders created before the upgrade cannot be found; new orders work. The
+  hourly cleanup logs a `legacy_order_tokens` warning while any remain.
+  Details in the README and the troubleshooting guide.
+- The per-session failure bucket on the public unlock form now has its own
+  fixed threshold (5 failures per window) instead of borrowing the IP
+  limiter's attempt count, so retuning the IP budget (for example raising it
+  for a busy NAT exit) no longer moves the per-cookie budget; the bucket
+  still follows the limiter's window.
+- `X-Forwarded-Proto` multi-hop lists now use the last entry, the same rule
+  `X-Forwarded-For` already followed. A warning is logged when a list is seen.
+- Documentation: the requirement to serve the app from the root of its own
+  host (no sub-path) is documented, and the README, troubleshooting guide and
+  ADR-006/016/019 describe the changes above.
 
 ### Fixed
 - **Owner self-service needs the current password.** Changing one's own
@@ -188,103 +281,6 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   default path is actually unusable; ignored session `ini_set()` hardening is
   logged once per session; and non-Apache installs get a ready-made
   `docs/nginx-deaddrop.conf` mirroring `.htaccess` exactly.
-
-### Changed
-- **Breaking — client IP header.** With `DDMGMT_TRUST_PROXY=1` exactly one
-  header is read: `DDMGMT_CLIENT_IP_HEADER` (default `X-Forwarded-For`, last
-  hop). `CF-Connecting-IP` / `X-Real-IP` were tried first and could be forged
-  through a proxy that does not set them; behind Cloudflare set
-  `DDMGMT_CLIENT_IP_HEADER=CF-Connecting-IP`.
-- **OSM proxy routing is off by default** for new installs (opt-in: it
-  downloads public proxy lists and probes hundreds of unknown hosts).
-  Existing installs keep their stored setting.
-- Settings → Maps: **every zone has its own colour**, on the OSM zone map and
-  as a swatch in the zone list, so a rectangle can be matched to its row at a
-  glance (stable per zone; eight-colour palette, blue left for the rectangle
-  being drawn). Ready zones are drawn solid; zones still queued, sizing,
-  downloading or failed are dashed and lighter, with a hollow swatch, and the
-  status text is coloured too (ready green, in progress amber, failed red).
-- The OSM proxy status is a small caption **directly under the map** it
-  describes (order pickers and the zone editor) instead of a fixed overlay at
-  the top: it no longer covers page content, and a failover shows the skipped
-  proxies on a second, muted, capped line.
-- **OSM proxy routing is on by default** (new installs; existing installs keep
-  their setting) and the pool is **discovered automatically on the first run**:
-  an empty pool fails closed, so the same background job that replaces failed
-  proxies seeds a first pool with exactly what the Auto-discover button would
-  store (`proxy_seed` in the audit log) — started at container boot, by the
-  first page visit or by the first OSM request. Until it finishes, OSM-backed
-  maps answer 502 instead of leaking the server address. This makes the same
-  outbound connections as the button, so it is opt-out: routing off in
-  Settings, or `DDMGMT_PROXY_HEAL=0`.
-- The pseudo-cron now runs from **any PHP page** (public, admin, receipt, JSON
-  polls), not just the public index, and after the response has been sent, so
-  an install used only through `/admin/` still gets its hourly maintenance and
-  no visitor waits for a sweep. `healthz.php` stays code-free;
-  `DDMGMT_PSEUDO_CRON=0` turns it off for installs with real cron.
-
-### Added
-- `ArrayInputTest`: a permanent guard for array-shaped input. Every entry
-  point is sent every parameter name the code reads as `name[]=x`, GET and
-  POST, as a logged-in owner, and the answer and the logs must stay clean —
-  the class of bug behind the old `htmlspecialchars(): Argument #1 must be of
-  type string, array given` error (fixed earlier via `post_string()` /
-  `get_string()`). It fails on the pre-fix `index.php`.
-- **Runs on free shared hosting** (no Docker, no cron, no exec, no CLI PHP, no
-  way to set environment variables). A new capability layer
-  (`includes/host.php`) is consulted by everything that used to assume them:
-  the proxy pool upkeep runs **inline after the response** in a time-budgeted
-  pass when no detached job can be started; discovery fetches its lists and the
-  public-IP probe through the built-in socket engine, so neither cURL nor
-  `allow_url_fopen` is required; a host that can never find a working proxy
-  has routing **switched off automatically after three empty discoveries**
-  (audit + warning + Settings notice) instead of staying wedged fail-closed;
-  without cURL routing still applies and OSM requests still go through the
-  pool — only pool probing runs sequentially; map-zone **downloads** (which
-  genuinely need `proc_open` and Linux for the CLI fast path, and otherwise
-  ride the pure-PHP engine) are refused up front with a clear message
-  and a disabled Queue button. `DDMGMT_PSEUDO_CRON` / `DDMGMT_PROXY_HEAL` can be
-  `define()`d in `config.php`. **Settings → Hosting** lists what the host
-  allows and what each gap costs. A non-Docker install gets its version line
-  from `tools/build_info.sh --write` (`build-info.json`, web-denied). New README
-  section "Free shared hosting" and a troubleshooting entry.
-- Failed proxies are replaced automatically. While OSM proxy routing is
-  enabled, a discovered pool entry that fails is confirmed dead with a fresh
-  probe, deleted and swapped for a newly discovered proxy chosen by exactly the
-  Auto-discover criteria. Runs as a detached CLI job (`cron/proxy_heal.php`,
-  also invoked by the cleanup cron) under a lock and a 10-minute cooldown,
-  never inside a request. Nothing is deleted until a replacement exists (an
-  outage cannot wipe the pool, which never shrinks), recovered proxies are
-  kept, `manual` entries are never removed, each swap is audited
-  (`proxy_replace`). It reuses discovery, so it makes the same outbound
-  connections as the Auto-discover button — see the README privacy table.
-- Settings shows the running version to owners: `vX.Y.Z` for a tagged release,
-  or `vX.Y.Z+N` with a **BETA** badge and a one-line `hash · branch` for
-  builds past the last release tag (builds from `dev`); commit messages are
-  never recorded. The build host records
-  it with `tools/build_info.sh --export` (the image has no `.git`); a plain
-  build shows "unknown build". Not exposed on any public or unauthenticated
-  page.
-
-### Changed
-- **Upgrade step required for existing installs:** after loading the new
-  `setup.sql`, run `php tools/migrate_order_tokens.php` (dry-run first, back
-  up the database — it drops the plaintext token columns). Until it has run,
-  orders created before the upgrade cannot be found; new orders work. The
-  hourly cleanup logs a `legacy_order_tokens` warning while any remain.
-  Details in the README and the troubleshooting guide.
-- The per-session failure bucket on the public unlock form now has its own
-  fixed threshold (5 failures per window) instead of borrowing the IP
-  limiter's attempt count, so retuning the IP budget (for example raising it
-  for a busy NAT exit) no longer moves the per-cookie budget; the bucket
-  still follows the limiter's window.
-- `X-Forwarded-Proto` multi-hop lists now use the last entry, the same rule
-  `X-Forwarded-For` already followed. A warning is logged when a list is seen.
-- Documentation: the requirement to serve the app from the root of its own
-  host (no sub-path) is documented, and the README, troubleshooting guide and
-  ADR-006/016/019 describe the changes above.
-
-### Fixed
 - Map zone downloads no longer decide on stale file ages: the orphan sweep
   reads mtimes from disk instead of the process stat cache, so a steward that
   listed the tiles earlier cannot keep orphans forever — or mistake a live
@@ -1148,7 +1144,8 @@ First tagged release: the security-hardened core, fully gated by CI.
 - Actions pinned by SHA, workflows read-only, Dependabot
   (actions + composer + docker)
 
-[Unreleased]: https://github.com/kilerdevs/DeadDropMGMT/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/kilerdevs/DeadDropMGMT/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/kilerdevs/DeadDropMGMT/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/kilerdevs/DeadDropMGMT/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/kilerdevs/DeadDropMGMT/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/kilerdevs/DeadDropMGMT/compare/v1.2.0...v1.3.0
