@@ -448,18 +448,6 @@ $boot = static function (string $script, callable $argsFn, callable $ready) use 
     fwrite(STDERR, "cannot spawn stub $script\n");
     exit(1);
 };
-register_shutdown_function(static function () use (&$procs, $kill, $stubDir): void {
-    foreach ($procs as $p) {
-        $kill($p);
-    }
-    foreach (['origin.php', 'connect.php', 'socks5.php', 'connect.log', 'socks.log'] as $f) {
-        @unlink($stubDir . '/' . $f);
-    }
-    foreach (glob($stubDir . '/*.err') ?: [] as $f) {
-        @unlink($f);
-    }
-    @rmdir($stubDir);
-});
 
 $originPort = $boot($stubDir . '/origin.php', static fn(int $cand): array => [$cand, ''], static function (int $port): bool {
     // TCP up is not enough (the accept loop may lag): require the route.
@@ -594,6 +582,27 @@ $socksAuthPx = "socks5://user:pass@127.0.0.1:$socksAuthPort";
 T::eq('SOCKS auth accepted', $BODY, proxy_request_streams('GET', $originBase . '/tile', [], $socksAuthPx, 10, 8192)['body']);
 $socksWrongPx = "socks5://user:wrong@127.0.0.1:$socksAuthPort";
 T::eq('SOCKS auth rejected fails closed', 0, proxy_request_streams('GET', $originBase . '/tile', [], $socksWrongPx, 10, 8192)['code']);
+
+// All stubs are up: snapshot the process list BY VALUE for the shutdown
+// cleanup. A by-reference capture would read whatever a later suite leaves
+// in $procs in the single-process coverage runner (RateLimitConcurrencyTest
+// sets $procs = 12) and foreach() over an int fatals at process exit.
+$stubProcs = $procs;
+register_shutdown_function(static function () use ($stubProcs, $kill, $stubDir): void {
+    if (!is_array($stubProcs)) {
+        return;
+    }
+    foreach ($stubProcs as $p) {
+        $kill($p);
+    }
+    foreach (['origin.php', 'connect.php', 'socks5.php', 'connect.log', 'socks.log'] as $f) {
+        @unlink($stubDir . '/' . $f);
+    }
+    foreach (glob($stubDir . '/*.err') ?: [] as $f) {
+        @unlink($f);
+    }
+    @rmdir($stubDir);
+});
 
 // ── curl-less concurrent probe ──────────────────────────────────────────────
 $probe = proxy_multi_probe_streams([$connectPx, 'http://127.0.0.1:9', 'bogus://x'], $originBase . '/tile', 4, 3);
