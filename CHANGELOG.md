@@ -10,6 +10,19 @@ All notable changes to DeadDropMGMT are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **One-file web installer** (`tools/install.php`): shell-less shared-hosting
+  setup in a single upload. Open the file in a browser and a four-step wizard
+  (server check → release download → database + site setup → finish) takes it
+  from there: it fetches the release itself (resumable, verified) over a
+  direct connection or through auto-discovered proxies running the same
+  selection pipeline as Auto-discover (rated sources win, anonymity-checked,
+  fail-closed), writes `config.php` with a fresh random AES key, creates the
+  storage dirs and imports the schema without the privileged statements (the
+  database itself is still created in the hosting panel), then deletes itself.
+  Degrades gracefully where hosts are crippled: streams/sockets transports
+  where cURL is missing, manual upload-and-extract where ZipArchive is
+  missing. Covered by `InstallerTest` (offline end-to-end) and
+  `InstallerLimitedEnvTest` (crippled `php.ini`: no curl, no exec, no zip).
 - **Setup check** (`admin/setup_check.php`): one page diagnosing every host
   capability the app needs — PHP version, extensions, disabled functions,
   database reachability, session time-zone, schema presence, table engines,

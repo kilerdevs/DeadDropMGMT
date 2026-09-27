@@ -28,7 +28,7 @@ all without the underlying data ever leaving the server in readable form.
 ![Log integrity](https://img.shields.io/badge/audit%20log-HMAC%20chained-blue?style=flat)
 
 ![PHPStan](https://img.shields.io/badge/PHPStan-level%205-4F5D95?style=flat)
-![Test suites](https://img.shields.io/badge/PHP%20test%20suites-38-success?style=flat)
+![Test suites](https://img.shields.io/badge/PHP%20test%20suites-44-success?style=flat)
 ![E2E](https://img.shields.io/badge/E2E-Playwright-45ba4b?style=flat&logo=playwright&logoColor=white)
 ![Coverage floor](https://img.shields.io/badge/coverage%20floor-%E2%89%A585%25-success?style=flat)
 ![Mutation probe](https://img.shields.io/badge/mutation%20probe-16%20mutants-success?style=flat)
@@ -97,32 +97,11 @@ all without the underlying data ever leaving the server in readable form.
 
 ### How an order travels
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor C as Owner / Courier
-    participant A as App + database
-    actor R as Recipient
-
-    C->>A: Create order<br/>(pin, photos)
-    Note over A: Location encrypted,<br/>passphrase hashed
-    A-->>C: Passphrase shown once
-    C->>A: Mark delivered<br/>(TTL starts)
-    R->>A: Look up by token
-    R->>A: Unlock with passphrase<br/>(CSRF + rate limits)
-    A-->>R: Reveal map and photos<br/>(decrypted server-side)
-    R->>A: Confirm receipt
-    Note over A: Order, photos and<br/>events deleted
-```
+<img src="docs/diagrams/order-flow.svg" alt="Sequence: owner creates the order, the app encrypts the location and shows the passphrase once, the order is marked delivered, the recipient looks it up by token, unlocks it with the passphrase, sees the map and photos, confirms receipt, and everything is deleted." width="760">
 
 ### Order lifecycle
 
-```mermaid
-flowchart TB
-    N(["order created"]) --> P["preparing"]
-    P -- "deliver (TTL starts)" --> D["delivered"]
-    D -- "receipt confirmed<br/>closed by owner / courier<br/>TTL expired (cleanup sweep)" --> G(["deleted"])
-```
+<img src="docs/diagrams/order-lifecycle.svg" alt="Lifecycle: order created to preparing to delivered (TTL starts) to deleted on receipt, owner close, or expiry sweep." width="760">
 
 Every transition is a conditional `UPDATE` / row-locked transaction, so concurrent or replayed requests are harmless no-ops.
 Files are shredded only after the database transaction commits.
@@ -477,7 +456,19 @@ locked-down `php.ini`. Everything that would normally lean on Docker, cron or pr
 | Self-hosted map zone **downloads** | nothing extra (pure-PHP engine: the queue POST and the progress polls carry the download, no cron, no detach) — the faster `pmtiles` CLI path needs `proc_open` + Linux | Downloads work wherever outbound HTTPS exists. The default OpenStreetMap provider does not need any of it |
 | Version line in Settings | a Docker build arg | Run `tools/build_info.sh --write` on a checkout to produce `build-info.json`, or it shows "unknown build" |
 
-**Set-up without a shell**
+**Set-up without a shell — two ways.** The one-file installer is the short path; the manual steps below it do the same thing by hand.
+
+**A. One-file installer (recommended).** Upload `tools/install.php` to the web root over FTP and open it in a browser
+(`https://your-host/install.php`). A four-step wizard takes it from there:
+
+1. **Server check** — PHP version, extensions, disabled functions, writable folders, database reachability, with the fix next to each failing row.
+2. **Package** — pick a release; the installer downloads it itself (resumable, verified) over a direct connection or through proxies it discovers with the same app-parity pipeline as Auto-discover (rated sources win, anonymity-checked, fail-closed — never silent direct).
+3. **Database + site setup** — create the empty database and user in the hosting panel first (the installer has no such privilege there), enter them, hit *Test connection*, then *Install now*: it writes `config.php` with a fresh random AES key, creates the storage dirs and imports the schema without the privileged statements.
+4. **Finish** — verify, then delete the installer (one click; it removes itself).
+
+No shell, no phpMyAdmin import, no hand-written config. Without the `zip` extension the installer falls back to a manual upload-and-extract path instead of failing.
+
+**B. Manual install.** The same result by hand:
 
 1. **PHP 8.2 or newer** with `pdo_mysql`, `openssl`, `mbstring` and `gd`. Many free
    hosts still offer 8.1 or older — check the control panel first; the app will not run there.
@@ -553,16 +544,7 @@ The model assumes adversaries ranging from opportunistic to well-resourced:
 
 ### 3. Trust boundaries
 
-```mermaid
-flowchart TB
-    B(["Browser"]) -- "TLS (external)" --> W["Web server + PHP"]
-    W --> I["Public zone<br/>index.php · receive.php"]
-    W --> AD["Admin zone<br/>session + CSRF + 2FA + roles"]
-    I --> DB[("MySQL / MariaDB<br/>prepared statements only")]
-    AD --> DB
-    AD -. "server-side only" .-> OSM["OSM tiles / Nominatim<br/>(optional proxy pool)"]
-    B -. "map iframe:<br/>leaks visitor IP" .-> EMB["www.openstreetmap.org"]
-```
+<img src="docs/diagrams/trust-boundaries.svg" alt="Trust boundaries: browser over external TLS to web server plus PHP, fanning out to the public zone and the admin zone, both to MySQL over prepared statements only; the admin zone reaches OSM tiles and Nominatim server-side through the optional proxy pool, while the browser contacts openstreetmap.org directly for the map iframe, leaking the visitor IP." width="760">
 
 Server-local files (`config.php`, `includes/`, `logs/`, `uploads/`) are never served to browsers — see the filesystem boundary below.
 
@@ -685,7 +667,7 @@ A zero-dependency PHP suite (no PHPUnit — each file is a standalone script), a
 
 | Layer | What it proves | Run it |
 |---|---|---|
-| **PHP suites** — 38 | Crypto, auth, limits, state machine, maps, i18n, fail-closed branches, live-HTTP flows | `php tests/schema_loader.php && php tests/run_all.php` |
+| **PHP suites** — 44 | Crypto, auth, limits, state machine, maps, i18n, fail-closed branches, live-HTTP flows, web installer | `php tests/schema_loader.php && php tests/run_all.php` |
 | **Browser E2E** — 7 specs | What raw HTTP cannot see: no-JS paths, CSP-clean DOM, offline maps, mid-reveal UI | `npm ci && npx playwright install chromium && npm run e2e` |
 | **Coverage gate** | Line coverage floors over `includes/` under `pcov` | `composer install && php tests/coverage_runner.php` |
 | **Mutation probe** — 16 mutants | A tested guard versus a dead one | `php tools/mutation_probe.php` |
@@ -695,7 +677,7 @@ A zero-dependency PHP suite (no PHPUnit — each file is a standalone script), a
 The suite never touches your real database: `tests/bootstrap.php` forces `DDMGMT_DB_NAME=deaddrops_test` and points the app at TCP loopback unless you say otherwise.
 
 <details>
-<summary><b>The 38 PHP suites</b>, by area</summary>
+<summary><b>The 44 PHP suites</b>, by area</summary>
 
 <br>
 
@@ -708,8 +690,9 @@ The suite never touches your real database: `tests/bootstrap.php` forces `DDMGMT
 | Public pages & settings | `I18nTest`, `PublicLangTest` (public language choice vs admin account language), `SettingsTest` |
 | Uploads | `UploadHardeningTest`, `PhotoCapTest` |
 | Logging | `LoggerTest` — hash chain, continuity checkpoints, unusable-key behaviour |
-| Maps & proxy | `MapsTest`, `MapsFetchTest` (zone tokens, CLI pins, worker lock, orphan sweep), `ProxyTest` (anonymity gate, tile cache), `ProxyClientTest` (response size ceilings), `ProxyHealTest` (failed-proxy replacement: confirm, replace-never-just-delete, manual entries exempt, lock, cooldown) |
+| Maps & proxy | `MapsTest`, `MapsFetchTest` (zone tokens, CLI pins, worker lock, orphan sweep), `MapsPhpTest` (pure-PHP zone engine), `PmtilesTest` (PMTiles v3 framing), `ProxyTest` (anonymity gate, tile cache), `ProxyClientTest` (response size ceilings), `ProxyHealTest` (failed-proxy replacement: confirm, replace-never-just-delete, manual entries exempt, lock, cooldown) |
 | Structure & guards | `KernelTest` (service manifest, CLI-only guards, web-server denies), `AdminMobileTest` (phone layout contract: menu button, OSM badge rules, touch zone editor), `VersionTest` (release vs beta build line, owners only), `PseudoCronTest` (any page starts the hourly sweep, healthz doesn't, the env switch), `LogViewerTest` (Settings lists the structured log that Verify integrity checks), `ArrayInputTest` (every entry point is sent every parameter name as an array — no crash, no TypeError in the logs), `HostTest` (shared-hosting degradations: config-constant switches, no exec / CLI / cURL, curl-less proxy routing with sequential pool probing, inline proxy upkeep, automatic routing switch-off, pure-PHP zone downloads), `ProxyTransportTest` (proxy framing units plus loopback CONNECT/SOCKS stubs and live-TLS proofs through both tunnel types), `DispatchTest` (the thin admin dispatcher contract), `FailClosedTest` (every guard, limiter, wipe and decrypt path, plus the DB TLS option matrix) |
+| Web installer | `InstallerTest` (offline end-to-end of the one-file installer: server check, release download, fail-closed proxy discovery, schema setup, config write), `InstallerLimitedEnvTest` (the same under a crippled `php.ini`: no curl, no exec, no ZipArchive) |
 
 </details>
 
@@ -855,7 +838,8 @@ DeadDropMGMT/
 ├── e2e/                      Playwright specs, seed script, offline map fixture
 ├── tools/                    CLI maintenance: key rotation/separation,
 │                             CBC→GCM and order-token migrations, recovery purge, mutation probe,
-│                             build_info.sh (version provenance for image builds)
+│                             build_info.sh (version provenance for image builds),
+│                             install.php (one-file web installer for shell-less shared hosting)
 ├── docker/                   Apache/nginx/Caddy front configs, entrypoint,
 │                             php.ini overrides, e2e journey
 ├── docs/                     ADRs + troubleshooting guide
