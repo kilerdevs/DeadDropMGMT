@@ -19,6 +19,9 @@ services:
       MARIADB_DATABASE: deaddrops
       MARIADB_USER: deaddrop
       MARIADB_PASSWORD: ${DB_PASS:-deaddrop-db}
+      # A newer image on an older data volume (e.g. a Dependabot major bump)
+      # backs up the system tables and runs mariadb-upgrade on first start.
+      MARIADB_AUTO_UPGRADE: "1"
     volumes:
       - db-data:/var/lib/mysql
       - ./setup.sql:/docker-entrypoint-initdb.d/setup.sql:ro
@@ -58,7 +61,7 @@ services:
         condition: service_healthy
 
   web:
-    image: nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de   # 1.27 is end-of-life
+    image: nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
     restart: unless-stopped
     ports:
       - "${APP_PORT:-2137}:80"

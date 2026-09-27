@@ -16,6 +16,9 @@ services:
       MARIADB_DATABASE: deaddrops
       MARIADB_USER: deaddrop
       MARIADB_PASSWORD: ${DB_PASS:-deaddrop-db}
+      # A newer image on an older data volume (e.g. a Dependabot major bump)
+      # backs up the system tables and runs mariadb-upgrade on first start.
+      MARIADB_AUTO_UPGRADE: "1"
     volumes:
       - db-data:/var/lib/mysql
       # official image auto-executes this on first boot — full schema, idempotent
