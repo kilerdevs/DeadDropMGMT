@@ -616,10 +616,20 @@ $both = proxy_multi_probe([$connectPx, 'http://127.0.0.1:9'], $originBase . '/ti
 T::eq('dispatcher covers every input', [200, 0], [$both[$connectPx][0] ?? -1, $both['http://127.0.0.1:9'][0] ?? -1]);
 
 // ── the curl-less branch of the shared fetcher ──────────────────────────────
+// A fresh SOCKS stub: the shared one above has tunnelled live TLS by now,
+// and a single-threaded stub still draining a keep-alive relay would stall
+// this block's fetches past their timeout on a slow shared runner.
+$freshSocksPort = $boot($stubDir . '/socks5.php', static fn(int $cand): array => [$cand, $socksLog, '0', '', '', $stubAllow], static function (int $port) use ($originPort): bool {
+    $s = @fsockopen('127.0.0.1', $port, $errno, $errstr, 2);
+    if (!is_resource($s)) return false;
+    fclose($s);
+    return true;
+});
+$freshSocksPx = "socks5://127.0.0.1:$freshSocksPort";
 host_override(['curl' => false]);
 T::eq('no-cURL direct fetch still works', $BODY, osm_fetch_via($originBase . '/tile', null, 10));
 T::eq('no-cURL proxied fetch works', $BODY, osm_fetch_via($originBase . '/tile', $connectPx, 10));
-T::eq('no-cURL SOCKS fetch works', $BODY, osm_fetch_via($originBase . '/tile', $socksPx, 10));
+T::eq('no-cURL SOCKS fetch works', $BODY, osm_fetch_via($originBase . '/tile', $freshSocksPx, 10));
 T::ok('no-cURL routing stays honoured', osm_proxy_enabled() === (get_setting('osm_proxy_enabled', '1') === '1'));
 host_override(null, true);
 
