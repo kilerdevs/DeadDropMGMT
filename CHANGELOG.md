@@ -9,6 +9,19 @@ All notable changes to DeadDropMGMT are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-09-27
+
+First release of the 1.6 line on `master`: 1.6.0 was tagged but never
+published there, so upgrading from 1.5.0 brings everything listed under
+1.6.0 below as well.
+
+### Changed
+- Compose service images: MariaDB 11 → 13 and nginx 1.28 → 1.29 (digest
+  pinned, via Dependabot). The database service now sets
+  `MARIADB_AUTO_UPGRADE=1`, so an existing data volume is backed up and
+  upgraded (`mariadb-upgrade`) on the first start of the newer image —
+  back up the database before upgrading anyway.
+
 ### Fixed
 - Test harness: servers spawned by the suites (`php -S`, proxy stubs) were
   started through `sh -c`, so `proc_terminate()` killed only the shell and the
@@ -1152,7 +1165,8 @@ First tagged release: the security-hardened core, fully gated by CI.
 - Actions pinned by SHA, workflows read-only, Dependabot
   (actions + composer + docker)
 
-[Unreleased]: https://github.com/kilerdevs/DeadDropMGMT/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/kilerdevs/DeadDropMGMT/compare/v1.6.1...HEAD
+[1.6.1]: https://github.com/kilerdevs/DeadDropMGMT/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/kilerdevs/DeadDropMGMT/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/kilerdevs/DeadDropMGMT/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/kilerdevs/DeadDropMGMT/compare/v1.3.0...v1.4.0
