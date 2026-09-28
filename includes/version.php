@@ -81,11 +81,20 @@ function build_info(): array {
 }
 
 /**
- * Cache-buster for the admin stylesheet: its mtime, so a deploy (or any
- * edit) changes the <link> URL and browsers fetch the new CSS instead of
- * serving a stale cached copy.
+ * Cache-buster for first-party static files: the file's mtime, so a deploy
+ * (or any edit) changes the <script>/<link> URL and browsers fetch the new
+ * copy instead of serving a stale cached one (an admin once got new CSS
+ * with old admin.js after an update). 0 when unreadable — the URL still
+ * works, it just doesn't bust.
  */
-function admin_css_ver(): int {
-    $t = @filemtime(dirname(__DIR__) . '/admin/style.css');
+function asset_ver(string $path): int {
+    if (!str_starts_with($path, '/') || str_contains($path, '..')) {
+        return 0;
+    }
+    $t = @filemtime(dirname(__DIR__) . $path);
     return $t === false ? 0 : (int)$t;
+}
+
+function admin_css_ver(): int {
+    return asset_ver('/admin/style.css');
 }

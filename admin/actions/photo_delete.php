@@ -26,6 +26,10 @@ try {
 
     if ($photo && preg_match('#^\d+/[0-9a-f]+\.(jpg|jpeg|png|webp|gif)$#i', $photo['filename'])) {
         overwrite_and_unlink(dirname(__DIR__, 2) . '/uploads/' . $photo['filename']);
+        $thumb = photo_thumb_rel((string)$photo['filename']);
+        if ($thumb !== null) {
+            overwrite_and_unlink(dirname(__DIR__, 2) . '/uploads/' . $thumb);
+        }
         $db->prepare('DELETE FROM order_photos WHERE id = ?')->execute([$photo_id]);
         audit('photo_delete', $order_id);
     }

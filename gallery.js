@@ -30,7 +30,8 @@
     function show(index) {
         current = (index + photos.length) % photos.length;
         var img = photos[current];
-        lbImg.src = img.src;
+        // Grid shows thumbnails; the lightbox opens the full file.
+        lbImg.src = img.getAttribute('data-full') || img.src;
         lbImg.alt = img.alt;
         lbCaption.textContent = img.alt || '';
         lbCounter.textContent = (current + 1) + ' / ' + photos.length;

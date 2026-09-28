@@ -113,9 +113,9 @@ test('selfhosted provider renders the fixture map with zero external requests', 
     await setProvider(page, 'selfhosted');
 
     await page.goto('/admin/new_order.php');
-    // Self-hosted stack in, Leaflet out.
-    expect(await page.locator('script[src="/maplibre/maplibre-gl.js"]').count()).toBe(1);
-    expect(await page.locator('script[src="/admin/vendor/leaflet/leaflet.js"]').count()).toBe(0);
+    // Self-hosted stack in, Leaflet out (?v= cache-busters: prefix match).
+    expect(await page.locator('script[src^="/maplibre/maplibre-gl.js"]').count()).toBe(1);
+    expect(await page.locator('script[src^="/admin/vendor/leaflet/leaflet.js"]').count()).toBe(0);
 
     // The map canvas appears once the style + first tiles resolve.
     await expect(page.locator('#map-picker canvas')).toBeVisible({ timeout: 20000 });
@@ -165,8 +165,8 @@ test('provider restores to osm (default stack unchanged)', async ({ browser }) =
     await login(page);
     await setProvider(page, 'osm');
     await page.goto('/admin/new_order.php');
-    expect(await page.locator('script[src="/admin/vendor/leaflet/leaflet.js"]').count()).toBe(1);
-    expect(await page.locator('script[src="/maplibre/maplibre-gl.js"]').count()).toBe(0);
+    expect(await page.locator('script[src^="/admin/vendor/leaflet/leaflet.js"]').count()).toBe(1);
+    expect(await page.locator('script[src^="/maplibre/maplibre-gl.js"]').count()).toBe(0);
   } finally {
     await closePage(page);
   }

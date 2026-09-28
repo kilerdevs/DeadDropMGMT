@@ -4,13 +4,29 @@
     var i18n = window.I18N || {};
 
     // ── Live countdown for expiry-timer cells ─────────────────────────────────
+    // Rows are queried once; each cell is rewritten only when its text or
+    // urgency class actually changes (per-second DOM churn otherwise).
+    var expiryCells = Array.prototype.map.call(
+        document.querySelectorAll('.expiry-timer[data-expires]'),
+        function (el) { return { el: el, text: '', cls: '' }; }
+    );
+    function paintExpiry(cell, text, cls) {
+        if (cell.text !== text) {
+            cell.el.textContent = text;
+            cell.text = text;
+        }
+        if (cell.cls !== cls) {
+            cell.el.className = cls;
+            cell.cls = cls;
+        }
+    }
     function tickAdmin() {
-        document.querySelectorAll('.expiry-timer[data-expires]').forEach(function (el) {
-            var exp = parseInt(el.dataset.expires, 10);
-            var rem = exp - Math.floor(Date.now() / 1000);
+        var now = Math.floor(Date.now() / 1000);
+        expiryCells.forEach(function (cell) {
+            var exp = parseInt(cell.el.dataset.expires, 10);
+            var rem = exp - now;
             if (rem <= 0) {
-                el.textContent = i18n.expired || 'Expired';
-                el.className = 'expiry-timer urgent';
+                paintExpiry(cell, i18n.expired || 'Expired', 'expiry-timer urgent');
                 return;
             }
             var h = Math.floor(rem / 3600);
@@ -20,11 +36,11 @@
             if (h > 0) parts.push(h + 'h');
             parts.push((m < 10 && h > 0 ? '0' : '') + m + 'm');
             parts.push((s < 10 ? '0' : '') + s + 's');
-            el.textContent = parts.join(' ');
-            el.className = 'expiry-timer' + (rem < 3600 ? ' urgent' : rem < 21600 ? ' warning' : '');
+            paintExpiry(cell, parts.join(' '),
+                'expiry-timer' + (rem < 3600 ? ' urgent' : rem < 21600 ? ' warning' : ''));
         });
     }
-    if (document.querySelector('.expiry-timer[data-expires]')) {
+    if (expiryCells.length) {
         tickAdmin();
         setInterval(tickAdmin, 1000);
     }

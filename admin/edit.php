@@ -275,9 +275,9 @@ $init_zoom = $has_pin ? 17 : 12;
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Admin — <?= t('admin.edit.title_prefix') ?> <?= htmlspecialchars($order['order_token'], ENT_QUOTES, 'UTF-8') ?></title>
 <?php if (map_provider() === MAP_PROVIDER_SELFHOSTED): ?>
-<link rel="stylesheet" href="/maplibre/maplibre-gl.css">
+<link rel="stylesheet" href="/maplibre/maplibre-gl.css?v=<?= asset_ver('/maplibre/maplibre-gl.css') ?>">
 <?php else: ?>
-<link rel="stylesheet" href="/admin/vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="/admin/vendor/leaflet/leaflet.css?v=<?= asset_ver('/admin/vendor/leaflet/leaflet.css') ?>">
 <?php endif; ?>
 <link rel="stylesheet" href="/admin/style.css?v=<?= admin_css_ver() ?>">
 <meta name="csrf-token" content="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
@@ -429,7 +429,7 @@ $init_zoom = $has_pin ? 17 : 12;
                                data-caption="<?= htmlspecialchars($ph['caption'] ?? '', ENT_QUOTES, 'UTF-8') ?>"
                                data-photo-id="<?= (int)$ph['id'] ?>"
                                data-order-id="<?= htmlspecialchars((string)$id, ENT_QUOTES, 'UTF-8') ?>">
-                                <img src="/uploads/<?= htmlspecialchars($ph['filename'], ENT_QUOTES, 'UTF-8') ?>"
+                                <img src="/uploads/<?= htmlspecialchars(photo_grid_src((string)$ph['filename']), ENT_QUOTES, 'UTF-8') ?>"
                                      alt="<?= htmlspecialchars($ph['caption'] ?? '', ENT_QUOTES, 'UTF-8') ?>"
                                      loading="lazy">
                             </a>
@@ -531,15 +531,16 @@ $init_zoom = $has_pin ? 17 : 12;
 </div>
 
 <?php if (map_provider() === MAP_PROVIDER_SELFHOSTED): ?>
-<script src="/maplibre/maplibre-gl.js"></script>
-<script src="/maplibre/pmtiles.js"></script>
-<script src="/admin/pin-label.js"></script>
-<script src="/admin/maplibre-picker.js"></script>
+<script src="/maplibre/maplibre-gl.js?v=<?= asset_ver('/maplibre/maplibre-gl.js') ?>"></script>
+<script src="/maplibre/pmtiles.js?v=<?= asset_ver('/maplibre/pmtiles.js') ?>"></script>
+<script src="/admin/pin-label.js?v=<?= asset_ver('/admin/pin-label.js') ?>"></script>
+<script src="/map-attrib.js?v=<?= asset_ver('/map-attrib.js') ?>"></script>
+<script src="/admin/maplibre-picker.js?v=<?= asset_ver('/admin/maplibre-picker.js') ?>"></script>
 <?php else: ?>
-<script src="/admin/vendor/leaflet/leaflet.js"></script>
-<script src="/admin/pin-label.js"></script>
+<script src="/admin/vendor/leaflet/leaflet.js?v=<?= asset_ver('/admin/vendor/leaflet/leaflet.js') ?>"></script>
+<script src="/admin/pin-label.js?v=<?= asset_ver('/admin/pin-label.js') ?>"></script>
 <?php endif; ?>
-<script src="/admin/admin.js"></script>
+<script src="/admin/admin.js?v=<?= asset_ver('/admin/admin.js') ?>"></script>
 <script nonce="<?= htmlspecialchars($csp_nonce, ENT_QUOTES, 'UTF-8') ?>">
 (function () {
     // ── Auto-save ─────────────────────────────────────────────────────────────

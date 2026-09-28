@@ -32,6 +32,14 @@
 	# Static files and error pages never pass through PHP's header layer.
 	header X-Content-Type-Options "nosniff"
 
+	# Immutable static assets: vendored libs, glyphs, zone archives (fresh
+	# secret names per build) and ?v=-busted first-party files. Uploads stay
+	# no-store (bearer URLs); HTML/PHP untouched.
+	@immutable path /maplibre/* /fonts/* /admin/vendor/* /tiles/*.pmtiles
+	header @immutable Cache-Control "public, max-age=31536000, immutable"
+	@versioned query v=*
+	header @versioned Cache-Control "public, max-age=31536000, immutable"
+
 	# Bandwidth for recipients on phones: compress text assets (maplibre-gl.js
 	# 1 MB -> ~265 KB). Tile PNGs (tile_proxy.php), /tiles/*.pmtiles and
 	# /uploads/* are already compressed — and compression breaks Range

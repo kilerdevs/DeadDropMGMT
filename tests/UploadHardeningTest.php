@@ -135,6 +135,33 @@ $huge['size'] = 101 * 1024 * 1024;
 $huge['tmp_name'] = $tmpdir . '/does-not-exist.jpg';
 T::ok('oversize rejected pre-sniff', save_uploaded_photo($huge, 910011, 1024) === false);
 
+// 9b ── grid thumbnails: a second small JPEG per photo, cleaned with it
+$big = "$tmpdir/grid.jpg";
+$img = imagecreatetruecolor(1200, 800);
+imagefill($img, 0, 0, imagecolorallocate($img, 30, 200, 90));
+imagejpeg($img, $big, 90);
+$img = null; // PHP 8.5 deprecates imagedestroy(); GC frees the GdImage
+$oid = 910020; _uh_track($oid);
+$relG = save_uploaded_photo(_uh_entry($big), $oid, 2 * 1024 * 1024);
+T::ok('large JPEG accepted', $relG !== false);
+if ($relG !== false) {
+    $thumb = photo_thumb_rel($relG);
+    T::ok('thumbnail path derives deterministically',
+        $thumb !== null && preg_match('#^910020/[0-9a-f]{28}_thumb\.jpg$#', (string)$thumb) === 1);
+    T::ok('thumbnail written', $thumb !== null && is_file("$up/$thumb"));
+    if ($thumb !== null && is_file("$up/$thumb")) {
+        $dim = getimagesize("$up/$thumb");
+        T::ok('thumbnail is small', $dim !== false && max($dim[0], $dim[1]) <= 400);
+        T::ok('thumbnail is a JPEG', str_starts_with((string)file_get_contents("$up/$thumb"), "\xFF\xD8"));
+        T::ok('grid serves the thumbnail', photo_grid_src($relG) === $thumb);
+    }
+    // Deletion takes the thumbnail with the original, no DB row involved.
+    _unlink_order_files($oid, [$relG]);
+    T::ok('order delete removes the original', !is_file("$up/$relG"));
+    T::ok('order delete removes the thumbnail', $thumb === null || !is_file("$up/$thumb"));
+    T::ok('grid falls back to the full file without a thumb', photo_grid_src($relG) === $relG);
+}
+
 // PNG magic but no parseable header: sniffed as image, dimensions unreadable
 $trunc = "$tmpdir/trunc.png";
 file_put_contents($trunc, "\x89PNG\r\n\x1a\n" . str_repeat("\x00", 40));

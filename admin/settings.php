@@ -122,7 +122,9 @@ function s_label(array $s, string $key): string {
 <meta name="darkreader-lock">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Admin — <?= t('admin.settings.title') ?></title><link rel="stylesheet" href="/admin/style.css?v=<?= admin_css_ver() ?>">
-<link rel="stylesheet" href="/admin/vendor/leaflet/leaflet.css">
+<?php if (maps_downloads_supported()): ?>
+<link rel="stylesheet" href="/admin/vendor/leaflet/leaflet.css?v=<?= asset_ver('/admin/vendor/leaflet/leaflet.css') ?>">
+<?php endif; ?>
 <meta name="csrf-token" content="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
 </head>
 <body>
@@ -494,8 +496,10 @@ function s_label(array $s, string $key): string {
     </main>
 </div>
 
-<script src="/admin/pin-label.js"></script>
-<script src="/admin/vendor/leaflet/leaflet.js"></script>
+<script src="/admin/pin-label.js?v=<?= asset_ver('/admin/pin-label.js') ?>"></script>
+<?php if (maps_downloads_supported()): ?>
+<script src="/admin/vendor/leaflet/leaflet.js?v=<?= asset_ver('/admin/vendor/leaflet/leaflet.js') ?>"></script>
+<?php endif; ?>
 <script nonce="<?= htmlspecialchars($csp_nonce, ENT_QUOTES, 'UTF-8') ?>">
 (function () {
     var I = <?= json_encode([
@@ -883,16 +887,30 @@ function s_label(array $s, string $key): string {
         return active;
     }
 
+    // Chained poll: the next round is scheduled only after the previous
+    // answer arrives, so a slow slice (up to 8 s server-side) never overlaps
+    // itself. Background tabs pause instead of queueing authed requests —
+    // which also stops refreshing login_time and holding sessions open.
+    var mzTimer = null;
+    function mzSchedule(ms) {
+        if (mzTimer) clearTimeout(mzTimer);
+        mzTimer = setTimeout(function () { mzTimer = null; mzPoll(); }, ms);
+    }
+    function mzStop() {
+        if (mzTimer) clearTimeout(mzTimer);
+        mzTimer = null;
+    }
     function mzPoll() {
+        mzStop();
+        if (document.hidden) { mzSchedule(3000); return; }
         mzPost('status').then(function (res) {
-            if (!(res.ok && res.j.ok)) return;
+            if (!(res.ok && res.j.ok)) { mzSchedule(3000); return; }
             if (!mzRender(res.j.zones, res.j.disk_free)) {
-                clearInterval(mzTimer);
-                mzTimer = null;
+                return; // queue drained — stay stopped until an action re-arms
             }
+            mzSchedule(3000);
         });
     }
-    var mzTimer = null;
 
     if (mzBody) {
         // Row buttons are re-rendered by the poll — delegate once.
@@ -923,7 +941,9 @@ function s_label(array $s, string $key): string {
         });
         // Start live for the server-rendered rows; keep polling while active.
         mzPoll();
-        if (!mzTimer) mzTimer = setInterval(function () { if (!mzTimer) return; mzPoll(); }, 3000);
+        document.addEventListener('visibilitychange', function () {
+            if (!document.hidden) mzPoll(); // resume promptly on return
+        });
     }
 
     if (mzAdd) {
@@ -1372,6 +1392,6 @@ function s_label(array $s, string $key): string {
     }
 })();
 </script>
-<script src="/admin/admin.js"></script>
+<script src="/admin/admin.js?v=<?= asset_ver('/admin/admin.js') ?>"></script>
 </body>
 </html>

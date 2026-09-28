@@ -208,9 +208,9 @@ $csrf = generate_csrf();
     </main>
 </div>
 
-<script src="/admin/admin.js"></script>
+<script src="/admin/admin.js?v=<?= asset_ver('/admin/admin.js') ?>"></script>
 <?php if (!$enabled): ?>
-<script src="/admin/vendor/qrcode/qrcode.js"></script>
+<script src="/admin/vendor/qrcode/qrcode.js?v=<?= asset_ver('/admin/vendor/qrcode/qrcode.js') ?>"></script>
 <script nonce="<?= htmlspecialchars($csp_nonce, ENT_QUOTES, 'UTF-8') ?>">
 new QRCode(document.getElementById('qr-code'), {
     text:         <?= json_encode($qr_uri, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT) ?>,

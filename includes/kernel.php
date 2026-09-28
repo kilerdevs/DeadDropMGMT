@@ -97,7 +97,9 @@ set_exception_handler(static function (Throwable $e): void {
     echo '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">'
         . '<meta name="viewport" content="width=device-width, initial-scale=1.0">'
         . '<title>' . $title . '</title>'
-        . '<link rel="stylesheet" href="/style.css"></head><body><main>'
+        . '<link rel="stylesheet" href="/style.css'
+        . (function_exists('asset_ver') ? '?v=' . asset_ver('/style.css') : '')
+        . '"></head><body><main>'
         . '<div class="alert">' . $body . '</div>'
         . '</main></body></html>';
 });

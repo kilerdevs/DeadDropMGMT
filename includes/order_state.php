@@ -214,6 +214,12 @@ function _unlink_order_files(int $order_id, array $files): void {
     foreach ($files as $fn) {
         if (is_string($fn) && preg_match('#^\d+/[0-9a-f]+\.(jpg|jpeg|png|webp|gif)$#i', $fn)) {
             overwrite_and_unlink($base . $fn);
+            // The grid thumbnail is a second file per photo (no DB row) —
+            // it dies with the original.
+            $thumb = photo_thumb_rel($fn);
+            if ($thumb !== null) {
+                overwrite_and_unlink($base . $thumb);
+            }
             // The DB row is already gone (commit-then-sweep, by design), so a
             // file that survives the sweep would sit orphaned forever with no
             // row pointing at it — log it so the next admin log review shows

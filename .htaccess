@@ -94,4 +94,9 @@ ErrorDocument 503 /error/503.php
 <IfModule mod_headers.c>
     Header always set X-Content-Type-Options "nosniff"
     Header always set X-Frame-Options "DENY" "expr=%{REQUEST_URI} =~ m#^/error/#"
+    # Immutable static assets: vendored libs, glyphs, zone archives (fresh
+    # secret names per build) and ?v=-busted first-party files
+    # (asset_ver() changes the URL on every edit). Uploads stay unmarked
+    # here — PHP serves them no-store; HTML/PHP untouched.
+    Header always set Cache-Control "public, max-age=31536000, immutable" "expr=%{REQUEST_URI} =~ m#^/(maplibre|fonts)/# || %{REQUEST_URI} =~ m#^/admin/vendor/# || %{REQUEST_URI} =~ m#^/tiles/.*\.pmtiles$# || %{QUERY_STRING} =~ /(^|&)v=/"
 </IfModule>

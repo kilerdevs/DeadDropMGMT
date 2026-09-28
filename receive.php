@@ -123,7 +123,7 @@ if ($step === 2 && $error === '') {
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <meta name="darkreader-lock">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title><?= $deleted ? t('public.receive.title.done') : t('public.receive.title.confirm') ?></title><link rel="stylesheet" href="/style.css">
+<title><?= $deleted ? t('public.receive.title.done') : t('public.receive.title.confirm') ?></title><link rel="stylesheet" href="/style.css?v=<?= asset_ver('/style.css') ?>">
 <?php if ($deleted): ?>
 <meta http-equiv="refresh" content="10; url=/">
 <?php endif; ?>
@@ -186,7 +186,7 @@ if ($step === 2 && $error === '') {
     <?php if (compliance_note_enabled()): ?><div class="compliance-note"><?= t('common.compliance_note') ?></div><?php endif; ?>
 </main>
 <?php if ($deleted): ?>
-<script src="/public.js"></script>
+<script src="/public.js?v=<?= asset_ver('/public.js') ?>"></script>
 <?php endif; ?>
 </body>
 </html>

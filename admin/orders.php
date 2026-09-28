@@ -260,6 +260,6 @@ $_active = 'orders';
         <?php endif; ?>
     </main>
 </div>
-<script src="/admin/admin.js"></script>
+<script src="/admin/admin.js?v=<?= asset_ver('/admin/admin.js') ?>"></script>
 </body>
 </html>
