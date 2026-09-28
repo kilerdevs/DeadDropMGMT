@@ -17,19 +17,21 @@ RUN echo "apt cache week: $APT_BUST" \
         libjpeg62-turbo-dev \
         libpng-dev \
         libwebp-dev \
+        libzip-dev \
  && docker-php-ext-configure gd --with-freetype --with-jpeg --with-webp \
- && docker-php-ext-install -j"$(nproc)" gd pdo_mysql \
+ && docker-php-ext-install -j"$(nproc)" gd pdo_mysql zip \
  # The -dev packages stay only for the compile above: mark what the built
  # extensions actually link, then purge the headers (30-60 MB and fewer
  # packages for Grype/Syft). dpkg-query keeps this robust across Debian
  # suites (t64 renames and all) — unknown names simply match nothing.
- && _rtlibs="$(dpkg-query -W -f='${Package}\n' 'libfreetype6*' 'libjpeg62-turbo*' 'libpng16*' 'libwebp*' 2>/dev/null)" \
+ && _rtlibs="$(dpkg-query -W -f='${Package}\n' 'libfreetype6*' 'libjpeg62-turbo*' 'libpng16*' 'libwebp*' 'libzip*' 2>/dev/null)" \
  && { [ -z "$_rtlibs" ] || apt-mark manual $_rtlibs; } \
  && apt-get purge -y --auto-remove \
         libfreetype6-dev \
         libjpeg62-turbo-dev \
         libpng-dev \
         libwebp-dev \
+        libzip-dev \
  && rm -rf /var/lib/apt/lists/*
 
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh

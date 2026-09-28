@@ -6,8 +6,9 @@
 # under a rebuild without a reviewed diff.
 FROM php:8.5-apache@sha256:70d80539dcacae817d9a1320518b95c86bb9568835ef3a7a024d57a4898c90e4
 
-# gd needs freetype/jpeg/png/webp system libs; everything else (openssl,
-# fileinfo, session, json) ships enabled in the base image already.
+# gd needs freetype/jpeg/png/webp system libs, zip needs libzip; everything
+# else (openssl, fileinfo, session, json) ships enabled in the base image
+# already. ZipArchive is required by the web installer to unpack releases.
 # APT_BUST (CI: ISO week) re-dates this layer weekly so apt-get upgrade
 # tracks fresh Debian packages instead of serving stale cached layers.
 ARG APT_BUST=none
@@ -19,19 +20,21 @@ RUN echo "apt cache week: $APT_BUST" \
         libjpeg62-turbo-dev \
         libpng-dev \
         libwebp-dev \
+        libzip-dev \
  && docker-php-ext-configure gd --with-freetype --with-jpeg --with-webp \
- && docker-php-ext-install -j"$(nproc)" gd pdo_mysql \
+ && docker-php-ext-install -j"$(nproc)" gd pdo_mysql zip \
  # The -dev packages stay only for the compile above: mark what the built
  # extensions actually link, then purge the headers (30-60 MB and fewer
  # packages for Grype/Syft). dpkg-query keeps this robust across Debian
  # suites (t64 renames and all) — unknown names simply match nothing.
- && _rtlibs="$(dpkg-query -W -f='${Package}\n' 'libfreetype6*' 'libjpeg62-turbo*' 'libpng16*' 'libwebp*' 2>/dev/null)" \
+ && _rtlibs="$(dpkg-query -W -f='${Package}\n' 'libfreetype6*' 'libjpeg62-turbo*' 'libpng16*' 'libwebp*' 'libzip*' 2>/dev/null)" \
  && { [ -z "$_rtlibs" ] || apt-mark manual $_rtlibs; } \
  && apt-get purge -y --auto-remove \
         libfreetype6-dev \
         libjpeg62-turbo-dev \
         libpng-dev \
         libwebp-dev \
+        libzip-dev \
  && a2enmod rewrite headers \
  && rm -rf /var/lib/apt/lists/*
 
