@@ -660,47 +660,37 @@ function rl_hit(string $scope = 'public', ?int $max_override = null, ?int $windo
     $window = $window_override ?? rl_window_seconds();
     $db     = get_db();
     try {
-        // A damaged row must be denied WITHOUT being reset: the probe above
+        // A damaged row must be denied WITHOUT being reset: the probe below
         // is the only extra round trip, and only a corrupt row ever pays it
-        // (the hot path stays a single atomic upsert plus one read).
+        // (the hot path stays transaction-free). Its window_start doubles
+        // for the `remaining` math, so no second row read is needed.
         $probe = $db->prepare(
-            'SELECT window_start FROM rate_limits WHERE ip_address = ? AND scope = ? LIMIT 1'
+            'SELECT count, window_start FROM rate_limits WHERE ip_address = ? AND scope = ? LIMIT 1'
         );
         $probe->execute([$ip, $scope]);
         $existing = $probe->fetch();
-        if ($existing) {
-            $damaged = _rl_parse_window_start((string)$existing['window_start']);
-            if ($damaged === false || $damaged <= 0) {
-                log_err('Rate limit increment: unparseable window_start, failing closed');
-                return ['blocked' => true, 'remaining' => $window, 'count' => 0];
-            }
-        }
-
-        // Stale windows restart at 1, live ones increment — decided by the
-        // engine on the locked row, not by a SELECT in PHP first.
-        $cutoff = gmdate('Y-m-d H:i:s', time() - $window);
-        $db->prepare(
-            'INSERT INTO rate_limits (ip_address, scope, count, window_start) VALUES (?, ?, 1, UTC_TIMESTAMP())
-             ON DUPLICATE KEY UPDATE
-               count = IF(window_start < ?, 1, count + 1),
-               window_start = IF(window_start < ?, UTC_TIMESTAMP(), window_start)'
-        )->execute([$ip, $scope, $cutoff, $cutoff]);
-
-        $row = $db->prepare(
-            'SELECT count, window_start FROM rate_limits WHERE ip_address = ? AND scope = ? LIMIT 1'
-        );
-        $row->execute([$ip, $scope]);
-        $state = $row->fetch();
-
-        // The pre-check above already excluded damaged rows; a parse failure
-        // here means the row changed mid-request — still deny, never wave
-        // through on it.
-        $window_start = $state ? _rl_parse_window_start((string)$state['window_start']) : false;
-        if ($window_start === false || $window_start <= 0) {
+        $started = $existing ? _rl_parse_window_start((string)$existing['window_start']) : time();
+        if ($existing && ($started === false || $started <= 0)) {
             log_err('Rate limit increment: unparseable window_start, failing closed');
             return ['blocked' => true, 'remaining' => $window, 'count' => 0];
         }
-        $count = (int)$state['count'];
+
+        // Stale windows restart at 1, live ones increment — decided by the
+        // engine on the locked row, not by a SELECT in PHP first. The new
+        // count rides home in LAST_INSERT_ID(): the upsert and the verdict
+        // read are one atomic transition per connection, so concurrent
+        // spenders can never observe the same count (no lost updates, no
+        // double reads) — all without a transaction.
+        $cutoff = gmdate('Y-m-d H:i:s', time() - $window);
+        $db->prepare(
+            'INSERT INTO rate_limits (ip_address, scope, count, window_start) VALUES (?, ?, LAST_INSERT_ID(1), UTC_TIMESTAMP())
+             ON DUPLICATE KEY UPDATE
+               count = IF(window_start < ?, LAST_INSERT_ID(1), LAST_INSERT_ID(count + 1)),
+               window_start = IF(window_start < ?, UTC_TIMESTAMP(), window_start)'
+        )->execute([$ip, $scope, $cutoff, $cutoff]);
+        $count = (int)$db->query('SELECT LAST_INSERT_ID()')->fetchColumn();
+
+        $window_start = (!$existing || (time() - $started) >= $window) ? time() : $started;
     } catch (Exception $e) {
         // Fail CLOSED: an uncountable limiter must deny, never wave through.
         log_err('Rate limit increment failed (fail closed): ' . $e->getMessage());

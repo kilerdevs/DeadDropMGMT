@@ -118,7 +118,7 @@ $src = (string)file_get_contents($root . '/admin/edit.php');
 T::ok('edit.php guards the badge on provider and proxy toggle',
       str_contains($src, 'map_provider() === MAP_PROVIDER_OSM && osm_proxy_enabled()'));
 $src = (string)file_get_contents($root . '/admin/new_order.php');
-T::eq('new_order.php includes admin.js exactly once', 1, substr_count($src, '<script src="/admin/admin.js')); 
+T::eq('new_order.php includes admin.js exactly once', 1, substr_count($src, '<script src="/admin/admin.js'));
 
 // Zone editor gestures: mouse events never fire for a finger drag, so the
 // editor must ride Pointer Events (mouse, touch and pen alike) — and the

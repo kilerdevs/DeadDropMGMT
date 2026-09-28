@@ -189,7 +189,7 @@ foreach ($endpoints as $ep) {
         }
     }
 }
-T::ok("sent batched array-shaped requests", $sent >= 2 * count($endpoints));
+T::ok('sent batched array-shaped requests', $sent >= 2 * count($endpoints));
 T::eq('no page crashes, renders an error, or logs a TypeError on array-shaped input', [], array_slice($bad, 0, 10, true));
 
 $teardown();
