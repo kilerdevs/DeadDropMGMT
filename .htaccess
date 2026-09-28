@@ -72,6 +72,14 @@ ErrorDocument 503 /error/503.php
     RewriteRule ^(setup\.sql|build-info\.json|composer\.(json|lock)|package(-lock)?\.json|playwright\.config\.js|phpstan\.neon|\.php-cs-fixer\.php|auto-update\.(sh|log)|config\.php\.example|Dockerfile[^/]*|docker-compose[^/]*\.yml)$ - [F,L]
 </IfModule>
 
+# Map-engine sidecars (.plan/.tiles/.part/.tmp/.leaves) carry the proxy URL
+# and exact byte layout — never web content. nginx/Caddy deny them by
+# extension; Apache needs the same here (the static-asset grant above does
+# not cover these types, but permissive hosts serve unknown types happily).
+<FilesMatch "\.(plan|tiles|part|tmp|leaves)$">
+    Require all denied
+</FilesMatch>
+
 # Protect this file
 <Files ".htaccess">
     # Apache 2.4 authz (Order/Allow/Deny is deprecated mod_access_compat syntax)

@@ -18,6 +18,7 @@ function do_cleanup(): int {
     _purge_stale_records();
     _warn_legacy_tokens();
     osm_tile_cache_prune();
+    osm_geocode_cache_prune();
     error_log_trim();
     return cleanup_expired_orders();
 }

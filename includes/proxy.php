@@ -988,6 +988,76 @@ function osm_reverse_parse(string $data): ?array {
     return is_array($addr) ? $addr : null;
 }
 
+// Cached reverse lookup: pin labels repeat for every pin click, drag and
+// edit-page load, and each one costs a full proxied Nominatim request plus
+// a slice of the 60/minute budget. Labels change with map data, not with
+// time — a per-account file cache keyed by coordinates rounded to 0.01°
+// (≈1 km, matching the endpoint's own rounding) with a 30-day life.
+// Per account like the tile cache (one account's viewed areas must never
+// leak into another's). Only the address array is stored, never raw coords
+// beyond the rounded cache key. Never throws; a dead cache just misses.
+/** @return ?array<string,mixed> */
+function osm_reverse_cached(int $uid, float $lat, float $lng): ?array {
+    $lat = round($lat, 2);
+    $lng = round($lng, 2);
+    $key = sprintf('%.2F_%.2F', $lat, $lng);
+    $dir = dirname(__DIR__) . '/cache/geocode/' . $uid;
+    $file = $dir . '/' . $key . '.json';
+    try {
+        if (is_file($file) && (time() - (int)@filemtime($file)) < 2592000) {
+            $hit = json_decode((string)@file_get_contents($file), true);
+            if (is_array($hit)) {
+                return $hit;
+            }
+        }
+    } catch (Throwable) {
+    }
+    $addr = osm_reverse_lookup($lat, $lng);
+    if ($addr !== null) {
+        try {
+            if (!is_dir($dir)) {
+                @mkdir($dir, 0770, true);
+            }
+            @file_put_contents($file, json_encode($addr, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        } catch (Throwable) {
+        }
+    }
+    return $addr;
+}
+
+// Prune aged reverse-label entries (hourly cleanup). Returns files removed;
+// never throws.
+function osm_geocode_cache_prune(?string $dir = null, int $ttl = 2592000): int {
+    $dir = $dir ?? dirname(__DIR__) . '/cache/geocode';
+    if (!is_dir($dir)) {
+        return 0;
+    }
+    $removed = 0;
+    try {
+        $now = time();
+        $it = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS),
+            RecursiveIteratorIterator::CHILD_FIRST
+        );
+        foreach ($it as $f) {
+            $p = $f->getPathname();
+            if ($f->isDir()) {
+                @rmdir($p); // only succeeds when empty
+                continue;
+            }
+            if ($f->isLink() || !$f->isFile()) {
+                @unlink($p);
+                continue;
+            }
+            if (($now - $f->getMTime()) >= $ttl && @unlink($p)) {
+                $removed++;
+            }
+        }
+    } catch (Throwable $e) {
+        log_err('Geocode cache prune: ' . $e->getMessage());
+    }
+    return $removed;
+}
 // Nominatim reverse URL for a point, or null outside geography (pure —
 // the network half of osm_reverse_lookup stays thin and untested by unit
 // suites, which must never reach tile hosts).

@@ -10,7 +10,7 @@
 	# guessable legacy names, partial downloads and engine sidecars never are.
 	@zonelegacy path_regexp ^/tiles/zone_[0-9]+\.(pmtiles|part)$
 	respond @zonelegacy 403
-	@zonepart path_regexp ^/tiles/.*\.(part|plan|tiles|tmp)$
+	@zonepart path_regexp ^/tiles/.*\.(part|plan|tiles|tmp|leaves)$
 	respond @zonepart 403
 
 	@blocked path /includes/* /logs/* /cron/* /tools/* /cache/* /data/* /docker/* /e2e/* /tests/* /backups/* /config.php /config.php.example /setup.sql /build-info.json /composer.* /package*.json /playwright.config.js /phpstan.neon /auto-update.* /Dockerfile* /docker-compose* /.htaccess /.ht*

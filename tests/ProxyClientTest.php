@@ -155,6 +155,28 @@ $db->exec("INSERT INTO osm_proxies (url, label, source, last_status) VALUES ('ht
 T::eq('changed pool ignores the old trip', 'STUB-BODY-OK', osm_fetch("http://127.0.0.1:$port/ok"));
 $db->exec('DELETE FROM osm_proxies');
 
+// ── Reverse-label cache ─────────────────────────────────────────────────────
+// A warm cache file answers with no network involved (coordinates round to
+// the 0.01° cell before the key is built); aged files prune away.
+$geoUid = 987001;
+$geoDir = dirname(__DIR__) . '/cache/geocode/' . $geoUid;
+@mkdir($geoDir, 0770, true);
+file_put_contents($geoDir . '/52.23_21.01.json', json_encode(['country' => 'Poland', 'state' => 'Mazovia']));
+T::eq('warm label cache answers without network',
+    ['country' => 'Poland', 'state' => 'Mazovia'], osm_reverse_cached($geoUid, 52.2297, 21.0122));
+@unlink($geoDir . '/52.23_21.01.json');
+@rmdir($geoDir);
+$pruneDir = sys_get_temp_dir() . '/ddmgmt_geo_prune_' . getmypid();
+@mkdir($pruneDir . '/7', 0770, true);
+file_put_contents($pruneDir . '/7/old.json', '{}');
+touch($pruneDir . '/7/old.json', time() - 2592001);
+file_put_contents($pruneDir . '/7/fresh.json', '{}');
+T::eq('prune removes only aged label files', 1, osm_geocode_cache_prune($pruneDir, 2592000));
+T::ok('fresh label file survives prune', is_file($pruneDir . '/7/fresh.json'));
+@unlink($pruneDir . '/7/fresh.json');
+@rmdir($pruneDir . '/7');
+@rmdir($pruneDir);
+
 // Pool ordering: previously-ok proxies sort ahead of dead ones regardless of latency
 $pool = [
     ['url' => 'a', 'last_status' => 'fail', 'latency_ms' => 1],

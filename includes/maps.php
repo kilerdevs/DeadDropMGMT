@@ -135,7 +135,27 @@ function maps_zone_workspace(int $id): array {
 function maps_zone_drop_sidecars(int $id): void {
     [$plan, $tiles] = maps_zone_workspace($id);
     @unlink($plan);
+    @unlink($plan . '.leaves');
     @unlink($tiles);
+}
+
+// A max_execution_time fatal (or a kill) skips every catch: without this the
+// worker lock stays held until the 45-minute stall window and the next
+// attempt waits that long. Armed once per lock acquisition; the shutdown
+// handler only fires on real fatals, and unlock is idempotent, so normal
+// completions are unaffected.
+function maps_worker_lock_guard(): void {
+    static $armed = false;
+    if ($armed) {
+        return;
+    }
+    $armed = true;
+    register_shutdown_function(static function (): void {
+        $e = error_get_last();
+        if ($e !== null && in_array($e['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR], true)) {
+            maps_worker_unlock();
+        }
+    });
 }
 
 // Ready-to-render zones: each ['id' => 'zone_<n>', 'file' => '<name>.pmtiles'].
@@ -1120,7 +1140,7 @@ function maps_sweep_orphan_files(): int {
     // keeps orphans forever, or worse, deletes a live download as "aged".
     clearstatcache();
     foreach (glob_list(maps_tiles_dir() . '/zone_*') as $f) {
-        if (!preg_match('/^zone_(\d+)(?:_([0-9a-f]{32}))?\.(pmtiles|part|plan|tiles)$/', basename($f), $m)) {
+        if (!preg_match('/^zone_(\d+)(?:_([0-9a-f]{32}))?\.(pmtiles|part|plan|tiles|plan\.leaves)$/', basename($f), $m)) {
             continue;
         }
         if ((time() - (int)@filemtime($f)) < 3600) {
@@ -1159,6 +1179,7 @@ function maps_zone_delete(int $id): bool {
     @unlink($final);
     @unlink($part);
     @unlink($plan);
+    @unlink($plan . '.leaves');
     @unlink($tiles);
     audit('maps_zone_delete', null, null, "id={$id}");
     return true;
@@ -1391,6 +1412,7 @@ function maps_worker_lock(): array {
     if ($cache !== null) {
         $cache['maps_worker_lock'] = (string)$mine;
     }
+    maps_worker_lock_guard();
     return [true, ''];
 }
 
@@ -1580,6 +1602,11 @@ function maps_process_php(array $zone, int $timeBox): array {
     [$planPath, $tilesPath, $partPath, $finalPath] = maps_zone_workspace($id);
 
     // ── Sizing: resolve every tile offset once, exact bytes before kept ──
+    // Raw leaf bytes persist in a sidecar next to the plan, so a slice that
+    // runs out of budget resumes warm instead of re-fetching every leaf.
+    // The sidecar is pinned to the planet URL that produced it; anything
+    // else (new build, corrupt file) starts cold.
+    $leavesPath = $planPath . '.leaves';
     $plan = pmtiles_plan_load($planPath);
     $fresh = is_array($plan)
         && ($plan['url'] ?? null) === $planet
@@ -1594,10 +1621,28 @@ function maps_process_php(array $zone, int $timeBox): array {
         $sizeTimeout = $timeBox > 0
             ? max(5, min(60, (int)ceil($timeBox - (microtime(true) - $phase0))))
             : 60;
-        [$plan, $perr] = pmtiles_build_plan($planet, $proxy, $bbox[0], $bbox[1], $bbox[2], $bbox[3], $maxzoom, $sizeTimeout);
+        $side = pmtiles_leaves_load($leavesPath);
+        $warm = ($side['url'] === $planet) ? $side['leaves'] : [];
+        // Overall sizing deadline: past it the walk aborts cleanly and the
+        // next slice resumes from the sidecar — instead of dying mid-walk
+        // past max_execution_time and stalling the queue. Unbounded (0) for
+        // the worker/inline path, which has no slice to yield to.
+        $sizeDeadline = $timeBox > 0 ? $phase0 + $timeBox : 0.0;
+        [$plan, $perr, $newLeaves] = pmtiles_build_plan(
+            $planet, $proxy, $bbox[0], $bbox[1], $bbox[2], $bbox[3], $maxzoom,
+            $sizeTimeout, $warm, $sizeDeadline);
+        if ($plan === null && $perr === 'sizing timed out') {
+            // Retryable, not failed: persist what this slice learned and let
+            // the next one continue warm. Status stays 'sizing'.
+            if ($newLeaves !== []) {
+                pmtiles_leaves_save($leavesPath, $planet, $warm + $newLeaves);
+            }
+            return ['more', ''];
+        }
         if ($plan === null) {
             $code = $perr === 'empty' ? 'code:sizing_empty' : 'code:sizing_failed|' . $perr;
             $mark('failed', ['error' => substr($code, 0, 200)]);
+            @unlink($leavesPath); // terminal for this planet — no stale resume
             return ['failed', $code];
         }
         $expected = (int)$plan['expected'];
@@ -1609,16 +1654,19 @@ function maps_process_php(array $zone, int $timeBox): array {
             $mark('failed', ['error' => 'code:plan_failed']);
             return ['failed', 'code:plan_failed'];
         }
+        if ($newLeaves !== []) {
+            pmtiles_leaves_save($leavesPath, $planet, $warm + $newLeaves);
+        }
         @unlink($tilesPath); // fresh plan, fresh bytes
         $mark('downloading', ['bytes_expected' => $expected, 'bytes_done' => 0]);
+        $plan = pmtiles_plan_validate($plan); // normalize the fresh build once
+        if ($plan === null) {
+            $mark('failed', ['error' => 'code:plan_failed']);
+            return ['failed', 'code:plan_failed'];
+        }
     }
-    // Normalize through the validator: sidecars are untrusted bytes even when
-    // this request built them (a concurrent retry rebuilds mid-flight).
-    $plan = pmtiles_plan_validate($plan);
-    if ($plan === null) {
-        $mark('failed', ['error' => 'code:plan_failed']);
-        return ['failed', 'code:plan_failed'];
-    }
+    // Loaded plans arrive validated from pmtiles_plan_load(); fresh builds
+    // were normalized above — no second full validation per slice.
     $expected = (int)$plan['expected'];
 
     // Sizing may have spent the whole budget (many leaf fetches through a
@@ -1662,6 +1710,7 @@ function maps_process_php(array $zone, int $timeBox): array {
     if (!maps_zone_exists($id)) {
         @unlink($tilesPath);
         @unlink($planPath);
+        @unlink($planPath . '.leaves');
         return ['failed', 'code:deleted'];
     }
 
@@ -1684,6 +1733,7 @@ function maps_process_php(array $zone, int $timeBox): array {
     }
     @unlink($tilesPath);
     @unlink($planPath);
+    @unlink($planPath . '.leaves');
     $mark('ready', [
         'bytes_done' => filesize($finalPath),
         'speed_bps' => null, 'eta_secs' => null, 'error' => null,
