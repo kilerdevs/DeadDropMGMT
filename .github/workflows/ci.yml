@@ -21,21 +21,49 @@ jobs:
     # unpatched runtimes). 8.5 is in the matrix because the shipped Docker
     # images already run it — the production runtime must never go untested.
     # fail-fast so one broken version doesn't hide results from the others.
+    # One matrix, three concerns: the PHP axis, MySQL 8 portability (setup.sql
+    # must stay portable — guarded ALTERs, no engine-only syntax), and the
+    # shipped mariadb:13 under Europe/Warsaw TZ (the UTC-default runner once
+    # let a UTC-write/local-read limiter skew through untested).
     strategy:
       fail-fast: false
       matrix:
-        php: ['8.2', '8.3', '8.4', '8.5']
-    name: tests (PHP ${{ matrix.php }})
+        include:
+          - php: '8.2'
+            db: 'mariadb:11'
+            tz: ''
+            label: 'PHP 8.2 · mariadb:11'
+          - php: '8.3'
+            db: 'mariadb:11'
+            tz: ''
+            label: 'PHP 8.3 · mariadb:11'
+          - php: '8.4'
+            db: 'mariadb:11'
+            tz: ''
+            label: 'PHP 8.4 · mariadb:11'
+          - php: '8.5'
+            db: 'mariadb:11'
+            tz: ''
+            label: 'PHP 8.5 · mariadb:11'
+          - php: '8.3'
+            db: 'mysql:8.0'
+            tz: ''
+            label: 'PHP 8.3 · mysql:8.0'
+          - php: '8.3'
+            db: 'mariadb:13'
+            tz: 'Europe/Warsaw'
+            label: 'PHP 8.3 · mariadb:13 · Europe/Warsaw TZ'
+    name: tests (${{ matrix.label }})
     services:
-      # setup.sql uses MariaDB syntax (ALTER TABLE ... ADD COLUMN IF NOT EXISTS)
-      mariadb:
-        image: mariadb:11
+      db:
+        image: ${{ matrix.db }}
         env:
           MARIADB_ROOT_PASSWORD: root
+          MYSQL_ROOT_PASSWORD: root
         ports:
           - 3306:3306
         options: >-
-          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-cmd="mysqladmin ping -proot 2>/dev/null || healthcheck.sh --connect --innodb_initialized"
           --health-interval=5s
           --health-timeout=5s
           --health-retries=10
@@ -45,6 +73,7 @@ jobs:
       DDMGMT_DB_USER: root
       DDMGMT_DB_PASS: root
       DDMGMT_TEST_DB: deaddrops_test
+      TZ: ${{ matrix.tz }}
     steps:
       # Third-party actions are pinned to commit SHAs, not moving tags: a
       # hijacked tag must not be able to run code in this repo.
