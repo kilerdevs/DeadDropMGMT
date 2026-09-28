@@ -252,9 +252,11 @@ $_active = 'orders';
             <span class="td-muted"><?= htmlspecialchars(t('admin.audit.page_summary', ['page' => $page, 'pages' => $pages, 'total' => number_format($total)]), ENT_QUOTES, 'UTF-8') ?></span>
             <div class="log-toolbar-actions">
                 <?php
-                $page_qs = $filter_courier > 0 ? '?courier=' . $filter_courier . '&amp;page=' : '?page=';
-                if ($page > 1): ?><a class="action-btn" href="<?= $page_qs . ($page - 1) ?>">&larr; <?= t('admin.analytics.prev_page') ?></a><?php endif; ?>
-                <?php if ($page < $pages): ?><a class="action-btn" href="<?= $page_qs . ($page + 1) ?>"><?= t('admin.analytics.next_page') ?> &rarr;</a><?php endif; ?>
+                // Raw & here: the whole URL is escaped below (an &amp; entity
+                // would double-encode). Both values are ints by construction.
+                $page_qs = $filter_courier > 0 ? '?courier=' . $filter_courier . '&page=' : '?page=';
+                if ($page > 1): ?><a class="action-btn" href="<?= htmlspecialchars($page_qs . ($page - 1), ENT_QUOTES, 'UTF-8') ?>">&larr; <?= t('admin.analytics.prev_page') ?></a><?php endif; ?>
+                <?php if ($page < $pages): ?><a class="action-btn" href="<?= htmlspecialchars($page_qs . ($page + 1), ENT_QUOTES, 'UTF-8') ?>"><?= t('admin.analytics.next_page') ?> &rarr;</a><?php endif; ?>
             </div>
         </div>
         <?php endif; ?>
