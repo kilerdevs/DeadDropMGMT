@@ -9,6 +9,13 @@ All notable changes to DeadDropMGMT are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.6.2] - 2026-09-28
+
+Optimization review findings: two real bugs (PMTiles run-length holes,
+cleanup infinite loop) plus performance work across proxy, maps, frontend,
+DB, logging, photos and CI (see below). No schema action needed beyond the
+normal setup.sql upgrade path.
+
 ### Fixed
 - PHP-engine zone sizing read the same run-length tile twice and reported
   water/uniform land as missing: run entries now match anywhere inside
@@ -1235,7 +1242,8 @@ First tagged release: the security-hardened core, fully gated by CI.
 - Actions pinned by SHA, workflows read-only, Dependabot
   (actions + composer + docker)
 
-[Unreleased]: https://github.com/kilerdevs/DeadDropMGMT/compare/v1.6.1...HEAD
+[Unreleased]: https://github.com/kilerdevs/DeadDropMGMT/compare/v1.6.2...HEAD
+[1.6.2]: https://github.com/kilerdevs/DeadDropMGMT/compare/v1.6.1...v1.6.2
 [1.6.1]: https://github.com/kilerdevs/DeadDropMGMT/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/kilerdevs/DeadDropMGMT/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/kilerdevs/DeadDropMGMT/compare/v1.4.0...v1.5.0
