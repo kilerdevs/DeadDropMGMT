@@ -10,7 +10,7 @@
 	# guessable legacy names, partial downloads and engine sidecars never are.
 	@zonelegacy path_regexp ^/tiles/zone_[0-9]+\.(pmtiles|part)$
 	respond @zonelegacy 403
-	@zonepart path_regexp ^/tiles/.*\.(part|plan|tiles|tmp)$
+	@zonepart path_regexp ^/tiles/.*\.(part|plan|tiles|tmp|leaves)$
 	respond @zonepart 403
 
 	@blocked path /includes/* /logs/* /cron/* /tools/* /cache/* /data/* /docker/* /e2e/* /tests/* /backups/* /config.php /config.php.example /setup.sql /build-info.json /composer.* /package*.json /playwright.config.js /phpstan.neon /auto-update.* /Dockerfile* /docker-compose* /.htaccess /.ht*
@@ -31,6 +31,25 @@
 
 	# Static files and error pages never pass through PHP's header layer.
 	header X-Content-Type-Options "nosniff"
+
+	# Immutable static assets: vendored libs, glyphs, zone archives (fresh
+	# secret names per build) and ?v=-busted first-party files. Uploads stay
+	# no-store (bearer URLs); HTML/PHP untouched.
+	@immutable path /maplibre/* /fonts/* /admin/vendor/* /tiles/*.pmtiles
+	header @immutable Cache-Control "public, max-age=31536000, immutable"
+	@versioned query v=*
+	header @versioned Cache-Control "public, max-age=31536000, immutable"
+
+	# Bandwidth for recipients on phones: compress text assets (maplibre-gl.js
+	# 1 MB -> ~265 KB). Tile PNGs (tile_proxy.php), /tiles/*.pmtiles and
+	# /uploads/* are already compressed — and compression breaks Range
+	# requests — so they are excluded; everything else compressible by
+	# extension is fair game, including dynamic HTML (*.php).
+	@encodable {
+		path *.js *.mjs *.css *.html *.htm *.php *.svg *.json *.txt *.xml
+		not path /admin/tile_proxy.php /tiles/* /uploads/* /cache/*
+	}
+	encode @encodable zstd gzip
 
 	# Same capability-URL reasoning as the Apache/nginx notes: bearer links
 	# must not persist in caches.

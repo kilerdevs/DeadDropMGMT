@@ -19,9 +19,9 @@ $csrf = generate_csrf();
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Admin — <?= t('admin.new_order.title') ?></title>
 <?php if (map_provider() === MAP_PROVIDER_SELFHOSTED): ?>
-<link rel="stylesheet" href="/maplibre/maplibre-gl.css">
+<link rel="stylesheet" href="/maplibre/maplibre-gl.css?v=<?= asset_ver('/maplibre/maplibre-gl.css') ?>">
 <?php else: ?>
-<link rel="stylesheet" href="/admin/vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="/admin/vendor/leaflet/leaflet.css?v=<?= asset_ver('/admin/vendor/leaflet/leaflet.css') ?>">
 <?php endif; ?>
 <link rel="stylesheet" href="/admin/style.css?v=<?= admin_css_ver() ?>">
 </head>
@@ -124,13 +124,14 @@ $csrf = generate_csrf();
 </div>
 
 <?php if (map_provider() === MAP_PROVIDER_SELFHOSTED): ?>
-<script src="/maplibre/maplibre-gl.js"></script>
-<script src="/maplibre/pmtiles.js"></script>
-<script src="/admin/pin-label.js"></script>
-<script src="/admin/maplibre-picker.js"></script>
+<script src="/maplibre/maplibre-gl.js?v=<?= asset_ver('/maplibre/maplibre-gl.js') ?>"></script>
+<script src="/maplibre/pmtiles.js?v=<?= asset_ver('/maplibre/pmtiles.js') ?>"></script>
+<script src="/admin/pin-label.js?v=<?= asset_ver('/admin/pin-label.js') ?>"></script>
+<script src="/map-attrib.js?v=<?= asset_ver('/map-attrib.js') ?>"></script>
+<script src="/admin/maplibre-picker.js?v=<?= asset_ver('/admin/maplibre-picker.js') ?>"></script>
 <?php else: ?>
-<script src="/admin/vendor/leaflet/leaflet.js"></script>
-<script src="/admin/pin-label.js"></script>
+<script src="/admin/vendor/leaflet/leaflet.js?v=<?= asset_ver('/admin/vendor/leaflet/leaflet.js') ?>"></script>
+<script src="/admin/pin-label.js?v=<?= asset_ver('/admin/pin-label.js') ?>"></script>
 <script nonce="<?= htmlspecialchars($csp_nonce, ENT_QUOTES, 'UTF-8') ?>">
 (function () {
     // Fix self-hosted Leaflet marker icon paths
@@ -216,6 +217,6 @@ $csrf = generate_csrf();
 })();
 </script>
 <?php endif; ?>
-<script src="/admin/admin.js"></script>
+<script src="/admin/admin.js?v=<?= asset_ver('/admin/admin.js') ?>"></script>
 </body>
 </html>

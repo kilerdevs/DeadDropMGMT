@@ -86,7 +86,7 @@ $up = false;
 for ($i = 0; $i < 100; $i++) {
     try { [$st] = _sp('GET', "$B/healthz.php", null, ''); if ($st === 200) { $up = true; break; } }
     catch (Throwable) { }
-    usleep(200000);
+    usleep(50000);
 }
 if (!$up) {
     fwrite(STDERR, "built-in server on port $port did not answer; its stderr:\n" . (string)@file_get_contents($errLog) . "\n");

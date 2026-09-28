@@ -22,10 +22,11 @@ if ($budget['blocked']) {
 // coordinates — lat/lng stay out of owner-facing surfaces by policy.
 if (($_GET['reverse'] ?? '') === '1') {
     // A "country, state" label needs ~1 km, not the pin's 1 cm: the exact
-    // drop coordinates never leave the server for a label.
+    // drop coordinates never leave the server for a label. Served from the
+    // per-account label cache when warm (pin drags re-ask constantly).
     $lat = is_numeric($_GET['lat'] ?? null) ? round((float)$_GET['lat'], 2) : null;
     $lon = is_numeric($_GET['lon'] ?? null) ? round((float)$_GET['lon'], 2) : null;
-    $addr = ($lat === null || $lon === null) ? null : osm_reverse_lookup($lat, $lon);
+    $addr = ($lat === null || $lon === null) ? null : osm_reverse_cached(current_user_id(), $lat, $lon);
     if ($addr === null) {
         header('Content-Type: text/plain');
         http_response_code(502);

@@ -5,7 +5,9 @@ require_once __DIR__ . '/bootstrap.php';
 // ── Rate limiter under contention ─────────────────────────────────────────────
 // The old limiter did SELECT-then-UPDATE: concurrent requests could all read
 // the same count before any increment landed, losing updates and leaking
-// extra attempts. rl_hit() spends + decides in one transaction on a row lock.
+// extra attempts. rl_hit() spends in one atomic upsert and reads its own
+// post-increment count back through LAST_INSERT_ID() — and a read-after
+// variant regressed exactly this way (duplicate counts under overlap).
 // This suite hammers it with N simultaneous processes and demands that every
 // transition observed a UNIQUE count — the signature of a lost-update-free
 // serialized log.

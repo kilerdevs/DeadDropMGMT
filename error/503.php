@@ -10,7 +10,7 @@ require_once dirname(__DIR__) . '/includes/i18n.php';
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <meta name="darkreader-lock">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>503 — <?= t('error.503.title') ?></title><link rel="stylesheet" href="/style.css">
+<title>503 — <?= t('error.503.title') ?></title><link rel="stylesheet" href="/style.css?v=<?= asset_ver('/style.css') ?>">
 <style>.error-code{font-family:'IBM Plex Mono',monospace;font-size:80px;font-weight:500;color:#222;letter-spacing:.04em;line-height:1;margin:32px 0 4px}</style>
 </head>
 <body>

@@ -129,6 +129,28 @@ foreach (['cron', 'tools', 'tests', 'docker', 'e2e', 'backups', 'data'] as $bloc
 }
 T::ok('Apache blocks setup.sql and config.php.example', str_contains($htaccess, 'setup\.sql') && str_contains($htaccess, 'config\\.php\\.example'));
 
+// ── Compression parity: text assets gzip/deflate on all three servers,
+// while already-compressed bytes (uploads, .pmtiles, tile PNGs) and Range
+// requests stay untouched.
+T::ok('Apache grants pbf/pmtiles/json statically', str_contains($htaccess, 'pbf|pmtiles|json'));
+T::ok('Apache types pbf as protobuf', str_contains($htaccess, 'application/x-protobuf'));
+T::ok('Apache deflates svg+protobuf, not uploads/pmtiles',
+    str_contains($htaccess, 'AddOutputFilterByType DEFLATE') && str_contains($htaccess, 'image/svg+xml application/x-protobuf'));
+T::ok('nginx gzips text assets', str_contains($nginx, 'gzip on;') && str_contains($nginx, 'gzip_types'));
+T::ok('Caddy encodes compressible types', str_contains($caddy, 'encode @encodable'));
+T::ok('Caddy never compresses tiles/uploads', str_contains($caddy, 'not path /admin/tile_proxy.php /tiles/* /uploads/* /cache/*'));
+
+// ── Cache parity: immutable vendor libs, glyphs, zone archives and ?v=
+// assets on all three servers; uploads stay no-store, HTML untouched.
+T::ok('nginx caches immutable dirs', str_contains($nginx, 'location ~* ^/(maplibre|fonts)/'));
+T::ok('nginx caches versioned assets', str_contains($nginx, 'if ($arg_v != "")'));
+T::ok('nginx caches zone archives', str_contains($nginx, 'location ~* ^/tiles/.+\\.pmtiles$'));
+T::ok('Caddy caches immutable dirs', str_contains($caddy, '@immutable path /maplibre/* /fonts/* /admin/vendor/* /tiles/*.pmtiles'));
+T::ok('Caddy caches versioned assets', str_contains($caddy, '@versioned query v=*'));
+T::ok('Apache caches immutable assets', str_contains($htaccess, 'max-age=31536000, immutable'));
+T::ok('first-party tags carry ?v=', str_contains((string)file_get_contents($root . '/index.php'), '/gallery.js?v=')
+    && str_contains((string)file_get_contents($root . '/admin/edit.php'), '/admin/admin.js?v='));
+
 // ── No function collisions with the service layer ───────────────────────────
 // PHP function names are case-insensitive: an entry script defining T()
 // fatals against i18n's t() the moment the kernel loads it (silent 255

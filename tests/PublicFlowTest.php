@@ -39,9 +39,9 @@ register_shutdown_function(static function () use ($proc): void {
 $up = false;
 for ($i = 0; $i < 30; $i++) {
     try { [$st] = _pf_get("http://127.0.0.1:$port/"); }
-    catch (Throwable) { $st = 0; usleep(200000); continue; }
+    catch (Throwable) { $st = 0; usleep(50000); continue; }
     if ($st === 200) { $up = true; break; }
-    usleep(200000);
+    usleep(50000);
 }
 T::ok('built-in server booted', $up && $st === 200);
 if (!$up) { exit(T::done()); }

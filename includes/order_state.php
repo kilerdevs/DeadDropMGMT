@@ -133,28 +133,35 @@ function order_delete_atomic(int $id): ?array {
 // Expired → deleted, per order, under a row lock so cleanup can safely run
 // concurrently with itself, with receiving, or with revealing. Idempotent:
 // re-running deletes nothing extra and never resurrects partial failures.
-// Bounded: one pass handles at most $batch rows (default 200), then the
-// caller repeats while the previous pass was full — a backlog after days
-// without cron stays a series of small transactions instead of one giant
-// SELECT + unbounded loop that max_execution_time kills halfway.
+// Bounded and poison-proof: pages forward by id (ORDER BY id, AND id > ?),
+// so a row that fails every pass is stepped over instead of re-selected
+// forever — the old "repeat while the pass was full" loop spun forever when
+// a full batch kept failing. Statements are prepared once, outside the pass.
 function cleanup_expired_orders(int $batch = 200): int {
     $db      = get_db();
     $deleted = 0;
+    $sweptIds = [];
+    $batch   = max(1, $batch);
+    $lock   = $db->prepare(
+        'SELECT id, token_hmac FROM orders WHERE id = ? AND status = "delivered" AND expires_at IS NOT NULL AND expires_at <= NOW() LIMIT 1 FOR UPDATE'
+    );
+    $photos = $db->prepare('SELECT filename FROM order_photos WHERE order_id = ?');
+    $del    = $db->prepare('DELETE FROM orders WHERE id = ?');
+    $lastId = 0;
     do {
         // Defense in depth: only delivered orders expire. Expiry is armed by
         // delivery (and guarded extension); a preparing row must never be
         // swept even if an expires_at leaked onto it.
-        $expired = $db->query(
-            'SELECT id FROM orders WHERE status = "delivered" AND expires_at IS NOT NULL AND expires_at <= NOW() LIMIT ' . max(1, $batch)
-        )->fetchAll();
+        $sel = $db->prepare(
+            'SELECT id FROM orders WHERE status = "delivered" AND expires_at IS NOT NULL AND expires_at <= NOW() AND id > ? ORDER BY id LIMIT ' . $batch
+        );
+        $sel->execute([$lastId]);
+        $expired = $sel->fetchAll();
 
         foreach ($expired as $row) {
             $oid = (int)$row['id'];
             $db->beginTransaction();
             try {
-                $lock = $db->prepare(
-                    'SELECT id, token_hmac FROM orders WHERE id = ? AND status = "delivered" AND expires_at IS NOT NULL AND expires_at <= NOW() LIMIT 1 FOR UPDATE'
-                );
                 $lock->execute([$oid]);
                 $locked = $lock->fetch();
                 if (!$locked) {
@@ -162,16 +169,15 @@ function cleanup_expired_orders(int $batch = 200): int {
                     continue;
                 }
 
-                $photos = $db->prepare('SELECT filename FROM order_photos WHERE order_id = ?');
                 $photos->execute([$oid]);
                 $files = $photos->fetchAll(PDO::FETCH_COLUMN);
 
-                $db->prepare('DELETE FROM orders WHERE id = ?')->execute([$oid]);
+                $del->execute([$oid]);
                 _delete_order_events($db, $oid, is_string($locked['token_hmac'] ?? null) ? $locked['token_hmac'] : null);
                 $db->commit();
 
                 _unlink_order_files($oid, $files);
-                log_info('cleanup_deleted', ['msg' => 'Cleanup: deleted expired order #' . $oid]);
+                $sweptIds[] = $oid;
                 $deleted++;
             } catch (Throwable $e) {
                 if ($db->inTransaction()) {
@@ -180,7 +186,18 @@ function cleanup_expired_orders(int $batch = 200): int {
                 log_err('Cleanup error on order #' . $oid . ': ' . $e->getMessage());
             }
         }
-    } while (count($expired) === max(1, $batch));
+        if ($expired !== []) {
+            $lastId = max($lastId, (int)end($expired)['id']);
+        }
+    } while (count($expired) === $batch);
+
+    // One summary line per sweep, not one per order: the per-order lines
+    // were the bulk of cleanup's own log volume on backlogs.
+    if ($deleted > 0) {
+        $shown = array_slice($sweptIds, 0, 10);
+        log_info('cleanup_sweep', ['msg' => 'Cleanup: deleted ' . $deleted . ' expired order(s)'
+            . ($deleted > count($shown) ? ' (first ' . count($shown) . ': ' . implode(',', $shown) . ')' : ': ' . implode(',', $shown))]);
+    }
 
     return $deleted;
 }
@@ -206,6 +223,12 @@ function _unlink_order_files(int $order_id, array $files): void {
     foreach ($files as $fn) {
         if (is_string($fn) && preg_match('#^\d+/[0-9a-f]+\.(jpg|jpeg|png|webp|gif)$#i', $fn)) {
             overwrite_and_unlink($base . $fn);
+            // The grid thumbnail is a second file per photo (no DB row) —
+            // it dies with the original.
+            $thumb = photo_thumb_rel($fn);
+            if ($thumb !== null) {
+                overwrite_and_unlink($base . $thumb);
+            }
             // The DB row is already gone (commit-then-sweep, by design), so a
             // file that survives the sweep would sit orphaned forever with no
             // row pointing at it — log it so the next admin log review shows

@@ -7,8 +7,10 @@ ErrorDocument 404 /error/404.php
 ErrorDocument 500 /error/500.php
 ErrorDocument 503 /error/503.php
 
-# Explicitly serve static assets (required on byethost — server-level config denies by default)
-<FilesMatch "\.(css|js|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$">
+# Explicitly serve static assets (required on byethost — server-level config denies by default).
+# pbf (map glyphs), pmtiles (zone files) and json (map style) must be listed
+# too, or deny-by-default hosts answer 403 for them.
+<FilesMatch "\.(css|js|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot|pbf|pmtiles|json)$">
     # Apache 2.4 authz (Order/Allow/Deny is deprecated mod_access_compat syntax)
     Require all granted
 </FilesMatch>
@@ -23,6 +25,16 @@ ErrorDocument 503 /error/503.php
     AddType image/svg+xml             .svg
     AddType font/woff                 .woff
     AddType font/woff2                .woff2
+    AddType application/x-protobuf    .pbf
+    AddType application/json          .json
+</IfModule>
+
+# Compress text assets for recipients on slow links (guarded: hosts without
+# mod_deflate skip this instead of 500ing). Glyphs drop ~40% this way.
+# Uploads (JPEG/PNG) and .pmtiles are already compressed — and deflating
+# them breaks Range requests — so they stay out.
+<IfModule mod_deflate.c>
+    AddOutputFilterByType DEFLATE text/css application/javascript application/json application/xml image/svg+xml application/x-protobuf text/html
 </IfModule>
 
 # Protect sensitive files from direct access. Kept OUTSIDE <IfModule
@@ -60,6 +72,14 @@ ErrorDocument 503 /error/503.php
     RewriteRule ^(setup\.sql|build-info\.json|composer\.(json|lock)|package(-lock)?\.json|playwright\.config\.js|phpstan\.neon|\.php-cs-fixer\.php|auto-update\.(sh|log)|config\.php\.example|Dockerfile[^/]*|docker-compose[^/]*\.yml)$ - [F,L]
 </IfModule>
 
+# Map-engine sidecars (.plan/.tiles/.part/.tmp/.leaves) carry the proxy URL
+# and exact byte layout — never web content. nginx/Caddy deny them by
+# extension; Apache needs the same here (the static-asset grant above does
+# not cover these types, but permissive hosts serve unknown types happily).
+<FilesMatch "\.(plan|tiles|part|tmp|leaves)$">
+    Require all denied
+</FilesMatch>
+
 # Protect this file
 <Files ".htaccess">
     # Apache 2.4 authz (Order/Allow/Deny is deprecated mod_access_compat syntax)
@@ -74,4 +94,9 @@ ErrorDocument 503 /error/503.php
 <IfModule mod_headers.c>
     Header always set X-Content-Type-Options "nosniff"
     Header always set X-Frame-Options "DENY" "expr=%{REQUEST_URI} =~ m#^/error/#"
+    # Immutable static assets: vendored libs, glyphs, zone archives (fresh
+    # secret names per build) and ?v=-busted first-party files
+    # (asset_ver() changes the URL on every edit). Uploads stay unmarked
+    # here — PHP serves them no-store; HTML/PHP untouched.
+    Header always set Cache-Control "public, max-age=31536000, immutable" "expr=%{REQUEST_URI} =~ m#^/(maplibre|fonts)/# || %{REQUEST_URI} =~ m#^/admin/vendor/# || %{REQUEST_URI} =~ m#^/tiles/.*\.pmtiles$# || %{QUERY_STRING} =~ /(^|&)v=/"
 </IfModule>

@@ -99,7 +99,7 @@ $up = false;
 for ($i = 0; $i < 50; $i++) {
     [$st] = _ai('GET', "$B/healthz.php", null, '');
     if ($st === 200) { $up = true; break; }
-    usleep(200000);
+    usleep(50000);
 }
 T::ok('server booted', $up);
 if (!$up) { $teardown(); exit(T::done()); }
@@ -130,43 +130,66 @@ $offsets = static function () use ($logPaths): array {
 };
 $bad = [];
 $sent = 0;
+// One request per (endpoint, method) carries EVERY name as name[]=x; only a
+// failing batch is bisected per name to find the culprit (~70 requests
+// instead of ~3000 — the token still rotates per POST, so each POST takes a
+// fresh CSRF like before). A batch only fails when at least one of its
+// names crashes alone; a combination-only failure is reported as a batch.
+$analyze = static function (int $code, string $body, array $before) use ($logPaths): string {
+    if ($code >= 500) { return "HTTP $code"; }
+    if (preg_match('/Uncaught|TypeError|Array to string|Fatal error/', $body) === 1) { return 'error text in the page'; }
+    foreach ($logPaths as $l) {
+        clearstatcache();
+        $size = is_file($l) ? (int)filesize($l) : 0;
+        if ($size > $before[$l]) {
+            $fh = fopen($l, 'rb');
+            if ($fh !== false) {
+                fseek($fh, $before[$l]);
+                $new = (string)stream_get_contents($fh);
+                fclose($fh);
+                if (preg_match('/Uncaught|TypeError|Array to string|"php_error"/', $new) === 1) { return 'logged: ' . substr(trim($new), 0, 160); }
+            }
+        }
+    }
+    return '';
+};
+$send = static function (string $ep, string $method, array $tryNames) use ($B, &$ck, $freshCsrf, $offsets, $analyze): array {
+    $before = $offsets();
+    $fields = [];
+    foreach ($tryNames as $name) { $fields[$name . '[]'] = 'x'; }
+    $url = $B . $ep;
+    if ($method === 'GET') {
+        $url .= '?' . http_build_query($fields);
+        $fields = null;
+    } else {
+        $fields['csrf_token'] = $freshCsrf();
+    }
+    [$code, $body, $ck] = _ai($method, $url, $fields, $ck);
+    return [$analyze($code, $body, $before)];
+};
 foreach ($endpoints as $ep) {
-    foreach ($names as $name) {
-        foreach (['GET', 'POST'] as $method) {
-            $before = $offsets();
-            $fields = [$name . '[]' => 'x'];
-            $url = $B . $ep;
-            if ($method === 'GET') {
-                $url .= '?' . http_build_query($fields);
-                $fields = null;
-            } else {
-                $fields['csrf_token'] = $freshCsrf();
-            }
-            [$code, $body, $ck] = _ai($method, $url, $fields, $ck);
+    foreach (['GET', 'POST'] as $method) {
+        [$why] = $send($ep, $method, $names);
+        $sent++;
+        if ($why === '') {
+            continue; // every name clean on this endpoint+method
+        }
+        // Bisect: re-send each name alone to name the culprit(s).
+        $singled = false;
+        foreach ($names as $name) {
+            [$oneWhy] = $send($ep, $method, [$name]);
             $sent++;
-            $why = '';
-            if ($code >= 500) { $why = "HTTP $code"; }
-            elseif (preg_match('/Uncaught|TypeError|Array to string|Fatal error/', $body) === 1) { $why = 'error text in the page'; }
-            else {
-                foreach ($logPaths as $l) {
-                    clearstatcache();
-                    $size = is_file($l) ? (int)filesize($l) : 0;
-                    if ($size > $before[$l]) {
-                        $fh = fopen($l, 'rb');
-                        if ($fh !== false) {
-                            fseek($fh, $before[$l]);
-                            $new = (string)stream_get_contents($fh);
-                            fclose($fh);
-                            if (preg_match('/Uncaught|TypeError|Array to string|"php_error"/', $new) === 1) { $why = 'logged: ' . substr(trim($new), 0, 160); }
-                        }
-                    }
-                }
+            if ($oneWhy !== '') {
+                $bad["$method $ep {$name}[]"] = $oneWhy;
+                $singled = true;
             }
-            if ($why !== '') { $bad["$method $ep {$name}[]"] = $why; }
+        }
+        if (!$singled) {
+            $bad["$method $ep (combination of array params)"] = $why;
         }
     }
 }
-T::ok("sent $sent array-shaped requests", $sent > 2000);
+T::ok('sent batched array-shaped requests', $sent >= 2 * count($endpoints));
 T::eq('no page crashes, renders an error, or logs a TypeError on array-shaped input', [], array_slice($bad, 0, 10, true));
 
 $teardown();

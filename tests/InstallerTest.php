@@ -54,9 +54,6 @@ function ix_serve(string $docroot, int $port): mixed {
         $s = @stream_socket_client('tcp://127.0.0.1:' . $port, $e, $str, 0.2);
         if (is_resource($s)) {
             fclose($s);
-            // The probe connection itself triggers a 404 request; give the
-            // server a beat to become fully ready before real traffic.
-            usleep(200000);
             return $p;
         }
         usleep(100000);

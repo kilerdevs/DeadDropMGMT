@@ -64,25 +64,8 @@
         }
     }
 
-    // Attribution as plain TEXT instead of MapLibre's control: that control runs
-    // source/archive attribution strings through DOM.sanitize(), which
-    // CVE-2026-85061 (GHSA-jrc7-96c5-q579, fixed only in the ESM-only 6.x line)
-    // can bypass, and zone archives carry upstream metadata. The credit comes from
-    // our own style JSON and is set via textContent.
-    function addTextAttribution(box, style) {
-        var seen = {};
-        var parts = [];
-        Object.keys(style.sources || {}).forEach(function (k) {
-            var a = style.sources[k] && style.sources[k].attribution;
-            if (typeof a === 'string' && a !== '' && !seen[a]) { seen[a] = true; parts.push(a); }
-        });
-        if (parts.length === 0) return;
-        var el = document.createElement('div');
-        el.className = 'map-attrib';
-        el.textContent = parts.join(' · ');
-        box.appendChild(el);
-    }
-
+    // Shared credit line (map-attrib.js) — plain text, never MapLibre's
+    // control (CVE-2026-85061 via DOM.sanitize()).
     var protocol = new pmtiles.Protocol();
     maplibregl.addProtocol('pmtiles', protocol.tile);
 
@@ -97,9 +80,9 @@
                 style: style,
                 center: [initLng, initLat],
                 zoom: initZoom,
-                attributionControl: false, // see addTextAttribution
+                attributionControl: false, // see map-attrib.js
             });
-            addTextAttribution(box, style);
+            if (typeof ddmgmtMapAttribution === 'function') ddmgmtMapAttribution(box, style);
             if (Object.keys(style.sources || {}).length === 0) {
                 var overlay = document.createElement('div');
                 overlay.className = 'map-empty-overlay';

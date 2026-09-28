@@ -65,6 +65,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && !empty($_SESSION['reveal'])) {
 }
 
 // ── GET ?token= pre-fill: auto-show password step ─────────────────────────────
+// Deliberately event-free: the POST lookup logs the lookup event, and this
+// pre-fill is UI convenience, not a lookup of record. (Spending the public
+// budget here would punish legitimate re-opens with no refund concept, and
+// guessing the ~82-bit token is infeasible — so neither a limit nor an
+// event insert belongs on this path.)
 if ($_SERVER['REQUEST_METHOD'] === 'GET' && $loc_data === null && !$correct_preparing) {
     $get_token = trim(get_string('token'));
     if (strlen($get_token) === 16 && ctype_alnum($get_token)) {
@@ -76,7 +81,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && $loc_data === null && !$correct_prep
             if ($ord_g) {
                 $prefill_token = $get_token;
                 if ($allow_status_lookup) {
-                    log_event('lookup', (int)$ord_g['id'], $get_token);
                     $order_status = $ord_g['status'];
                     $show_pw_step = true;
                 }
@@ -295,9 +299,9 @@ if ($map_src !== '' && isset($lat, $lng) && map_provider() === MAP_PROVIDER_SELF
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <meta name="darkreader-lock">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title><?= t('public.index.title') ?></title><link rel="stylesheet" href="/style.css">
+<title><?= t('public.index.title') ?></title><link rel="stylesheet" href="/style.css?v=<?= asset_ver('/style.css') ?>">
 <?php if ($reveal_style !== ''): ?>
-<link rel="stylesheet" href="/maplibre/maplibre-gl.css">
+<link rel="stylesheet" href="/maplibre/maplibre-gl.css?v=<?= asset_ver('/maplibre/maplibre-gl.css') ?>">
 <?php endif; ?>
 <?php if ($blocked && $cooldown_secs <= 60): ?>
 <meta http-equiv="refresh" content="<?= $cooldown_secs + 2 ?>">
@@ -368,7 +372,9 @@ if ($map_src !== '' && isset($lat, $lng) && map_provider() === MAP_PROVIDER_SELF
                 <div class="reveal-map" id="reveal-map"
                      data-lat="<?= htmlspecialchars($reveal_lat, ENT_QUOTES, 'UTF-8') ?>"
                      data-lng="<?= htmlspecialchars($reveal_lng, ENT_QUOTES, 'UTF-8') ?>"
-                     data-style="<?= htmlspecialchars($reveal_style, ENT_QUOTES, 'UTF-8') ?>"></div>
+                     data-style="<?= htmlspecialchars($reveal_style, ENT_QUOTES, 'UTF-8') ?>"
+                     data-lib="/maplibre/maplibre-gl.js?v=<?= asset_ver('/maplibre/maplibre-gl.js') ?>"
+                     data-pmtiles="/maplibre/pmtiles.js?v=<?= asset_ver('/maplibre/pmtiles.js') ?>"></div>
                 <?php else: ?>
                 <iframe class="map-frame"
                         src="<?= htmlspecialchars($map_src, ENT_QUOTES, 'UTF-8') ?>"
@@ -407,7 +413,8 @@ if ($map_src !== '' && isset($lat, $lng) && map_provider() === MAP_PROVIDER_SELF
                 <div class="photos-grid">
                     <?php foreach ($photos as $ph): ?>
                     <div class="photo-item">
-                        <img src="/uploads/<?= htmlspecialchars($ph['filename'], ENT_QUOTES, 'UTF-8') ?>"
+                        <img src="/uploads/<?= htmlspecialchars(photo_grid_src((string)$ph['filename']), ENT_QUOTES, 'UTF-8') ?>"
+                             data-full="/uploads/<?= htmlspecialchars($ph['filename'], ENT_QUOTES, 'UTF-8') ?>"
                              alt="<?= htmlspecialchars($ph['caption'] ?? '', ENT_QUOTES, 'UTF-8') ?>"
                              loading="lazy">
                         <?php if (!empty($ph['caption'])): ?>
@@ -538,14 +545,15 @@ window.I18N = <?= json_encode([
 <!-- Always loaded: the language auto-apply listener lives here (CSP-clean —
      an inline onchange would be dead under script-src 'self' + nonce), and
      every other block in the file no-ops when its element is absent. -->
-<script src="/public.js"></script>
+<script src="/public.js?v=<?= asset_ver('/public.js') ?>"></script>
 <?php if ($reveal_style !== ''): ?>
-<script src="/maplibre/maplibre-gl.js"></script>
-<script src="/maplibre/pmtiles.js"></script>
-<script src="/reveal-map.js"></script>
+<!-- MapLibre itself lazy-loads on scroll/tap (reveal-map.js): the 1 MB of
+     map JS never parses for recipients who never look at the map. -->
+<script src="/map-attrib.js?v=<?= asset_ver('/map-attrib.js') ?>"></script>
+<script src="/reveal-map.js?v=<?= asset_ver('/reveal-map.js') ?>"></script>
 <?php endif; ?>
 <?php if (!empty($photos)): ?>
-<script src="/gallery.js"></script>
+<script src="/gallery.js?v=<?= asset_ver('/gallery.js') ?>"></script>
 <?php endif; ?>
 </body>
 </html>

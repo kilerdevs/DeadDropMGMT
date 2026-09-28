@@ -60,9 +60,9 @@ register_shutdown_function(static function () use ($proc, $router, $stubDir): vo
 });
 $up = false;
 for ($i = 0; $i < 30; $i++) {
-    try { [$st] = _px_req("http://127.0.0.1:$port/ok"); } catch (Throwable) { $st = 0; usleep(200000); continue; }
+    try { [$st] = _px_req("http://127.0.0.1:$port/ok"); } catch (Throwable) { $st = 0; usleep(50000); continue; }
     if ($st === 200) { $up = true; break; }
-    usleep(200000);
+    usleep(50000);
 }
 T::ok('stub server booted', $up);
 
@@ -140,6 +140,43 @@ T::ok('winner staged for badge', is_array($staged) && ($staged['failed'] ?? null
     && ($staged['attempts'] ?? 0) === 1 && ($staged['via'] ?? '') === "http://127.0.0.1:$port");
 $db->exec('DELETE FROM osm_proxies');
 
+// ── Pool circuit breaker ────────────────────────────────────────────────────
+// A wholesale failure trips the breaker for the SAME pool: the next request
+// fails at once (no attempts) instead of re-walking dead proxies. A changed
+// pool (new member IDs) and any success clear it.
+$db->exec("INSERT INTO osm_proxies (url, label, source, last_status) VALUES ('http://127.0.0.1:1', 'deadE', 'manual', 'new')");
+T::ok('fresh dead pool walks once, then fails closed', osm_fetch("http://127.0.0.1:$port/ok") === false);
+$t0 = microtime(true);
+T::ok('tripped breaker fails at once', osm_fetch("http://127.0.0.1:$port/ok") === false && (microtime(true) - $t0) < 1.5);
+$staged = osm_last_via_stage();
+T::ok('breaker short-circuit stages zero attempts', is_array($staged) && ($staged['failed'] ?? null) === true && ($staged['attempts'] ?? -1) === 0);
+$db->exec('DELETE FROM osm_proxies');
+$db->exec("INSERT INTO osm_proxies (url, label, source, last_status) VALUES ('http://127.0.0.1:$port', 'selfstub2', 'manual', 'new')");
+T::eq('changed pool ignores the old trip', 'STUB-BODY-OK', osm_fetch("http://127.0.0.1:$port/ok"));
+$db->exec('DELETE FROM osm_proxies');
+
+// ── Reverse-label cache ─────────────────────────────────────────────────────
+// A warm cache file answers with no network involved (coordinates round to
+// the 0.01° cell before the key is built); aged files prune away.
+$geoUid = 987001;
+$geoDir = dirname(__DIR__) . '/cache/geocode/' . $geoUid;
+@mkdir($geoDir, 0770, true);
+file_put_contents($geoDir . '/52.23_21.01.json', json_encode(['country' => 'Poland', 'state' => 'Mazovia']));
+T::eq('warm label cache answers without network',
+    ['country' => 'Poland', 'state' => 'Mazovia'], osm_reverse_cached($geoUid, 52.2297, 21.0122));
+@unlink($geoDir . '/52.23_21.01.json');
+@rmdir($geoDir);
+$pruneDir = sys_get_temp_dir() . '/ddmgmt_geo_prune_' . getmypid();
+@mkdir($pruneDir . '/7', 0770, true);
+file_put_contents($pruneDir . '/7/old.json', '{}');
+touch($pruneDir . '/7/old.json', time() - 2592001);
+file_put_contents($pruneDir . '/7/fresh.json', '{}');
+T::eq('prune removes only aged label files', 1, osm_geocode_cache_prune($pruneDir, 2592000));
+T::ok('fresh label file survives prune', is_file($pruneDir . '/7/fresh.json'));
+@unlink($pruneDir . '/7/fresh.json');
+@rmdir($pruneDir . '/7');
+@rmdir($pruneDir);
+
 // Pool ordering: previously-ok proxies sort ahead of dead ones regardless of latency
 $pool = [
     ['url' => 'a', 'last_status' => 'fail', 'latency_ms' => 1],
@@ -168,6 +205,17 @@ T::ok('mark ok records status+latency', $m['last_status'] === 'ok' && (int)$m['l
 osm_proxy_mark($mid, false);
 $m = $db->query("SELECT last_status FROM osm_proxies WHERE id = $mid")->fetch();
 T::eq('mark fail records failure', 'fail', $m['last_status']);
+// Change-only marking: same status + fresh check + close latency skips the
+// DB write; a moved latency or a status flip writes through.
+$db->exec("INSERT INTO osm_proxies (url, label, source, last_status, latency_ms, last_checked) VALUES ('http://127.0.0.1:11', 'skipme', 'manual', 'ok', 42, NOW())");
+$sid = (int)$db->query("SELECT id FROM osm_proxies WHERE url = 'http://127.0.0.1:11'")->fetchColumn();
+$prev = $db->query("SELECT last_status, latency_ms, last_checked FROM osm_proxies WHERE id = $sid")->fetch();
+osm_proxy_mark($sid, true, 45, $prev);
+T::eq('unchanged mark skips the write', 42, (int)$db->query("SELECT latency_ms FROM osm_proxies WHERE id = $sid")->fetchColumn());
+osm_proxy_mark($sid, true, 5000, $prev);
+T::eq('moved latency writes through', 5000, (int)$db->query("SELECT latency_ms FROM osm_proxies WHERE id = $sid")->fetchColumn());
+osm_proxy_mark($sid, false, 5000, $prev);
+T::eq('status flip writes through', 'fail', $db->query("SELECT last_status FROM osm_proxies WHERE id = $sid")->fetchColumn());
 with_table_hidden_px('osm_proxies', function (): void {
     osm_proxy_mark(1, true, 5); // must degrade silently
 });
@@ -235,6 +283,26 @@ $resHead = proxy_multi_probe(['http://127.0.0.1:1'], "http://127.0.0.1:$port/ok"
 T::ok('HEAD-mode batch probe works',
       isset($resHead['http://127.0.0.1:1']) && ($resHead['http://127.0.0.1:1'][0] ?? -1) === 0);
 
+// Parallel fetch: bodies come back per job key (the stub doubles as the
+// forward proxy, same absolute-URI trick as the winner test).
+$jobs = [
+    ['k' => 'ok',   'url' => "http://127.0.0.1:$port/ok",   'proxy' => "http://127.0.0.1:$port"],
+    ['k' => 'miss', 'url' => "http://127.0.0.1:$port/nope", 'proxy' => "http://127.0.0.1:$port"],
+    ['k' => 'dead', 'url' => "http://127.0.0.1:$port/ok",   'proxy' => 'http://127.0.0.1:1'],
+];
+$fetched = proxy_multi_fetch($jobs, 5);
+T::eq('parallel fetch returns bodies per key', 'STUB-BODY-OK', $fetched['ok'][1] ?? null);
+T::ok('parallel fetch marks non-2xx and dead jobs [0, ...]',
+    ($fetched['miss'][0] ?? -1) === 0 && ($fetched['dead'][0] ?? -1) === 0);
+// List fetch: the same round, direct.
+$lists = proxy_fetch_lists_parallel(["http://127.0.0.1:$port/ok", 'http://127.0.0.1:9/x'], 5);
+T::eq('list fetch returns the body', 'STUB-BODY-OK', $lists["http://127.0.0.1:$port/ok"] ?? null);
+T::ok('dead list reads false', $lists['http://127.0.0.1:9/x'] === false);
+// Shared verdict: unanimity + fail-closed, the same table as the single judge.
+T::ok('verdict needs a reachable judge', proxy_judge_bodies_verdict([[0, ''], [0, '']], 'x') === false);
+T::ok('verdict passes unanimous clean', proxy_judge_bodies_verdict([[200, 'clean'], [200, 'ok']], 'x') === true);
+T::ok('verdict rejects any leak', proxy_judge_bodies_verdict([[200, 'clean'], [200, 'has x here']], 'x') === false);
+
 // Stale-pool revalidation: never-checked and week-old entries get probed,
 // fresh ones are left alone. The stub doubles as probe target AND working
 // forward proxy (absolute-URI request line, same as the winner test above);
@@ -261,6 +329,8 @@ T::eq('empty pool revalidates to nothing', [], osm_proxy_revalidate_stale(10, 7,
 
 // Cleanup
 $db->exec("DELETE FROM osm_proxies WHERE url LIKE 'http://127.0.0.1:%'");
+$db->exec("DELETE FROM settings WHERE key_name IN ('pool_down_until', 'pool_down_fp')");
+$c = &_settings_store(); $c = null;
 set_setting('osm_proxy_enabled', '0');
 
 exit(T::done());

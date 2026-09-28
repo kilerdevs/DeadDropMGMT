@@ -431,6 +431,87 @@ function discard_order_photo_file(string $rel): void {
     if (preg_match('#^\d+/[0-9a-f]+\.(jpg|jpeg|png|webp|gif)$#i', $rel) === 1) {
         overwrite_and_unlink(dirname(__DIR__) . '/uploads/' . $rel);
     }
+    $thumb = photo_thumb_rel($rel);
+    if ($thumb !== null) {
+        overwrite_and_unlink(dirname(__DIR__) . '/uploads/' . $thumb);
+    }
+}
+
+// Grid thumbnail derived from the full-size photo: same directory, same
+// random stem, _thumb suffix, always JPEG. Deterministic so every delete
+// path finds it with no schema change (order_photos keeps one row).
+function photo_thumb_rel(string $rel): ?string {
+    if (preg_match('#^(\d+/)([0-9a-f]+)\.(jpg|jpeg|png|webp|gif)$#i', $rel, $m) !== 1) {
+        return null;
+    }
+    return $m[1] . $m[2] . '_thumb.jpg';
+}
+
+// Claim a staged upload (uploads/0/<hex>.<ext>, written before the order row
+// exists) for its order: renames the photo and its thumbnail into
+// uploads/<id>/ and answers the final rel. Null when the stage is missing
+// or the move fails — the caller treats it like a rejected upload, and the
+// hourly staging sweep reaps the leftover (never referenced, never served).
+function photo_staged_claim(string $rel, int $order_id): ?string {
+    if ($order_id <= 0 || preg_match('#^0/([0-9a-f]+)\.(jpg|jpeg|png|webp|gif)$#i', $rel, $m) !== 1) {
+        return null;
+    }
+    $base = dirname(__DIR__) . '/uploads/';
+    $dir = $base . $order_id . '/';
+    if (!is_dir($dir) && !@mkdir($dir, 0750, true)) {
+        return null;
+    }
+    if (!@rename($base . $rel, $dir . $m[1] . '.' . $m[2])) {
+        return null;
+    }
+    $thumb = '0/' . $m[1] . '_thumb.jpg';
+    if (is_file($base . $thumb)) {
+        @rename($base . $thumb, $dir . $m[1] . '_thumb.jpg');
+    }
+    return $order_id . '/' . $m[1] . '.' . $m[2];
+}
+
+// Grid <img> source: the thumbnail when it exists, the full file otherwise
+// (pre-thumbnail rows, or a thumb that failed to write, keep working).
+function photo_grid_src(string $rel): string {
+    $thumb = photo_thumb_rel($rel);
+    if ($thumb !== null && is_file(dirname(__DIR__) . '/uploads/' . $thumb)) {
+        return $thumb;
+    }
+    return $rel;
+}
+
+// Small static JPEG for the 140 px grid: longest edge 400 px, quality 75.
+// Decodes the re-encoded artifact (never the raw upload); transparency is
+// flattened onto white. Best-effort — the grid falls back to the full file.
+function _write_thumb(string $src, string $dest): bool {
+    $loaders = [
+        'image/jpeg' => 'imagecreatefromjpeg',
+        'image/png'  => 'imagecreatefrompng',
+        'image/webp' => 'imagecreatefromwebp',
+        'image/gif'  => 'imagecreatefromgif',
+    ];
+    $mime = (new finfo(FILEINFO_MIME_TYPE))->file($src);
+    $load = $loaders[$mime] ?? null;
+    if (!$load || !function_exists($load)) {
+        return false;
+    }
+    $orig = @$load($src);
+    if (!$orig) {
+        return false;
+    }
+    $w = imagesx($orig);
+    $h = imagesy($orig);
+    $s = min(1.0, 400 / max(1, max($w, $h)));
+    $tw = max(1, (int)round($w * $s));
+    $th = max(1, (int)round($h * $s));
+    $img = imagecreatetruecolor($tw, $th);
+    imagefill($img, 0, 0, imagecolorallocate($img, 255, 255, 255));
+    imagecopyresampled($img, $orig, 0, 0, 0, 0, $tw, $th, $w, $h);
+    $orig = null; // PHP 8.5 deprecates imagedestroy(); GC frees the GdImage
+    $ok = imagejpeg($img, $dest, 75);
+    $img = null;
+    return (bool)$ok;
 }
 
 function save_uploaded_photo(array $file_entry, int $order_id, int $max_bytes = 12582912): string|false {
@@ -516,6 +597,12 @@ function save_uploaded_photo(array $file_entry, int $order_id, int $max_bytes = 
         $dest = $renamed;
     }
 
+    // Grid thumbnail from the verified artifact (never the raw upload).
+    $thumbRel = photo_thumb_rel($order_id . '/' . basename($dest));
+    if ($thumbRel !== null && !_write_thumb($dest, $dir . basename($thumbRel))) {
+        log_err('Thumbnail write failed for: ' . $dest);
+    }
+
     return $order_id . '/' . basename($dest);
 }
 
@@ -539,6 +626,24 @@ function _compress_image(string $src_path, string $dest_path, string $mime, int 
 
     $orig_w = imagesx($orig);
     $orig_h = imagesy($orig);
+    // Cap the longest edge up front: a 16 MP source re-encoded up to 10
+    // times at full resolution is pure CPU burn — the grid shows 140 px and
+    // the lightbox rarely benefits past 2560 px.
+    $cap = 2560 / max(1, max($orig_w, $orig_h));
+    if ($cap < 1.0) {
+        $cw = max(1, (int)round($orig_w * $cap));
+        $ch = max(1, (int)round($orig_h * $cap));
+        $small = imagecreatetruecolor($cw, $ch);
+        if ($mime === 'image/png' || $mime === 'image/gif') {
+            imagealphablending($small, false);
+            imagesavealpha($small, true);
+            imagefill($small, 0, 0, imagecolorallocatealpha($small, 0, 0, 0, 127));
+        }
+        imagecopyresampled($small, $orig, 0, 0, 0, 0, $cw, $ch, $orig_w, $orig_h);
+        $orig = $small;
+        $orig_w = $cw;
+        $orig_h = $ch;
+    }
     $scale   = 1.0;
     $quality = 85; // start quality for JPEG/WebP
 
@@ -577,11 +682,14 @@ function _compress_image(string $src_path, string $dest_path, string $mime, int 
             return (bool)file_put_contents($dest_path, $data);
         }
 
-        // Reduce: lower quality first, then scale down
+        // Reduce: lower quality first, then scale down — estimated from the
+        // size ratio instead of fixed 0.15 steps, so 1-2 encodes land the
+        // budget instead of up to 10 full-resolution ones.
         if (in_array($mime, ['image/jpeg', 'image/webp'], true) && $quality > 50) {
             $quality -= 10;
         } else {
-            $scale   -= 0.15;
+            $size = max(1, strlen($data));
+            $scale *= sqrt($max_bytes / $size) * 0.95;
             $quality  = 82; // reset quality for next scale step
         }
 

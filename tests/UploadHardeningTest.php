@@ -135,6 +135,33 @@ $huge['size'] = 101 * 1024 * 1024;
 $huge['tmp_name'] = $tmpdir . '/does-not-exist.jpg';
 T::ok('oversize rejected pre-sniff', save_uploaded_photo($huge, 910011, 1024) === false);
 
+// 9b ── grid thumbnails: a second small JPEG per photo, cleaned with it
+$big = "$tmpdir/grid.jpg";
+$img = imagecreatetruecolor(1200, 800);
+imagefill($img, 0, 0, imagecolorallocate($img, 30, 200, 90));
+imagejpeg($img, $big, 90);
+$img = null; // PHP 8.5 deprecates imagedestroy(); GC frees the GdImage
+$oid = 910020; _uh_track($oid);
+$relG = save_uploaded_photo(_uh_entry($big), $oid, 2 * 1024 * 1024);
+T::ok('large JPEG accepted', $relG !== false);
+if ($relG !== false) {
+    $thumb = photo_thumb_rel($relG);
+    T::ok('thumbnail path derives deterministically',
+        $thumb !== null && preg_match('#^910020/[0-9a-f]{28}_thumb\.jpg$#', (string)$thumb) === 1);
+    T::ok('thumbnail written', $thumb !== null && is_file("$up/$thumb"));
+    if ($thumb !== null && is_file("$up/$thumb")) {
+        $dim = getimagesize("$up/$thumb");
+        T::ok('thumbnail is small', $dim !== false && max($dim[0], $dim[1]) <= 400);
+        T::ok('thumbnail is a JPEG', str_starts_with((string)file_get_contents("$up/$thumb"), "\xFF\xD8"));
+        T::ok('grid serves the thumbnail', photo_grid_src($relG) === $thumb);
+    }
+    // Deletion takes the thumbnail with the original, no DB row involved.
+    _unlink_order_files($oid, [$relG]);
+    T::ok('order delete removes the original', !is_file("$up/$relG"));
+    T::ok('order delete removes the thumbnail', $thumb === null || !is_file("$up/$thumb"));
+    T::ok('grid falls back to the full file without a thumb', photo_grid_src($relG) === $relG);
+}
+
 // PNG magic but no parseable header: sniffed as image, dimensions unreadable
 $trunc = "$tmpdir/trunc.png";
 file_put_contents($trunc, "\x89PNG\r\n\x1a\n" . str_repeat("\x00", 40));
@@ -180,6 +207,38 @@ $forged = _uh_entry("$tmpdir/ok.jpg");
 $forged['size'] = 200 * 1024 * 1024;
 $oid = 910098; _uh_track($oid);
 T::ok('forged client size cannot skip the ceiling', save_uploaded_photo($forged, $oid, 2 * 1024 * 1024) === false);
+
+// 9c ── staged uploads: processed before the order row, claimed after it
+$stg = "$tmpdir/stage.jpg";
+$img = imagecreatetruecolor(100, 60);
+imagefill($img, 0, 0, imagecolorallocate($img, 40, 200, 40));
+imagejpeg($img, $stg, 90);
+$img = null; // PHP 8.5 deprecates imagedestroy(); GC frees the GdImage
+$oid = 910030; _uh_track($oid);
+$stagedRel = save_uploaded_photo(_uh_entry($stg), 0, 2 * 1024 * 1024);
+T::ok('photo stages under uploads/0/', is_string($stagedRel) && str_starts_with($stagedRel, '0/'));
+if (is_string($stagedRel)) {
+    $claimed = photo_staged_claim($stagedRel, $oid);
+    T::eq('claim moves the photo to the order', "$oid/" . substr($stagedRel, 2), $claimed);
+    T::ok('stage is empty after claim', !is_file("$up/$stagedRel"));
+    $cthumb = $claimed !== null ? photo_thumb_rel($claimed) : null;
+    T::ok('thumbnail moved with the claim', $cthumb !== null && is_file("$up/$cthumb"));
+    T::ok('claim of garbage is null', photo_staged_claim('../../config.php', $oid) === null);
+    T::ok('claim to order 0 is null', photo_staged_claim($stagedRel, 0) === null);
+    if ($claimed !== null) { @unlink("$up/$claimed"); }
+    if ($cthumb !== null) { @unlink("$up/$cthumb"); }
+    @rmdir("$up/$oid");
+}
+// Staging sweep reaps crash orphans but keeps fresh stages.
+@mkdir("$up/0", 0770, true);
+file_put_contents("$up/0/old.jpg", 'x');
+touch("$up/0/old.jpg", time() - 3700);
+file_put_contents("$up/0/fresh.jpg", 'x');
+_sweep_staging_uploads();
+T::ok('sweep reaps aged stages', !is_file("$up/0/old.jpg"));
+T::ok('sweep keeps fresh stages', is_file("$up/0/fresh.jpg"));
+@unlink("$up/0/fresh.jpg");
+@rmdir("$up/0");
 
 // Cleanup: files + rows
 foreach ($orderIds as $oidDel) {

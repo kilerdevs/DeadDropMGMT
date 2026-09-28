@@ -157,6 +157,46 @@ foreach (glob($tmp3 . '/*') ?: [] as $f) {
 }
 @rmdir($tmp3);
 
+// ── Assembler folds duplicate source tiles into run-length entries ────────
+$tmp4 = sys_get_temp_dir() . '/ddmgmt_pmtiles4_' . getmypid();
+@mkdir($tmp4, 0700, true);
+$dupA = (string)gzencode('DUP');
+$dupOther = (string)gzencode('OTHER');
+file_put_contents($tmp4 . '/r.tiles', $dupA . $dupOther);
+$runPlan = [
+    'url' => 'http://127.0.0.1/x', 'proxy' => null,
+    'bbox' => [0.0, 0.0, 1.0, 1.0], 'maxzoom' => 1,
+    'tileType' => PMTILES_TYPE_MVT, 'tileComp' => PMTILES_COMP_GZIP,
+    'outMaxZoom' => 1, 'meta' => base64_encode('{}'),
+    // ids 5+6 share one source copy; id 7 has its own
+    'entries' => [[5, 0, strlen($dupA)], [6, 0, strlen($dupA)], [7, strlen($dupA), strlen($dupOther)]],
+    'spans' => [[0, strlen($dupA) + strlen($dupOther)]],
+    'expected' => 10,
+];
+$runOut = $tmp4 . '/run.pmtiles';
+T::ok('duplicate tiles assemble', pmtiles_assemble($runPlan, $tmp4 . '/r.tiles', $runOut) === $runOut);
+T::ok('run archive verifies', pmtiles_verify_path($runOut));
+$runRaw = (string)file_get_contents($runOut);
+$runHdr = pmtiles_parse_header(substr($runRaw, 0, 127));
+T::ok('run header parses', $runHdr !== null);
+if ($runHdr !== null) {
+    $runRoot = pmtiles_parse_dir(substr($runRaw, $runHdr['rootOff'], $runHdr['rootLen']), $runHdr['intComp']);
+    T::eq('duplicates fold to two directory rows', 2, $runRoot === null ? -1 : count($runRoot));
+    if (is_array($runRoot) && count($runRoot) === 2) {
+        T::eq('folded row is a run of 2', 2, $runRoot[0]['run']);
+        T::eq('mid-run tile resolves to the shared copy', $runRoot[0],
+            pmtiles_lookup_id($runRoot, static fn(): ?array => null, 6));
+        T::eq('addressed count covers every tile', 3, $runHdr['nAddr']);
+    }
+    // One stored copy: file holds dupA once, not twice.
+    T::eq('shared bytes stored once', 127 + $runHdr['rootLen'] + strlen('{}') + strlen($dupA) + strlen($dupOther),
+        filesize($runOut));
+}
+foreach (glob($tmp4 . '/*') ?: [] as $f) {
+    @unlink($f);
+}
+@rmdir($tmp4);
+
 // ── Plan validation fails closed on untrusted sidecar bytes ────────────────
 $good = [
     'url' => 'http://127.0.0.1/x', 'proxy' => null,
@@ -235,6 +275,15 @@ T::eq('lookup later data hit', $mixedRoot[2], pmtiles_lookup_id($mixedRoot, $fet
 T::ok('lookup past end misses', pmtiles_lookup_id($mixedRoot, $fetch, 99) === null);
 T::ok('lookup before start misses', pmtiles_lookup_id($mixedRoot, $fetch, 4) === null);
 T::ok('lookup corrupt leaf fails', pmtiles_lookup_id($mixedRoot, static fn(): ?array => null, 11) === null);
+// Run-length entries (identical tiles, e.g. open sea) cover id..id+run-1:
+// every tile inside the run must resolve, not just the first id.
+$runRoot = [
+    ['id' => 5, 'run' => 3, 'len' => 5, 'off' => 50],
+];
+T::eq('lookup run first id hits', $runRoot[0], pmtiles_lookup_id($runRoot, $fetch, 5));
+T::eq('lookup inside run hits', $runRoot[0], pmtiles_lookup_id($runRoot, $fetch, 6));
+T::eq('lookup run last id hits', $runRoot[0], pmtiles_lookup_id($runRoot, $fetch, 7));
+T::ok('lookup past run misses', pmtiles_lookup_id($runRoot, $fetch, 8) === null);
 
 // Hostile-upstream bounds: an absurd entry count or a gzip bomb fails
 // closed instead of exhausting memory.

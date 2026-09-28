@@ -469,7 +469,7 @@ locked-down `php.ini`. Everything that would normally lean on Docker, cron or pr
 **Set-up without a shell — two ways.** The one-file installer is the short path; the manual steps below it do the same thing by hand.
 
 **A. One-file installer (recommended).** Upload [`tools/install.min.php`](tools/install.min.php) to the web root over FTP and open it in a browser
-(`https://your-host/install.min.php`). It is the minified build of [`tools/install.php`](tools/install.php) — same wizard, smaller upload — regenerated and committed by CI after every push, so it never goes stale. A four-step wizard takes it from there:
+(`https://your-host/install.min.php`). It is the minified build of [`tools/install.php`](tools/install.php) — same wizard, smaller upload — regenerated with `php tools/build_installer_min.php` after any change to the source (CI fails the build while the bundle is stale, so it never silently drifts). A four-step wizard takes it from there:
 
 1. **Server check** — PHP version, extensions, disabled functions, writable folders, database reachability, with the fix next to each failing row.
 2. **Package** — pick a release; the installer downloads it itself (resumable, verified) over a direct connection. No proxy support by design: a host that cannot reach GitHub gets the manual-upload button instead.

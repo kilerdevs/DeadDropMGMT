@@ -28,6 +28,8 @@ services:
       retries: 10
 
   fpm:
+    # See docker-compose.yml: the scanned image is the tested image.
+    image: deaddrop:fpm
     build:
       context: .
       dockerfile: Dockerfile.fpm

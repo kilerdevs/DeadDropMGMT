@@ -212,13 +212,31 @@ function pmtiles_proxy_usable(?string $proxy): bool {
     return proxy_parse($proxy) !== null;
 }
 
+// One curl handle per proxy (or direct): range requests reuse the TCP/TLS
+// connection instead of handshaking every tile and leaf. Handles are keyed
+// by proxy because CURLOPT_PROXY sticks to the handle; every per-request
+// option (URL, Range, timeouts, caps) is re-set on each call. A failed
+// request never poisons the pool — libcurl re-resolves next time.
+/** @return array<string,mixed> */
+function &pmtiles_curl_pool(): array {
+    static $pool = [];
+    return $pool;
+}
+
 /** @return array{?string,string} */
 function pmtiles_range_curl(string $url, int $off, int $len, ?string $proxy, int $timeout): array {
-    $ch = curl_init($url);
-    if ($ch === false) {
-        return [null, 'could not start request'];
+    $pool = &pmtiles_curl_pool();
+    $key = $proxy ?? 'direct';
+    $ch = $pool[$key] ?? null;
+    if (!($ch instanceof \CurlHandle) && !is_resource($ch)) {
+        $ch = curl_init();
+        if ($ch === false) {
+            return [null, 'could not start request'];
+        }
+        $pool[$key] = $ch;
     }
     $cap = $len + 1048576; // servers that ignore Range must not fill memory
+    curl_setopt($ch, CURLOPT_URL, $url);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_FOLLOWLOCATION => true,
@@ -237,9 +255,9 @@ function pmtiles_range_curl(string $url, int $off, int $len, ?string $proxy, int
         curl_setopt($ch, CURLOPT_PROXY, proxy_curl_url($proxy));
     }
     $body = curl_exec($ch);
-    $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
     $err = curl_error($ch);
-    unset($ch); // PHP 8.5 deprecates curl_close(); the handle frees on scope exit
+    // No close: the handle stays pooled for the next range (see above).
     if (!is_string($body)) {
         return [null, $err !== '' ? $err : 'request failed'];
     }
@@ -294,91 +312,201 @@ function pmtiles_transport_ok(): bool {
  * $timeout bounds each directory fetch: under a web-request budget the
  * caller passes what remains of it, so one hung peer cannot eat the whole
  * PHP time limit in a single range request.
- * @return array{?array,string} [plan-or-null, error]
+ * Two phases keep memory flat and requests few: every wanted id is first
+ * resolved to a data entry or a leaf pointer from the root alone (no
+ * network), then the needed leaves are fetched as a few merged ranges and
+ * parsed one at a time — parsed leaves are discarded once their ids
+ * resolve, so peak memory is one leaf plus the resolved entries.
+ * $warmLeaves carries raw leaf bytes from an earlier attempt ("off:len" =>
+ * bytes): sizing resumes instead of restarting. $deadline (absolute,
+ * microtime) aborts the walk cleanly with 'sizing timed out' (0 = none).
+ * @return array{?array,string,array<string,string>} [plan-or-null, error, newly-fetched raw leaves]
  */
-function pmtiles_build_plan(string $url, ?string $proxy, float $minLon, float $minLat, float $maxLon, float $maxLat, int $maxzoom, int $timeout = 60): array {
+function pmtiles_build_plan(string $url, ?string $proxy, float $minLon, float $minLat, float $maxLon, float $maxLat, int $maxzoom, int $timeout = 60, array $warmLeaves = [], float $deadline = 0.0): array {
+    $noPlan = static fn(string $e): array => [null, $e, []];
     [$hRaw, $err] = pmtiles_http_range($url, 0, PMTILES_HEADER_LEN, $proxy, $timeout);
     if ($hRaw === null) {
-        return [null, 'header: ' . $err];
+        return $noPlan('header: ' . $err);
     }
     $hdr = pmtiles_parse_header($hRaw);
     if ($hdr === null) {
-        return [null, 'bad header'];
+        return $noPlan('bad header');
     }
     // The spec keeps header + root directory inside the first 16 KiB; a
     // bigger claim is a hostile or broken upstream, never a real archive.
     if ($hdr['rootLen'] <= 0 || $hdr['rootLen'] > PMTILES_ROOT_MAX) {
-        return [null, 'bad root directory'];
+        return $noPlan('bad root directory');
     }
     [$rootRaw, $err] = pmtiles_http_range($url, $hdr['rootOff'], $hdr['rootLen'], $proxy, $timeout);
     if ($rootRaw === null) {
-        return [null, 'root directory: ' . $err];
+        return $noPlan('root directory: ' . $err);
     }
     $root = pmtiles_parse_dir($rootRaw, $hdr['intComp']);
     if ($root === null) {
-        return [null, 'bad root directory'];
+        return $noPlan('bad root directory');
     }
     $meta = '';
     if ($hdr['metaLen'] > 0) {
         if ($hdr['metaLen'] > PMTILES_META_MAX) {
-            return [null, 'metadata too large'];
+            return $noPlan('metadata too large');
         }
         [$meta, $err] = pmtiles_http_range($url, $hdr['metaOff'], $hdr['metaLen'], $proxy, $timeout);
         if ($meta === null) {
-            return [null, 'metadata: ' . $err];
+            return $noPlan('metadata: ' . $err);
         }
     }
-    $leaves = [];
-    $leafErr = '';
-    $fetchLeaf = static function (int $off, int $len) use ($url, $proxy, $hdr, $timeout, &$leaves, &$leafErr): ?array {
-        $key = $off . ':' . $len;
-        if (!array_key_exists($key, $leaves)) {
-            if ($len <= 0 || $len > PMTILES_SPAN_MAX) {
-                $leafErr = 'bad leaf directory';
-                return null;
-            }
-            [$leafRaw, $err] = pmtiles_http_range($url, $hdr['leafOff'] + $off, $len, $proxy, $timeout);
-            if ($leafRaw === null) {
-                $leafErr = 'leaf directory: ' . $err;
-                return null;
-            }
-            $leaf = pmtiles_parse_dir($leafRaw, $hdr['intComp']);
-            if ($leaf === null) {
-                $leafErr = 'bad leaf directory';
-                return null;
-            }
-            $leaves[$key] = $leaf;
-        }
-        return $leaves[$key];
-    };
     // Fail fast on continent-scale requests: covering_ids + entries + plan
     // JSON all scale with the tile count, and would OOM a small host long
     // before the disk check matters. maps_zone_add() rejects these up front;
     // this guards old rows and direct callers too.
     if (pmtiles_covering_count($minLon, $minLat, $maxLon, $maxLat, $maxzoom) > PMTILES_COVERING_MAX) {
-        return [null, 'too many tiles'];
+        return $noPlan('too many tiles');
     }
-    $wanted = pmtiles_covering_ids($minLon, $minLat, $maxLon, $maxLat, $maxzoom);    $entries = [];
-    foreach ($wanted as $id) {
-        $e = pmtiles_lookup_id($root, $fetchLeaf, $id);
-        if ($e === null) {
-            if ($leafErr !== '') {
-                // A failed leaf fetch must fail the plan: skipping would
-                // silently publish an extract with holes.
-                return [null, $leafErr];
+    // ── Phase 1: resolve every wanted id against the root alone ──────────
+    // Data entries (run > 0) land directly; leaf pointers (run 0) are
+    // collected and deduplicated — no network yet.
+    $wanted = pmtiles_covering_ids($minLon, $minLat, $maxLon, $maxLat, $maxzoom);
+    $entries = [];
+    $needLeaf = []; // "off:len" => [off, len]
+    $n = count($wanted);
+    foreach ($wanted as $i => $id) {
+        if ($deadline > 0 && ($i & 1023) === 0 && microtime(true) >= $deadline) {
+            return $noPlan('sizing timed out');
+        }
+        // Greatest root entry at or below the id (same walk as the lookup).
+        $lo = 0;
+        $hi = count($root) - 1;
+        $cand = null;
+        while ($lo <= $hi) {
+            $mid = ($lo + $hi) >> 1;
+            if ($root[$mid]['id'] === $id) {
+                $cand = $root[$mid];
+                break;
             }
-            continue; // tile absent upstream (ocean, unmapped) — extracts skip it
+            if ($root[$mid]['id'] < $id) {
+                $cand = $root[$mid];
+                $lo = $mid + 1;
+            } else {
+                $hi = $mid - 1;
+            }
         }
-        if ($e['len'] <= 0 || $e['len'] > PMTILES_SPAN_MAX) {
-            return [null, 'bad tile entry'];
+        if ($cand === null) {
+            continue; // below the first entry — absent
         }
-        if ($e['off'] < 0 || $e['off'] + $e['len'] > $hdr['tileLen']) {
-            return [null, 'tile outside data section'];
+        if ($cand['run'] === 0) {
+            $needLeaf[$cand['off'] . ':' . $cand['len']][] = $id;
+            continue;
         }
-        $entries[] = [$id, $hdr['tileOff'] + $e['off'], $e['len']];
+        if ($id >= $cand['id'] + $cand['run']) {
+            continue; // past the run — absent (ocean, unmapped)
+        }
+        $entries[] = [$id, $hdr['tileOff'] + $cand['off'], $cand['len']];
+    }
+    // ── Phase 2: fetch the needed leaves as a few merged ranges ──────────
+    $newLeaves = [];
+    $leafDirs = []; // "off:len" => parsed leaf
+    if ($needLeaf !== []) {
+        $ranges = [];
+        foreach ($needLeaf as $key => $ids) {
+            [$off, $len] = array_map('intval', explode(':', $key, 2));
+            if ($len <= 0 || $len > PMTILES_SPAN_MAX) {
+                return $noPlan('bad leaf directory');
+            }
+            $ranges[] = [$off, $len, $key];
+        }
+        usort($ranges, static fn(array $a, array $b): int => $a[0] <=> $b[0]);
+        // Merge neighbouring leaves so a city extract costs a handful of
+        // requests instead of one per leaf directory.
+        $merged = [];
+        foreach ($ranges as [$off, $len, $key]) {
+            $last = count($merged) - 1;
+            if ($last >= 0 && $off - $merged[$last][1] <= PMTILES_MERGE_GAP
+                && $off + $len - $merged[$last][0] <= PMTILES_SPAN_MAX) {
+                $merged[$last][1] = max($merged[$last][1], $off + $len);
+                $merged[$last][2][] = $key;
+            } else {
+                $merged[] = [$off, $off + $len, [$key]];
+            }
+        }
+        foreach ($merged as [$from, $to, $keys]) {
+            if ($deadline > 0 && microtime(true) >= $deadline) {
+                return $noPlan('sizing timed out');
+            }
+            // Every key warm and parseable: no request at all.
+            $missing = [];
+            foreach ($keys as $key) {
+                if (!isset($warmLeaves[$key]) && !isset($newLeaves[$key])) {
+                    $missing[] = $key;
+                }
+            }
+            $raw = '';
+            if ($missing !== []) {
+                [$raw, $err] = pmtiles_http_range($url, $hdr['leafOff'] + $from, $to - $from, $proxy, $timeout);
+                if ($raw === null) {
+                    return $noPlan('leaf directory: ' . $err);
+                }
+            }
+            // Split the range back into leaf raws at their known offsets.
+            foreach ($keys as $key) {
+                [$off, $len] = array_map('intval', explode(':', $key, 2));
+                if (isset($warmLeaves[$key])) {
+                    $leafRaw = $warmLeaves[$key];
+                } elseif (isset($newLeaves[$key])) {
+                    $leafRaw = $newLeaves[$key];
+                } else {
+                    $leafRaw = substr($raw, $off - $from, $len);
+                    $newLeaves[$key] = $leafRaw;
+                }
+                $leaf = pmtiles_parse_dir($leafRaw, $hdr['intComp']);
+                if ($leaf === null) {
+                    // A corrupt sidecar entry must not poison the plan: drop
+                    // it and refetch that leaf alone (network is truth). A
+                    // corrupt UPSTREAM leaf still fails the plan, as before.
+                    if (isset($warmLeaves[$key]) && !isset($newLeaves[$key])) {
+                        unset($warmLeaves[$key]);
+                        [$one, $oerr] = pmtiles_http_range($url, $hdr['leafOff'] + $off, $len, $proxy, $timeout);
+                        if ($one === null) {
+                            return $noPlan('leaf directory: ' . $oerr);
+                        }
+                        $leaf = pmtiles_parse_dir($one, $hdr['intComp']);
+                        if ($leaf === null) {
+                            return $noPlan('bad leaf directory');
+                        }
+                        $newLeaves[$key] = $one;
+                    } else {
+                        return $noPlan('bad leaf directory');
+                    }
+                }
+                $leafDirs[$key] = $leaf;
+            }
+        }
+        // Resolve the waiting ids; each parsed leaf is discarded afterwards.
+        foreach ($needLeaf as $key => $ids) {
+            $leaf = $leafDirs[$key] ?? null;
+            if ($leaf === null) {
+                return $noPlan('bad leaf directory');
+            }
+            foreach ($ids as $id) {
+                $e = pmtiles_lookup_id($leaf, static fn(): ?array => null, $id);
+                if ($e === null) {
+                    continue; // tile absent upstream — extracts skip it
+                }
+                $entries[] = [$id, $hdr['tileOff'] + $e['off'], $e['len']];
+            }
+            unset($leafDirs[$key]);
+        }
     }
     if ($entries === []) {
-        return [null, 'empty'];
+        return [null, 'empty', $newLeaves];
+    }
+    // Bounds-check every resolved entry (hostile-upstream guard, as before).
+    foreach ($entries as $en) {
+        if ($en[2] <= 0 || $en[2] > PMTILES_SPAN_MAX) {
+            return $noPlan('bad tile entry');
+        }
+        if ($en[1] < $hdr['tileOff'] || $en[1] + $en[2] > $hdr['tileOff'] + $hdr['tileLen']) {
+            return $noPlan('tile outside data section');
+        }
     }
     usort($entries, static fn(array $a, array $b): int => $a[1] <=> $b[1] ?: $a[0] <=> $b[0]);
     // Merge adjacent ranges (gap cap) into spans for fetching.
@@ -408,7 +536,56 @@ function pmtiles_build_plan(string $url, ?string $proxy, float $minLon, float $m
         'outMaxZoom' => min($maxzoom, $hdr['maxZoom']),
         'meta' => base64_encode($meta),
         'entries' => $entries, 'spans' => $spans, 'expected' => $expected,
-    ], ''];
+    ], '', $newLeaves];
+}
+
+// Raw-leaf sidecar: sizing resumes across slices instead of restarting.
+// Shape {url, leaves: {"off:len": base64}} — the url pins the bytes to the
+// planet build that produced them; a build change starts cold, never mixed.
+// Atomic like the plan sidecar (tmp + rename); corrupt files read as empty.
+// @return array{url:string,leaves:array<string,string>} raw bytes keyed "off:len"
+function pmtiles_leaves_load(string $path): array {
+    if (!is_file($path)) {
+        return ['url' => '', 'leaves' => []];
+    }
+    $raw = @file_get_contents($path);
+    if (!is_string($raw)) {
+        return ['url' => '', 'leaves' => []];
+    }
+    try {
+        $side = json_decode($raw, true, 4, JSON_THROW_ON_ERROR);
+    } catch (Throwable) {
+        return ['url' => '', 'leaves' => []];
+    }
+    if (!is_array($side) || !is_string($side['url'] ?? null) || !is_array($side['leaves'] ?? null)) {
+        return ['url' => '', 'leaves' => []];
+    }
+    $leaves = [];
+    foreach ($side['leaves'] as $key => $b64) {
+        if (!is_string($key) || !is_string($b64)) {
+            continue;
+        }
+        $bytes = base64_decode($b64, true);
+        if (is_string($bytes) && $bytes !== '' && strlen($bytes) <= PMTILES_SPAN_MAX) {
+            $leaves[$key] = $bytes;
+        }
+    }
+    return ['url' => $side['url'], 'leaves' => $leaves];
+}
+
+/** @param array<string,string> $leaves raw bytes keyed "off:len" */
+function pmtiles_leaves_save(string $path, string $url, array $leaves): bool {
+    $enc = [];
+    foreach ($leaves as $key => $bytes) {
+        if (is_string($bytes) && strlen($bytes) <= PMTILES_SPAN_MAX) {
+            $enc[$key] = base64_encode($bytes);
+        }
+    }
+    $tmp = $path . '.tmp';
+    if (@file_put_contents($tmp, json_encode(['url' => $url, 'leaves' => $enc], JSON_UNESCAPED_SLASHES)) === false) {
+        return false;
+    }
+    return @rename($tmp, $path);
 }
 
 /**
@@ -538,15 +715,30 @@ function pmtiles_assemble(array $plan, string $tilesPath, string $destPath): ?st
         return null;
     };
     // Final data offsets are cumulative in id order — known before reading.
-    $dirEntries = [];
-    $doff = 0;
-    foreach ($byId as $i => $e) {
+    // Consecutive ids sharing one source offset/length (e.g. a source run
+    // the planner expanded per id) fold back into a single run-length entry:
+    // the bytes are stored once, not copied per tile.
+    $segments = []; // [firstId, run, len, filePos, srcOff]
+    foreach ($byId as $e) {
         $at = $locate($e['src']);
         if ($at === null) {
             return null;
         }
-        $dirEntries[] = ['id' => $e['id'], 'len' => $e['len'], 'off' => $doff, 'at' => $at];
-        $doff += $e['len'];
+        $last = count($segments) - 1;
+        if ($last >= 0 && $e['id'] === $segments[$last][0] + $segments[$last][1]
+            && $e['src'] === $segments[$last][4] && $e['len'] === $segments[$last][2]) {
+            $segments[$last][1]++;
+            continue;
+        }
+        $segments[] = [$e['id'], 1, $e['len'], $at, $e['src']];
+    }
+    $dirEntries = [];
+    $doff = 0;
+    $nAddr = 0;
+    foreach ($segments as [$id, $run, $len, $at]) {
+        $dirEntries[] = ['id' => $id, 'run' => $run, 'len' => $len, 'off' => $doff, 'at' => $at];
+        $doff += $len;
+        $nAddr += $run;
     }
     $rootDir = pmtiles_dir_encode($dirEntries);
     if ($rootDir === '') {
@@ -566,7 +758,9 @@ function pmtiles_assemble(array $plan, string $tilesPath, string $destPath): ?st
         . pmtiles_u64le($metaOff) . pmtiles_u64le(strlen($meta))
         . pmtiles_u64le($tileOff) . pmtiles_u64le(0)
         . pmtiles_u64le($tileOff) . pmtiles_u64le($doff)
-        . pmtiles_u64le($n) . pmtiles_u64le($n) . pmtiles_u64le($n)
+        // Header order is nAddr, nEntries, nContents: with run-length
+        // entries one directory row addresses $run tiles.
+        . pmtiles_u64le($nAddr) . pmtiles_u64le($n) . pmtiles_u64le($n)
         . chr(1) . chr(PMTILES_COMP_GZIP) . chr((int)$plan['tileComp']) . chr((int)$plan['tileType'])
         . chr(0) . chr($maxzoom)
         . pmtiles_i32le((int)round($minLon * 1e7)) . pmtiles_i32le((int)round($minLat * 1e7))
@@ -659,13 +853,16 @@ function pmtiles_verify_path(string $path): bool {
         return false;
     }
     $data = 0;
+    $addr = 0;
     foreach ($entries as $e) {
-        if ($e['run'] !== 1 || $e['len'] <= 0
+        // Run-length entries share one stored copy across $run tiles.
+        if (($e['run'] ?? 1) < 1 || $e['len'] <= 0
             || $e['off'] < 0 || $e['off'] + $e['len'] > $hdr['tileLen']
         ) {
             fclose($fh);
             return false;
         }
+        $addr += $e['run'];
         $data += $e['len'];
         if ($hdr['tileComp'] === PMTILES_COMP_GZIP) {
             fseek($fh, $hdr['tileOff'] + $e['off']);
@@ -679,7 +876,7 @@ function pmtiles_verify_path(string $path): bool {
     fclose($fh);
     return $data === $hdr['tileLen']
         && count($entries) === $hdr['nEntries']
-        && count($entries) === $hdr['nAddr'];
+        && $addr === $hdr['nAddr'];
 }
 
 /** Plan sidecar surroundings: atomic-enough for a worker file (write tmp + rename). */
@@ -953,5 +1150,8 @@ function pmtiles_lookup_id(array $entries, callable $fetchLeaf, int $id, int $de
         }
         return pmtiles_lookup_id($leaf, $fetchLeaf, $id, $depth + 1);
     }
-    return $cand['id'] === $id ? $cand : null;
+    // A run-length entry covers id .. id+run-1 (PMTiles stores identical
+    // tiles, e.g. open sea or uniform land, as one run): match anywhere
+    // inside the run, not just on its first id.
+    return ($cand['id'] <= $id && $id < $cand['id'] + $cand['run']) ? $cand : null;
 }

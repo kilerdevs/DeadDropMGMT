@@ -1,5 +1,13 @@
 name: CI
 
+concurrency:
+  # The same commit runs as push:dev AND pull_request; a release fans out to
+  # three full 13-job runs. Sharing one group per ref stops the pile-up
+  # (queued test jobs waited ~60 s in run 36345330215). Master runs to
+  # completion — cancelling a release build mid-deploy is worse than waiting.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
 on:
   push:
     branches: [master, dev]
@@ -11,27 +19,85 @@ permissions:
   contents: read
 
 jobs:
+  # Path gate for the heavy jobs: docs-only changes (markdown, docs/) skip
+  # image scans, smoke/DAST and e2e. `paths-ignore` exists only at trigger
+  # level (a job-level key is invalid and fails the whole run), so a tiny
+  # always-running gate job carries the verdict instead. Its outputs drive
+  # `if:` on the heavy jobs; the `docker` aggregate below keeps a stable
+  # gate name for branch protection. NOTE: if image-scan / smoke-dast / e2e
+  # are required checks today, require `changed paths` + `docker` instead —
+  # a skipped required check blocks the merge.
+  changes:
+    runs-on: ubuntu-24.04
+    name: changed paths
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        with:
+          # Pushes compare the pushed range; PRs compare against their base.
+          # The default (merge-base with the default branch) would see all
+          # of dev on every dev push, since master lags behind releases.
+          base: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+          filters: |
+            code:
+              - '!**.md'
+              - '!docs/**'
+
   tests:
     runs-on: ubuntu-24.04
     # README promises PHP 8.2+ (8.0/8.1 are EOL — testing them would bless
     # unpatched runtimes). 8.5 is in the matrix because the shipped Docker
     # images already run it — the production runtime must never go untested.
     # fail-fast so one broken version doesn't hide results from the others.
+    # One matrix, three concerns: the PHP axis, MySQL 8 portability (setup.sql
+    # must stay portable — guarded ALTERs, no engine-only syntax), and the
+    # shipped mariadb:13 under Europe/Warsaw TZ (the UTC-default runner once
+    # let a UTC-write/local-read limiter skew through untested).
     strategy:
       fail-fast: false
       matrix:
-        php: ['8.2', '8.3', '8.4', '8.5']
-    name: tests (PHP ${{ matrix.php }})
+        include:
+          - php: '8.2'
+            db: 'mariadb:11'
+            tz: ''
+            label: 'PHP 8.2 · mariadb:11'
+          - php: '8.3'
+            db: 'mariadb:11'
+            tz: ''
+            label: 'PHP 8.3 · mariadb:11'
+          - php: '8.4'
+            db: 'mariadb:11'
+            tz: ''
+            label: 'PHP 8.4 · mariadb:11'
+          - php: '8.5'
+            db: 'mariadb:11'
+            tz: ''
+            label: 'PHP 8.5 · mariadb:11'
+          - php: '8.3'
+            db: 'mysql:8.0'
+            tz: ''
+            label: 'PHP 8.3 · mysql:8.0'
+          - php: '8.3'
+            db: 'mariadb:13'
+            tz: 'Europe/Warsaw'
+            label: 'PHP 8.3 · mariadb:13 · Europe/Warsaw TZ'
+    name: tests (${{ matrix.label }})
     services:
-      # setup.sql uses MariaDB syntax (ALTER TABLE ... ADD COLUMN IF NOT EXISTS)
-      mariadb:
-        image: mariadb:11
+      db:
+        image: ${{ matrix.db }}
         env:
           MARIADB_ROOT_PASSWORD: root
+          MYSQL_ROOT_PASSWORD: root
         ports:
           - 3306:3306
         options: >-
-          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-cmd="mysqladmin ping -proot 2>/dev/null || healthcheck.sh --connect --innodb_initialized"
           --health-interval=5s
           --health-timeout=5s
           --health-retries=10
@@ -41,6 +107,7 @@ jobs:
       DDMGMT_DB_USER: root
       DDMGMT_DB_PASS: root
       DDMGMT_TEST_DB: deaddrops_test
+      TZ: ${{ matrix.tz }}
     steps:
       # Third-party actions are pinned to commit SHAs, not moving tags: a
       # hijacked tag must not be able to run code in this repo.
@@ -58,7 +125,7 @@ jobs:
         run: cp config.php.example config.php
 
       - name: Lint
-        run: git ls-files '*.php' | xargs -n1 php -l > /dev/null
+        run: git ls-files '*.php' | xargs -n1 -P"$(nproc)" php -l > /dev/null
 
       - name: Load schema into test database
         run: php tests/schema_loader.php
@@ -66,93 +133,6 @@ jobs:
       # setup.sql promises re-running is a harmless no-op (the upgrade path
       # for existing installs) — prove it every build by loading twice.
       - name: Reload schema (idempotency proof)
-        run: php tests/schema_loader.php
-
-      - name: Run tests
-        run: php tests/run_all.php
-
-  # Same suite against MySQL 8 — the app claims MySQL/MariaDB support, and
-  # setup.sql must stay portable (guarded ALTERs, no engine-only syntax).
-  tests-mysql:
-    runs-on: ubuntu-24.04
-    name: tests (MySQL 8)
-    services:
-      mysql:
-        image: mysql:8.0
-        env:
-          MYSQL_ROOT_PASSWORD: root
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd="mysqladmin ping -proot"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=10
-    env:
-      DDMGMT_DB_HOST: 127.0.0.1
-      DDMGMT_DB_PORT: '3306'
-      DDMGMT_DB_USER: root
-      DDMGMT_DB_PASS: root
-      DDMGMT_TEST_DB: deaddrops_test
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Setup PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
-        with:
-          php-version: '8.3'
-          extensions: pdo_mysql, openssl, gd, fileinfo
-
-      - name: Prepare config
-        run: cp config.php.example config.php
-
-      - name: Load schema into test database
-        run: php tests/schema_loader.php
-
-      - name: Run tests
-        run: php tests/run_all.php
-
-  # Timezone robustness: the rate limiter once mixed a UTC write clock with a
-  # local-time read clock, silently neutering windows east of UTC — and CI
-  # runs in UTC, so that whole class slips through untested. This job runs
-  # the full battery under Europe/Warsaw (UTC+1/+2), where the skew fails
-  # open and any regression burns the suite's own budget math. TZ is honored
-  # because the runner image leaves date.timezone unset (UTC default).
-  tests-tz:
-    runs-on: ubuntu-24.04
-    name: tests (Europe/Warsaw TZ)
-    services:
-      mariadb:
-        image: mariadb:11
-        env:
-          MARIADB_ROOT_PASSWORD: root
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd="healthcheck.sh --connect --innodb_initialized"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=10
-    env:
-      DDMGMT_DB_HOST: 127.0.0.1
-      DDMGMT_DB_PORT: '3306'
-      DDMGMT_DB_USER: root
-      DDMGMT_DB_PASS: root
-      DDMGMT_TEST_DB: deaddrops_test
-      TZ: Europe/Warsaw
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Setup PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
-        with:
-          php-version: '8.3'
-          extensions: pdo_mysql, openssl, gd, fileinfo
-
-      - name: Prepare config
-        run: cp config.php.example config.php
-
-      - name: Load schema into test database
         run: php tests/schema_loader.php
 
       - name: Run tests
@@ -304,6 +284,9 @@ jobs:
   mutation:
     runs-on: ubuntu-24.04
     name: Mutation probe (report-only)
+    # Report-only signal, not a merge gate: dev pushes and the weekly sweep
+    # are enough to watch the MSI trend; PRs and release builds skip it.
+    if: github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')
     services:
       mariadb:
         image: mariadb:11
@@ -354,25 +337,54 @@ jobs:
           retention-days: 14
 
   # Docker isn't installed on the maintainer's machine — these jobs are the
-  # only place the images and compose stacks actually get exercised.
-  docker:
+  # only place the images and compose stacks actually get exercised. Two
+  # parallel jobs, each building once from the shared GHA layer cache (same
+  # inputs, same layers): image-scan holds the CVE/SBOM gates, smoke-dast
+  # the boot/journey/ZAP proofs. The aggregate `docker` job below keeps the
+  # branch-protection check name stable no matter which half is skipped.
+  image-scan:
     runs-on: ubuntu-24.04
-    env:
-      DDMGMT_DB_HOST: db
-      DDMGMT_DB_PORT: '3306'
-      DDMGMT_DB_USER: deaddrop
-      DDMGMT_DB_PASS: deaddrop-db
-      # Keep the pipeline hermetic: no automatic proxy discovery (public list
-      # downloads, probes) while the stacks boot. ProxyHealTest covers it.
-      DDMGMT_PROXY_HEAL: '0'
+    name: image scan (Grype + SBOM)
+    # Docs-only changes need no rebuild or vulnerability scan (via `changes`).
+    # != 'false' (not == 'true'): a detection hiccup must run everything,
+    # never silently skip it.
+    needs: [changes]
+    if: needs.changes.outputs.code != 'false'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # Container driver: the default docker driver loads images but cannot
+      # export the GHA layer cache (and vice versa) — this builder does both.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # Weekly apt bust: the ISO week rides into the Dockerfiles as
+      # APT_BUST, so the apt-get upgrade layer rebuilds against fresh
+      # Debian packages instead of serving month-old cached layers.
+      - name: Cache-bust week
+        id: week
+        run: echo "iso=$(date -u +%V)" >> "$GITHUB_OUTPUT"
+
       - name: Build Apache image
-        run: docker build -t deaddrop:apache .
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          outputs: type=docker
+          tags: deaddrop:apache
+          cache-from: type=gha,scope=apache
+          cache-to: type=gha,mode=max,scope=apache
+          build-args: APT_BUST=${{ steps.week.outputs.iso }}
 
       - name: Build PHP-FPM image
-        run: docker build -f Dockerfile.fpm -t deaddrop:fpm .
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile.fpm
+          outputs: type=docker
+          tags: deaddrop:fpm
+          cache-from: type=gha,scope=fpm
+          cache-to: type=gha,mode=max,scope=fpm
+          build-args: APT_BUST=${{ steps.week.outputs.iso }}
 
       # Vulnerability scans of BOTH shipped images (the FPM image is what the
       # nginx and Caddy stacks actually run): HIGH/CRITICAL findings with a
@@ -387,6 +399,8 @@ jobs:
           only-fixed: true
           fail-build: true
           output-format: table
+          # The vuln DB download+install is ~90 s of every scan; cache it.
+          cache-db: true
 
       - name: Scan FPM image (Grype)
         uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
@@ -396,29 +410,80 @@ jobs:
           only-fixed: true
           fail-build: true
           output-format: table
+          cache-db: true
 
       # SBOM (CycloneDX) for both images — the inventory that makes the CVE
       # scans auditable and gives downstream deployers something to diff.
+      # Written outside the workspace: files landing next to the Dockerfile
+      # bust the COPY . layer cache, and the smoke job would then test an
+      # image the scanner never saw (and serve the SBOM from its docroot).
       - name: Generate Apache SBOM (CycloneDX)
         uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
           image: deaddrop:apache
           format: cyclonedx-json
-          output-file: sbom-apache.cdx.json
+          output-file: ${{ runner.temp }}/sbom-apache.cdx.json
 
       - name: Generate FPM SBOM (CycloneDX)
         uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
           image: deaddrop:fpm
           format: cyclonedx-json
-          output-file: sbom-fpm.cdx.json
+          output-file: ${{ runner.temp }}/sbom-fpm.cdx.json
 
       - name: Upload SBOMs
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sbom
-          path: sbom-*.cdx.json
+          path: ${{ runner.temp }}/sbom-*.cdx.json
           retention-days: 30
+
+  smoke-dast:
+    runs-on: ubuntu-24.04
+    name: smoke + DAST (compose + ZAP)
+    needs: [changes]
+    if: needs.changes.outputs.code != 'false'
+    env:
+      DDMGMT_DB_HOST: db
+      DDMGMT_DB_PORT: '3306'
+      DDMGMT_DB_USER: deaddrop
+      DDMGMT_DB_PASS: deaddrop-db
+      # Keep the pipeline hermetic: no automatic proxy discovery (public list
+      # downloads, probes) while the stacks boot. ProxyHealTest covers it.
+      DDMGMT_PROXY_HEAL: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Cache-bust week
+        id: week
+        run: echo "iso=$(date -u +%V)" >> "$GITHUB_OUTPUT"
+
+      # Same inputs + same GHA cache scopes as image-scan: the layers under
+      # test are the layers Grype scanned. No --build below — compose uses
+      # these prebuilt tags (image: in the compose files).
+      - name: Build Apache image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          outputs: type=docker
+          tags: deaddrop:apache
+          cache-from: type=gha,scope=apache
+          cache-to: type=gha,mode=max,scope=apache
+          build-args: APT_BUST=${{ steps.week.outputs.iso }}
+
+      - name: Build PHP-FPM image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile.fpm
+          outputs: type=docker
+          tags: deaddrop:fpm
+          cache-from: type=gha,scope=fpm
+          cache-to: type=gha,mode=max,scope=fpm
+          build-args: APT_BUST=${{ steps.week.outputs.iso }}
 
       - name: Validate compose files
         run: |
@@ -434,7 +499,7 @@ jobs:
       - name: Smoke test + lifecycle journey (Apache)
         run: |
           trap 'docker compose ps -a; echo "--- APP LOGS ---"; docker compose logs --no-color app' ERR
-          docker compose up -d --build --quiet-pull
+          docker compose up -d --quiet-pull
           timeout 90 bash -c 'until curl -fs http://127.0.0.1:2137/ >/dev/null; do sleep 2; done'
           curl -fs http://127.0.0.1:2137/ | grep -qi "<title>"
           hz_body="$(curl -s http://127.0.0.1:2137/healthz.php)"
@@ -445,7 +510,7 @@ jobs:
 
       - name: Smoke test (nginx + fpm)
         run: |
-          docker compose -f docker-compose.nginx.yml up -d --build --quiet-pull
+          docker compose -f docker-compose.nginx.yml up -d --quiet-pull
           timeout 90 bash -c 'until curl -fs http://127.0.0.1:2137/ >/dev/null; do sleep 2; done'
           curl -fs http://127.0.0.1:2137/ | grep -qi "<title>"
           [ "$(curl -s http://127.0.0.1:2137/healthz.php)" = "ok" ]
@@ -456,7 +521,7 @@ jobs:
 
       - name: Smoke test (Caddy + fpm)
         run: |
-          docker compose -f docker-compose.caddy.yml up -d --build --quiet-pull
+          docker compose -f docker-compose.caddy.yml up -d --quiet-pull
           timeout 90 bash -c 'until curl -fs http://127.0.0.1:2137/ >/dev/null; do sleep 2; done'
           curl -fs http://127.0.0.1:2137/ | grep -qi "<title>"
           [ "$(curl -s http://127.0.0.1:2137/healthz.php)" = "ok" ]
@@ -474,7 +539,7 @@ jobs:
       # fails the build. Re-triage whenever headers or pages change.
       - name: Boot stack for DAST
         run: |
-          docker compose up -d --build --quiet-pull
+          docker compose up -d --quiet-pull
           timeout 90 bash -c 'until curl -fs http://127.0.0.1:2137/healthz.php >/dev/null; do sleep 2; done'
 
       - name: ZAP baseline scan (gated)
@@ -489,49 +554,25 @@ jobs:
         if: always()
         run: docker compose down -v
 
-  # Minified web installer: tools/install.min.php is generated, never edited
-  # by hand. After every push this job rebuilds it from tools/install.php and
-  # commits the result back ([skip ci] — no loop). InstallerMinTest's
-  # freshness gate keeps branches honest in between: a stale .min fails the
-  # suite with the rebuild command. Write access is scoped to this job only
-  # (the workflow default above stays read-only); skipped on PRs, where the
-  # token cannot push.
-  installer-min:
+  # Aggregate gate: keeps the `docker` check name for branch protection while
+  # the halves above run in parallel (or skip on docs-only changes). Fails
+  # when either half really failed — skips are fine, cancellations are not.
+  docker:
     runs-on: ubuntu-24.04
-    name: Minified installer (rebuild + commit-back)
-    permissions:
-      contents: write
-    if: github.event_name == 'push'
-    concurrency:
-      group: installer-min-${{ github.ref }}
-      cancel-in-progress: false
+    name: docker
+    needs: [image-scan, smoke-dast]
+    if: always()
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-
-      - name: Setup PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
-        with:
-          php-version: '8.3'
-
-      - name: Rebuild minified installer
-        run: |
-          php -l tools/install.php
-          php tools/build_installer_min.php | tee min-build.txt
-          php -l tools/install.min.php
-          { echo "### Minified installer"; cat min-build.txt; } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Commit back when the source moved
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add tools/install.min.php
-          git diff --cached --quiet && { echo 'in sync — nothing to commit'; exit 0; }
-          git commit -m 'Installer: rebuild minified bundle [skip ci]' \
-            -m 'Why: source moved; CI-regenerated from tools/install.php.'
-          git pull --rebase origin "${{ github.ref_name }}"
-          git push origin "HEAD:${{ github.ref_name }}"
+      - run: |
+          scan='${{ needs.image-scan.result }}'
+          smoke='${{ needs.smoke-dast.result }}'
+          echo "image-scan=$scan smoke-dast=$smoke"
+          if [ "$scan" = success ] && [ "$smoke" = success ]; then exit 0; fi
+          if [ "$scan" = skipped ] && [ "$smoke" = skipped ]; then
+            echo 'docs-only change: nothing docker-related to verify'
+            exit 0
+          fi
+          exit 1
 
   # Real-browser E2E (Playwright/Chromium): the behaviours raw HTTP cannot
   # see — no-JS form paths, inline-handler absence in a live DOM, mid-reveal
@@ -542,6 +583,12 @@ jobs:
   e2e:
     runs-on: ubuntu-24.04
     name: e2e (Playwright/Chromium)
+    # Docs-only changes exercise no browser behaviour (via `changes`).
+    # NOTE: same branch-protection caveat as above — a skipped required
+    # check blocks the merge; require `changed paths` instead if e2e is
+    # required today.
+    needs: [changes]
+    if: needs.changes.outputs.code != 'false'
     services:
       mariadb:
         image: mariadb:11
@@ -582,8 +629,16 @@ jobs:
       - name: Install E2E dependencies
         run: npm ci
 
+      - name: Cache Playwright browsers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
       - name: Install Chromium
-        run: npx playwright install --with-deps chromium
+        # Headless shell only (no full Chromium + ffmpeg): the specs drive
+        # one headless Chromium, and the shell build downloads far faster.
+        run: npx playwright install --with-deps --only-shell chromium
 
       - name: Run browser tests
         run: npx playwright test

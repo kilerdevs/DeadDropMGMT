@@ -129,7 +129,16 @@ function overwrite_and_unlink(string $path): void {
         if ($size > 0) {
             $fh = @fopen($path, 'r+');
             if ($fh !== false) {
-                @fwrite($fh, str_repeat("\0", $size));
+                // 1 MiB chunks: a single str_repeat($size) allocates the
+                // whole file in RAM and fatals (uncatchable) on
+                // multi-hundred-MB database dumps against a 256M limit.
+                $zero = str_repeat("\0", 1048576);
+                $left = $size;
+                while ($left > 0) {
+                    $w = @fwrite($fh, $zero, min($left, 1048576));
+                    if (!is_int($w) || $w <= 0) break;
+                    $left -= $w;
+                }
                 @fflush($fh);
                 // Without fsync the zeros usually sit in the page cache and
                 // the unlink below discards them before they reach the disk.

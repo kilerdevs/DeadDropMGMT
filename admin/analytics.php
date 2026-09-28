@@ -47,17 +47,22 @@ try {
     // Summary counts
     $summary = $db->query(
         "SELECT event_type, COUNT(*) AS cnt FROM order_events
-         WHERE event_type NOT LIKE 'admin_%' $date_cond
-         GROUP BY event_type"
+          WHERE 1=1 $date_cond
+          GROUP BY event_type"
     )->fetchAll();
     $counts = [];
     foreach ($summary as $r) { $counts[$r['event_type']] = (int)$r['cnt']; }
 
-    // Unique visitor IPs
-    $unique_ips = (int)$db->query(
-        "SELECT COUNT(DISTINCT ip_address) FROM order_events
-         WHERE event_type NOT LIKE 'admin_%' $date_cond"
-    )->fetchColumn();
+    // Totals and unique visitor IPs in the same pass — one statement
+    // instead of two. (No event_type filter: only lookup, unlock_success,
+    // unlock_fail and received are ever written; the old NOT LIKE 'admin_%'
+    // matched nothing and only defeated the index.)
+    $totals = $db->query(
+        "SELECT COUNT(*) AS total, COUNT(DISTINCT ip_address) AS uips
+          FROM order_events
+          WHERE 1=1 $date_cond"
+    )->fetch();
+    $unique_ips = (int)($totals['uips'] ?? 0);
 
     // Daily breakdown (fixed 14 days regardless of period filter)
     $daily = $db->query(
@@ -66,9 +71,8 @@ try {
                 SUM(event_type = 'unlock_success') AS odblokowania,
                 SUM(event_type = 'unlock_fail')    AS bledy,
                 SUM(event_type = 'received')       AS odbiory
-         FROM order_events
-         WHERE event_type NOT LIKE 'admin_%'
-           AND created_at >= DATE_SUB(NOW(), INTERVAL 14 DAY)
+          FROM order_events
+          WHERE created_at >= DATE_SUB(NOW(), INTERVAL 14 DAY)
          GROUP BY DATE(created_at)
          ORDER BY dzien DESC"
     )->fetchAll();
@@ -81,11 +85,10 @@ try {
                 SUM(e.event_type = 'unlock_fail')    AS bledy,
                 MAX(e.created_at)                    AS ostatnia_aktywnosc,
                 o.status
-         FROM order_events e
-         LEFT JOIN orders o ON o.token_hmac = e.token_hmac
-         WHERE e.event_type NOT LIKE 'admin_%'
-           AND e.token_hmac IS NOT NULL
-           $date_cond_e
+          FROM order_events e
+          LEFT JOIN orders o ON o.token_hmac = e.token_hmac
+          WHERE e.token_hmac IS NOT NULL
+            $date_cond_e
          GROUP BY e.token_hmac
          ORDER BY ostatnia_aktywnosc DESC
          LIMIT 25"
@@ -108,11 +111,8 @@ try {
          GROUP BY ip_address ORDER BY cnt DESC LIMIT 15"
     )->fetchAll();
 
-    // Total event count for pagination
-    $total_events = (int)$db->query(
-        "SELECT COUNT(*) FROM order_events
-         WHERE event_type NOT LIKE 'admin_%' $date_cond"
-    )->fetchColumn();
+    // Total event count for pagination (already known from the pass above).
+    $total_events = (int)($totals['total'] ?? array_sum($counts));
     $total_pages = max(1, (int)ceil($total_events / $per_page));
     $page = min($page, $total_pages);
     $offset = ($page - 1) * $per_page; // recompute: $offset above used the unclamped ?page=
@@ -120,9 +120,9 @@ try {
     // Recent events (paginated)
     $recent = $db->query(
         "SELECT e.event_type, e.token_hmac, o.token_enc, o.token_iv, e.ip_address, e.user_agent, e.created_at
-         FROM order_events e
-         LEFT JOIN orders o ON o.token_hmac = e.token_hmac
-         WHERE e.event_type NOT LIKE 'admin_%' $date_cond_e
+          FROM order_events e
+          LEFT JOIN orders o ON o.token_hmac = e.token_hmac
+          WHERE 1=1 $date_cond_e
          ORDER BY e.created_at DESC
          LIMIT " . (int)$per_page . ' OFFSET ' . (int)$offset
     )->fetchAll();
@@ -366,6 +366,6 @@ $csrf = generate_csrf();
 
     </main>
 </div>
-<script src="/admin/admin.js"></script>
+<script src="/admin/admin.js?v=<?= asset_ver('/admin/admin.js') ?>"></script>
 </body>
 </html>

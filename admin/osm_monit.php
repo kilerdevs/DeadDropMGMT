@@ -26,6 +26,10 @@ require_once dirname(__DIR__) . '/includes/i18n.php';
         'failover' => t('admin.osm_monit.failover'),
     ]) ?>;
     var timer = null;
+    function schedule(ms) {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(tick, ms);
+    }
 
     function render(d) {
         // Routing off -> badge off entirely; poll slowly so a re-enable
@@ -57,16 +61,20 @@ require_once dirname(__DIR__) . '/includes/i18n.php';
     }
 
     function tick() {
+        // Chained, never overlapping: the next round waits for this answer.
+        // Hidden tabs pause (an open map tab must not keep the admin logged
+        // in forever by refreshing login_time every 5 s).
+        if (document.hidden) { schedule(5000); return; }
         fetch('/admin/osm_status.php')
             .then(function (r) { return r.json(); })
             .then(function (d) {
-                var interval = render(d) || 5000;
-                clearInterval(timer);
-                timer = setInterval(tick, interval);
+                schedule(render(d) || 5000);
             })
-            .catch(function () {});
+            .catch(function () { schedule(5000); });
     }
     tick();
-    timer = setInterval(tick, 5000);
+    document.addEventListener('visibilitychange', function () {
+        if (!document.hidden) tick();
+    });
 })();
 </script>

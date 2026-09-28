@@ -9,6 +9,83 @@ All notable changes to DeadDropMGMT are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.6.2] - 2026-09-28
+
+Optimization review findings: two real bugs (PMTiles run-length holes,
+cleanup infinite loop) plus performance work across proxy, maps, frontend,
+DB, logging, photos and CI (see below). No schema action needed beyond the
+normal setup.sql upgrade path.
+
+### Fixed
+- PHP-engine zone sizing read the same run-length tile twice and reported
+  water/uniform land as missing: run entries now match anywhere inside
+  `id..id+run-1`, and assembled extracts fold duplicate source tiles back
+  into single run-length entries (fewer bytes on disk, verified by header
+  `nAddr`).
+- Expired-order cleanup could loop forever when a full batch kept failing:
+  the sweep pages forward by id with statements prepared once, so poison
+  rows are stepped over instead of re-selected.
+- setup.sql comments carrying a mid-line `;` split the PHP schema splitter
+  (but not the mysql CLI): all such comments reworded; proven by fresh +
+  upgrade imports.
+
+### Changed
+- Proxy pool circuit breaker: a wholesale pool failure trips a 60 s shared
+  breaker (pool fingerprint), so 15-30 parallel tile requests fail at once
+  instead of re-walking dead proxies and stalling every PHP worker.
+  Per-attempt timeout 3 s → 2 s, whole-request budget 20 s → 10 s.
+- Orphan-event purge uses two indexed `NOT EXISTS` checks in 5000-row
+  batches instead of an unindexed `OR` join with no limit.
+- Panic wipe shreds logs and backups before photos and the tile cache,
+  writes zeros in 1 MiB chunks (no more OOM on large dumps), and survives
+  client disconnects and time limits.
+- Analytics runs 6 queries instead of 8 (totals + unique IPs in one pass,
+  dead `NOT LIKE 'admin_%'` filters removed) with a new
+  `(event_type, created_at, ip_address)` index; the orders list paginates
+  (50/page) with a `(created_by, created_at)` index; redundant indexes
+  dropped (`users.idx_username`, `order_events.idx_ip/idx_event_type`,
+  `orders.idx_created_by`); `audit_log` gains `idx_token_hmac` for key
+  rotation. Fresh installs and upgrades converge to the same shape (guarded
+  `ADD`/`DROP INDEX`, proven both ways).
+- Rate limiting spends in one atomic upsert + one read (no transaction),
+  keeping the fail-closed contract on corrupt rows.
+- Map sizing fetches needed leaf directories as a few merged ranges (not
+  one request per leaf), resumes across slices from a raw-leaf sidecar, and
+  aborts cleanly past the slice budget instead of dying past
+  `max_execution_time` and stalling the queue; a shutdown guard releases
+  the worker lock on fatals. Range requests share one curl handle per proxy.
+- Photos get a 400 px JPEG grid thumbnail (grid serves it, lightbox the
+  full file); the compressor caps the long edge at 2560 px and estimates
+  scale steps from the size ratio (1-2 encodes, not up to 10). Uploads
+  stage under `uploads/0/` before the order row exists (short transaction),
+  with an hourly orphan sweep.
+- First-party `<script>`/`<link>` carry `?v=` mtimes (`asset_ver()`); nginx,
+  Caddy and Apache send `immutable` for vendored libs, glyphs, zone
+  archives and versioned URLs. MapLibre loads lazily on scroll/tap on the
+  public reveal. Tile proxy answers `ETag`/`304` and writes atomically.
+  Monitors poll chained (no overlap, paused in hidden tabs). Map engine
+  sidecars (`.plan.leaves` included) are denied on all three servers.
+- Proxy discovery downloads all 9 lists in one parallel round and judges
+  both anonymity judges in one parallel round (shared verdict helper);
+  pool marks skip unchanged rows; the curl-less prober no longer busy-waits
+  and measures latency per proxy; chunked bodies decode incrementally.
+- CI: docker job split into parallel `image-scan` + `smoke-dast` with an
+  aggregate `docker` gate; Grype DB cached; GHA layer cache with a weekly
+  apt bust; SBOMs in runner temp; images purge `-dev` packages; compose
+  services pin `image:` tags so the scanned image is the tested one;
+  `tests-mysql`/`tests-tz` folded into the matrix (now with mariadb:13);
+  report-only mutation on dev pushes/schedule only; docs-only changes skip
+  image/e2e jobs; Playwright headless shell + browser cache; parallel lint;
+  50 ms readiness polls; ArrayInput batches names (~70 requests, bisect on
+  failure); PseudoCron waits on healthz instead of fixed sleeps. The
+  installer-min commit-back job is gone — `InstallerMinTest` stays the gate,
+  rebuild locally with `php tools/build_installer_min.php`.
+- Log viewer and continuity check stream instead of holding whole files;
+  `app_log()` holds one lock across rotate + append; cleanup logs one
+  summary per sweep.
+- Reverse-geocode pin labels cache per account (30 d) server-side, with a
+  client label cache, request abort and pre-rounded coordinates.
+
 ## [1.6.1] - 2026-09-27
 
 First release of the 1.6 line on `master`: 1.6.0 was tagged but never
@@ -1165,7 +1242,8 @@ First tagged release: the security-hardened core, fully gated by CI.
 - Actions pinned by SHA, workflows read-only, Dependabot
   (actions + composer + docker)
 
-[Unreleased]: https://github.com/kilerdevs/DeadDropMGMT/compare/v1.6.1...HEAD
+[Unreleased]: https://github.com/kilerdevs/DeadDropMGMT/compare/v1.6.2...HEAD
+[1.6.2]: https://github.com/kilerdevs/DeadDropMGMT/compare/v1.6.1...v1.6.2
 [1.6.1]: https://github.com/kilerdevs/DeadDropMGMT/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/kilerdevs/DeadDropMGMT/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/kilerdevs/DeadDropMGMT/compare/v1.4.0...v1.5.0

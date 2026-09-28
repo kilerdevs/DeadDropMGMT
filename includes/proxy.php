@@ -219,6 +219,78 @@ function proxy_chunked_feed(string $buf): ?array {
     }
 }
 
+// Incremental chunked decoder for the response reader below: the same
+// framing rules as proxy_chunked_feed (kept for its unit pins), but with a
+// parse offset across reads — re-feeding the whole buffered remainder on
+// every read re-scans and re-copies megabytes for multi-MB chunks.
+// Payload bytes emit as they arrive (completion still waits for the chunk's
+// trailing CRLF); a corrupt frame fails the whole response either way, so
+// early emission never smuggles bytes past the caller's checks.
+function proxy_chunked_state(): array {
+    return ['buf' => '', 'off' => 0, 'size' => null, 'done' => false];
+}
+
+/** @return ?array{string,bool} [newly-decoded bytes, done] (null = corrupt framing) */
+function proxy_chunked_push(array &$st, string $more): ?array {
+    $st['buf'] .= $more;
+    $out = '';
+    while (true) {
+        if ($st['done']) {
+            return [$out, true];
+        }
+        if ($st['size'] === null) {
+            $i = strpos($st['buf'], "\r\n", $st['off']);
+            if ($i === false) {
+                if (strlen($st['buf']) - $st['off'] > PROXY_CHUNK_LINE_MAX) {
+                    return null;
+                }
+                break; // partial size line — wait for more
+            }
+            $line = substr($st['buf'], $st['off'], $i - $st['off']);
+            if (strlen($line) > PROXY_CHUNK_LINE_MAX
+                || preg_match('/^([0-9a-fA-F]{1,8})(;[^\r]*)?$/', $line, $m) !== 1) {
+                return null;
+            }
+            $size = hexdec($m[1]);
+            if ($size > PROXY_CHUNK_MAX) {
+                return null;
+            }
+            $st['off'] = $i + 2;
+            if ($size === 0) {
+                $st['done'] = true;
+                $st['buf'] = '';
+                $st['off'] = 0;
+                return [$out, true];
+            }
+            $st['size'] = $size;
+        }
+        $take = min($st['size'], strlen($st['buf']) - $st['off']);
+        if ($take > 0) {
+            $out .= substr($st['buf'], $st['off'], $take);
+            $st['off'] += $take;
+            $st['size'] -= $take;
+        }
+        if ($st['size'] > 0) {
+            break; // need more payload bytes
+        }
+        if (strlen($st['buf']) - $st['off'] < 2) {
+            break; // chunk complete, trailing CRLF not here yet
+        }
+        if (substr($st['buf'], $st['off'], 2) !== "\r\n") {
+            return null;
+        }
+        $st['off'] += 2;
+        $st['size'] = null;
+        // Compact the parsed prefix so the buffer never holds more than a
+        // sliver of already-emitted bytes.
+        if ($st['off'] > 1048576) {
+            $st['buf'] = substr($st['buf'], $st['off']);
+            $st['off'] = 0;
+        }
+    }
+    return [$out, false];
+}
+
 // Response header lines (without the status line) as name => value, names
 // lowercased; repeated headers keep the first — Content-Length games between
 // duplicates fail closed downstream via the exact-length checks.
@@ -582,15 +654,15 @@ function proxy_request_streams(string $method, string $url, array $headers = [],
             $noBody = $method === 'HEAD' || $code === 204 || $code === 304;
             $ok = true;
             if (!$noBody && ($fields['transfer-encoding'] ?? '') !== '' && str_contains(strtolower($fields['transfer-encoding']), 'chunked')) {
-                $buf = $rest;
+                $st = proxy_chunked_state();
+                $fed = proxy_chunked_push($st, $rest);
                 $rest = '';
                 while (true) {
-                    $fed = proxy_chunked_feed($buf);
                     if ($fed === null) {
                         $ok = false;
                         break;
                     }
-                    [$dec, $buf, $fin] = $fed;
+                    [$dec, $fin] = $fed;
                     if ($cap !== null && $bytes + strlen($dec) > $cap) {
                         // Over the cap: keep the head of it (callers that
                         // tolerate long bodies, like Range-ignoring servers,
@@ -614,7 +686,7 @@ function proxy_request_streams(string $method, string $url, array $headers = [],
                         $ok = false; // EOF mid-chunks is corruption, never a short body
                         break;
                     }
-                    $buf .= $more;
+                    $fed = proxy_chunked_push($st, $more);
                 }
             } elseif (!$noBody) {
                 $buf = $rest;
@@ -782,8 +854,20 @@ function osm_is_png(string $data): bool {
     return str_starts_with($data, "\x89PNG\r\n\x1a\n");
 }
 
-function osm_proxy_mark(int $id, bool $ok, ?int $latency_ms = null): void {
+function osm_proxy_mark(int $id, bool $ok, ?int $latency_ms = null, ?array $prev = null): void {
     try {
+        // One tile miss used to UPDATE on every attempt: skip the write when
+        // nothing material changed (same status, fresh check, similar
+        // latency). Status flips and stale rows always write through.
+        if (is_array($prev)) {
+            $sameStatus = ($prev['last_status'] ?? null) === ($ok ? 'ok' : 'fail');
+            $prevMs = (int)($prev['latency_ms'] ?? ($latency_ms ?? 0));
+            $latencyClose = $latency_ms === null || abs($prevMs - $latency_ms) < 500;
+            $checkedAt = isset($prev['last_checked']) ? strtotime((string)$prev['last_checked']) : false;
+            if ($sameStatus && $latencyClose && $checkedAt !== false && (time() - $checkedAt) < 60) {
+                return;
+            }
+        }
         get_db()->prepare(
             'UPDATE osm_proxies
              SET last_status = ?, latency_ms = ?, last_checked = NOW()
@@ -837,6 +921,40 @@ function osm_proxy_revalidate_stale(int $max = 3, int $stale_days = 7, ?string $
     }
 }
 
+// ── Pool circuit breaker ──────────────────────────────────────────────────
+// One map view fires 15-30 tile requests at once; when every proxy is dead
+// they all walk the whole pool (seconds each) and take every PHP worker
+// with them. Tripping records "pool down until T" plus a fingerprint of the
+// pool that failed, so later requests against the SAME pool fail at once
+// instead of re-probing. A changed pool (heal/discovery swapped members)
+// clears the trip implicitly through the fingerprint; any success clears it
+// explicitly. Shared through the settings table so all FPM workers see it.
+function osm_pool_circuit_fp(array $pool): string {
+    $ids = [];
+    foreach ($pool as $px) {
+        $ids[] = (int)($px['id'] ?? 0);
+    }
+    sort($ids);
+    return implode(',', $ids);
+}
+
+function osm_pool_circuit_open(array $pool): bool {
+    if ((int)get_setting('pool_down_until', '0') <= time()) {
+        return false;
+    }
+    return get_setting('pool_down_fp', '') === osm_pool_circuit_fp($pool);
+}
+
+function osm_pool_circuit_trip(array $pool, int $secs = 60): void {
+    set_setting('pool_down_until', (string)(time() + $secs));
+    set_setting('pool_down_fp', osm_pool_circuit_fp($pool));
+}
+
+function osm_pool_circuit_clear(): void {
+    set_setting('pool_down_until', '0');
+    set_setting('pool_down_fp', '');
+}
+
 // Fetch an OSM resource honouring the osm_proxy_enabled setting. Tries each
 // pool member fastest-first; gives up (returns false) if all fail while
 // routing is enabled — that is the point of fail-closed.
@@ -864,7 +982,12 @@ function osm_fetch(string $url, int $maxBytes = 2097152): string|false {
 
     // Try the fastest known-good proxy first: working ones ordered by last
     // measured latency, then untested, then previously-dead as last resort.
-    // Each attempt gets 3 seconds before moving on to the next candidate.
+    // Each attempt gets 2 seconds before moving on to the next candidate;
+    // the whole request is capped at 10 s. A tripped circuit breaker (the
+    // same pool failed wholesale under a minute ago) skips the walk and
+    // fails at once — one map view fires dozens of parallel tile requests,
+    // and without this they re-probe the dead pool together and stall
+    // every PHP worker.
     usort($pool, function ($a, $b) {
         $rank = function ($p) {
             return match ($p['last_status'] ?? '') {
@@ -878,19 +1001,24 @@ function osm_fetch(string $url, int $maxBytes = 2097152): string|false {
         return ((int)($a['latency_ms'] ?? PHP_INT_MAX)) <=> ((int)($b['latency_ms'] ?? PHP_INT_MAX));
     });
 
-    $deadline = microtime(true) + 20.0; // whole-request budget across all attempts
+    $deadline = microtime(true) + 10.0; // whole-request budget across all attempts
     $attempts = 0;
     $skipped  = []; // proxies that timed out / failed before the winner
+    if (osm_pool_circuit_open($pool)) {
+        osm_last_via_set(['via' => null, 'failed' => true, 'attempts' => 0, 'skipped' => []]);
+        return false; // same pool just failed wholesale — don't re-probe it
+    }
     foreach ($pool as $px) {
         if (microtime(true) >= $deadline || connection_aborted()) {
             break; // budget exhausted or client gone — stop burning the pool
         }
         $attempts++;
         $t0     = microtime(true);
-        $result = osm_fetch_via($url, $px['url'], 3, $maxBytes);
+        $result = osm_fetch_via($url, $px['url'], 2, $maxBytes);
         $ms     = (int)round((microtime(true) - $t0) * 1000);
-        osm_proxy_mark((int)$px['id'], $result !== false, $ms);
+        osm_proxy_mark((int)$px['id'], $result !== false, $ms, $px);
         if ($result !== false) {
+            osm_pool_circuit_clear(); // the pool works again — lift any trip
             osm_last_via_set([
                 'via'        => osm_proxy_redact($px['url']),
                 'latency_ms' => $ms,
@@ -906,6 +1034,9 @@ function osm_fetch(string $url, int $maxBytes = 2097152): string|false {
         $skipped[] = osm_proxy_redact($px['url']);
     }
     osm_last_via_set(['via' => null, 'failed' => true, 'attempts' => $attempts, 'skipped' => $skipped]);
+    if ($attempts > 0) {
+        osm_pool_circuit_trip($pool); // wholesale failure — spare the next requests the walk
+    }
     if ($skipped) {
         osm_proxy_heal_kick();
     }
@@ -941,6 +1072,76 @@ function osm_reverse_parse(string $data): ?array {
     return is_array($addr) ? $addr : null;
 }
 
+// Cached reverse lookup: pin labels repeat for every pin click, drag and
+// edit-page load, and each one costs a full proxied Nominatim request plus
+// a slice of the 60/minute budget. Labels change with map data, not with
+// time — a per-account file cache keyed by coordinates rounded to 0.01°
+// (≈1 km, matching the endpoint's own rounding) with a 30-day life.
+// Per account like the tile cache (one account's viewed areas must never
+// leak into another's). Only the address array is stored, never raw coords
+// beyond the rounded cache key. Never throws; a dead cache just misses.
+/** @return ?array<string,mixed> */
+function osm_reverse_cached(int $uid, float $lat, float $lng): ?array {
+    $lat = round($lat, 2);
+    $lng = round($lng, 2);
+    $key = sprintf('%.2F_%.2F', $lat, $lng);
+    $dir = dirname(__DIR__) . '/cache/geocode/' . $uid;
+    $file = $dir . '/' . $key . '.json';
+    try {
+        if (is_file($file) && (time() - (int)@filemtime($file)) < 2592000) {
+            $hit = json_decode((string)@file_get_contents($file), true);
+            if (is_array($hit)) {
+                return $hit;
+            }
+        }
+    } catch (Throwable) {
+    }
+    $addr = osm_reverse_lookup($lat, $lng);
+    if ($addr !== null) {
+        try {
+            if (!is_dir($dir)) {
+                @mkdir($dir, 0770, true);
+            }
+            @file_put_contents($file, json_encode($addr, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        } catch (Throwable) {
+        }
+    }
+    return $addr;
+}
+
+// Prune aged reverse-label entries (hourly cleanup). Returns files removed;
+// never throws.
+function osm_geocode_cache_prune(?string $dir = null, int $ttl = 2592000): int {
+    $dir = $dir ?? dirname(__DIR__) . '/cache/geocode';
+    if (!is_dir($dir)) {
+        return 0;
+    }
+    $removed = 0;
+    try {
+        $now = time();
+        $it = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS),
+            RecursiveIteratorIterator::CHILD_FIRST
+        );
+        foreach ($it as $f) {
+            $p = $f->getPathname();
+            if ($f->isDir()) {
+                @rmdir($p); // only succeeds when empty
+                continue;
+            }
+            if ($f->isLink() || !$f->isFile()) {
+                @unlink($p);
+                continue;
+            }
+            if (($now - $f->getMTime()) >= $ttl && @unlink($p)) {
+                $removed++;
+            }
+        }
+    } catch (Throwable $e) {
+        log_err('Geocode cache prune: ' . $e->getMessage());
+    }
+    return $removed;
+}
 // Nominatim reverse URL for a point, or null outside geography (pure —
 // the network half of osm_reverse_lookup stays thin and untested by unit
 // suites, which must never reach tile hosts).
@@ -993,6 +1194,8 @@ function osm_last_via_set(array $info): void {
 // Write the staged badge info to the session. Safe to call even when the
 // session was closed (or never started) — it re-opens the session briefly,
 // writes, and closes again so locks are held only for milliseconds.
+// Identical re-writes are skipped: 30 parallel tile misses would otherwise
+// serialize on the session file for no new information.
 function osm_last_via_flush(): void {
     $staged = osm_last_via_stage();
     if ($staged === null) return;
@@ -1001,7 +1204,9 @@ function osm_last_via_flush(): void {
         session_start();
     }
     if (session_status() === PHP_SESSION_ACTIVE) {
-        $_SESSION['osm_last_via'] = $staged;
+        if (($_SESSION['osm_last_via'] ?? null) !== $staged) {
+            $_SESSION['osm_last_via'] = $staged;
+        }
         session_write_close();
     }
 }
@@ -1065,16 +1270,113 @@ function proxy_public_ip(): ?string {
 // when none are reachable the answer is false (could not verify — maximum
 // security means reject). $judges override exists for tests.
 function proxy_judge_anonymous(string $pxUrl, string $ourIp, int $timeout_s = 6, ?array $judges = null): bool {
-    $seen = false;
+    $got = [];
     foreach ($judges ?? PROXY_ANONYMITY_JUDGES as $judge) {
         $body = osm_fetch_via($judge, $pxUrl, $timeout_s);
-        if ($body === false) continue; // judge unreachable through this proxy — try next judge
+        // Unreachable judges contribute nothing (skipped below); a false
+        // body must not stringify into an accidental "clean" vote.
+        $got[] = $body === false ? [0, ''] : [200, $body];
+    }
+    return proxy_judge_bodies_verdict($got, $ourIp);
+}
+
+// Shared anonymity verdict over parallel- or sequential-fetched judge
+// answers: at least one judge reachable, and no reachable answer leaks our
+// IP. One decision point, so the discovery round and the single check can
+// never disagree on what "anonymous" means.
+/** @param list<array{int,string}> $got [httpCode, body] per judge */
+function proxy_judge_bodies_verdict(array $got, string $ourIp): bool {
+    $seen = false;
+    foreach ($got as [$code, $body]) {
+        if ($code < 200 || $code >= 300) {
+            continue; // judge unreachable through this proxy — try next judge
+        }
         $seen = true;
         if (str_contains($body, $ourIp)) {
             return false; // our IP leaked into the request as seen by the target
         }
     }
     return $seen;
+}
+
+// One parallel round of GETs, each through its own proxy (or direct when
+// 'proxy' is null). Returns [jobKey => [httpCode, body]]; failures are
+// [0, '']. curl_multi is the fast path (bodies via multi_getcontent);
+// without cURL the same jobs run sequentially through the streams
+// transport. Never throws.
+// @param list<array{k:string,url:string,proxy:?string}> $jobs
+/** @return array<string,array{int,string}> */
+function proxy_multi_fetch(array $jobs, int $timeout_s, int $maxBytes = 65536): array {
+    $out = [];
+    foreach ($jobs as $j) {
+        $out[$j['k']] = [0, ''];
+    }
+    if ($jobs === []) {
+        return $out;
+    }
+    if (!host_has_curl()) {
+        foreach ($jobs as $j) {
+            $res = proxy_request_streams('GET', $j['url'], [], $j['proxy'], $timeout_s, $maxBytes, 0);
+            if ($res['code'] >= 200 && $res['code'] < 300 && !$res['truncated']) {
+                $out[$j['k']] = [$res['code'], $res['body']];
+            }
+        }
+        return $out;
+    }
+    $mh = curl_multi_init();
+    $handles = [];
+    foreach ($jobs as $j) {
+        $ch = curl_init($j['url']);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT        => $timeout_s,
+            CURLOPT_CONNECTTIMEOUT => min($timeout_s, 10),
+            CURLOPT_MAXFILESIZE    => $maxBytes,
+            CURLOPT_USERAGENT      => 'DeadDropMGMT/1.0',
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS      => 3,
+        ]);
+        if ($j['proxy'] !== null) {
+            curl_setopt($ch, CURLOPT_PROXY, proxy_curl_url($j['proxy']));
+        }
+        curl_multi_add_handle($mh, $ch);
+        $handles[$j['k']] = $ch;
+    }
+    do {
+        $status = curl_multi_exec($mh, $active);
+        if ($active) {
+            curl_multi_select($mh, 0.2);
+        }
+    } while ($active && $status === CURLM_OK);
+    foreach ($handles as $k => $ch) {
+        $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        $body = curl_multi_getcontent($ch);
+        if ($code >= 200 && $code < 300 && is_string($body)) {
+            $out[$k] = [$code, $body];
+        }
+        curl_multi_remove_handle($mh, $ch);
+        unset($ch); // PHP 8.5 deprecates curl_close(); removal + scope exit frees it
+    }
+    curl_multi_close($mh);
+    return $out;
+}
+
+// The 9 proxy lists in one parallel round (direct — list downloads never
+// touch the pool, so privacy is unchanged). Returns [url => body|false].
+// Without cURL the same downloads run sequentially through the fetcher.
+function proxy_fetch_lists_parallel(array $urls, int $timeout_s): array {
+    $jobs = [];
+    foreach ($urls as $u) {
+        $jobs[] = ['k' => $u, 'url' => $u, 'proxy' => null];
+    }
+    $got = proxy_multi_fetch($jobs, $timeout_s, 2097152);
+    $out = [];
+    foreach ($urls as $u) {
+        [$code, $body] = $got[$u] ?? [0, ''];
+        $out[$u] = ($code >= 200 && $code < 300 && $body !== '') ? $body : false;
+    }
+    return $out;
 }
 
 // Pull candidates from public sources, then probe them in parallel against a
@@ -1098,17 +1400,15 @@ function proxy_discover(int $max_test = 400, int $timeout_s = 4, ?float $budget_
     $remaining = static fn(): float => $budget_s === null ? INF : $budget_s - (microtime(true) - $started);
     $candidates = []; // url => ['rated' => bool, 'source' => list name]
 
-    foreach (PROXY_DISCOVERY_SOURCES as $i => $src) {
-        // Stop collecting once the download share of the budget is spent: what
-        // is in hand gets probed instead of starting another slow download.
-        if ($budget_s !== null && $i > 0 && $remaining() < $budget_s * 0.4) {
-            break;
-        }
-        $fetchTimeout = $budget_s === null ? 10 : max(2, min(6, (int)floor($remaining() - $budget_s * 0.4)));
+    // The 9 lists download in ONE parallel round (direct, never through the
+    // pool) instead of one slow download after another.
+    $fetchTimeout = $budget_s === null ? 10 : max(2, min(6, (int)floor($budget_s * 0.6)));
+    $bodies = proxy_fetch_lists_parallel(
+        array_column(PROXY_DISCOVERY_SOURCES, 'url'), $fetchTimeout);
+    foreach (PROXY_DISCOVERY_SOURCES as $src) {
         // Third-party list bodies are the largest untrusted input on this
-        // path — same 2 MiB ceiling as the shared fetcher (cURL where
-        // available, so allow_url_fopen is not required).
-        $raw = osm_fetch_via($src['url'], null, $fetchTimeout, 2097152);
+        // path — capped at 2 MiB by the parallel fetcher above.
+        $raw = $bodies[$src['url']] ?? false;
         if (!is_string($raw)) {
             continue;
         }
@@ -1176,27 +1476,34 @@ function proxy_discover(int $max_test = 400, int $timeout_s = 4, ?float $budget_
     }
     if (!$working) return [];
 
-    // Round 2: live anonymity verification for unrated HTTP proxies.
+    // Round 2: live anonymity verification for unrated HTTP proxies — both
+    // judges in ONE parallel round (proxy × judge jobs), verdicts from the
+    // fetched bodies. The old code probed judge[0] in parallel, threw the
+    // bodies away, then re-fetched both judges sequentially per proxy.
     $unrated = array_values(array_filter($working, fn($p) => $candidates[$p['url']]['rated'] === false
         && str_starts_with($p['url'], 'http://')));
-    if ($budget_s !== null) {
-        $unrated = array_slice($unrated, 0, 10); // all a budgeted run can afford to judge
-    }
+    $unrated = array_slice($unrated, 0, $budget_s === null ? 100 : 10);
     $judged = [];
-    if ($unrated && $remaining() > 8.0) {
+    if ($unrated !== [] && $remaining() > 8.0) {
         $ourIp = proxy_public_ip();
         if ($ourIp !== null) {
-            foreach (array_chunk($unrated, 50) as $chunk) {
-                $urls     = array_column($chunk, 'url');
-                $judgeRes = proxy_multi_probe($urls, PROXY_ANONYMITY_JUDGES[0], $timeout_s, $timeout_s, false);
-                foreach ($urls as $pxUrl) {
-                    if ($remaining() < 4.0) {
-                        $judged[$pxUrl] = false; // out of time: unproven means rejected
-                        continue;
-                    }
-                    [$code, ] = $judgeRes[$pxUrl] ?? [0, 0];
-                    $judged[$pxUrl] = $code >= 200 && $code < 300 && proxy_judge_anonymous($pxUrl, $ourIp);
+            $jobs = [];
+            foreach ($unrated as $p) {
+                foreach (PROXY_ANONYMITY_JUDGES as $ji => $judge) {
+                    $jobs[] = ['k' => $p['url'] . "\0" . $ji, 'url' => $judge, 'proxy' => $p['url']];
                 }
+            }
+            $got = proxy_multi_fetch($jobs, $timeout_s);
+            foreach ($unrated as $p) {
+                if ($remaining() < 4.0) {
+                    $judged[$p['url']] = false; // out of time: unproven means rejected
+                    continue;
+                }
+                $answers = [];
+                foreach (PROXY_ANONYMITY_JUDGES as $ji => $judge) {
+                    $answers[] = $got[$p['url'] . "\0" . $ji] ?? [0, ''];
+                }
+                $judged[$p['url']] = proxy_judge_bodies_verdict($answers, $ourIp);
             }
         }
     }
@@ -1306,20 +1613,27 @@ function proxy_multi_probe_streams(array $proxies, string $url, int $timeout_s, 
                 $socks[$u] = $s;
             }
         }
+        $connected = [];
         while ($socks !== [] && microtime(true) < $connectDl) {
             $left = $connectDl - microtime(true);
             $r = null;
             $w = array_values($socks);
             $e = null;
             if (@stream_select($r, $w, $e, (int)$left, (int)(($left - (int)$left) * 1000000)) === false) break;
-            $pending = false;
+            // Finished sockets leave the set: connected ones stay writable,
+            // so re-selecting them would return at once and spin hot until
+            // the deadline while the hangers pend. (A writable socket may
+            // still be a FAILED connect — the peer-name check below sorts
+            // those out; both end up in $connected here.) A quiet timeout
+            // slice just re-waits the remainder.
             foreach ($socks as $u => $s) {
-                if (!in_array($s, $w, true)) {
-                    $pending = true;
+                if (in_array($s, $w, true)) {
+                    $connected[$u] = $s;
+                    unset($socks[$u]);
                 }
             }
-            if (!$pending) break;
         }
+        $socks = $connected + $socks;
         foreach ($socks as $u => $s) {
             // A failed async connect also selects writable — no peer name means it never connected.
             if (@stream_socket_get_name($s, true) === false) {
@@ -1331,7 +1645,10 @@ function proxy_multi_probe_streams(array $proxies, string $url, int $timeout_s, 
         // Phase 2: handshake + request each survivor, one after another,
         // sharing the remaining global budget.
         foreach ($socks as $u => $s) {
-            $ms = (int)round((microtime(true) - $t0) * 1000);
+            // Per-proxy latency from THIS proxy's start, not the batch
+            // start: later proxies must not inherit earlier handshakes and
+            // wrongly fail the 3000 ms cut / sort last.
+            $p0 = microtime(true);
             $close = static function () use ($s): void {
                 if (is_resource($s)) fclose($s);
             };
@@ -1375,7 +1692,7 @@ function proxy_multi_probe_streams(array $proxies, string $url, int $timeout_s, 
             if (!is_array($split)) continue;
             $code = proxy_status_code($split[0]);
             if ($code >= 100) {
-                $out[$u] = [$code, $ms];
+                $out[$u] = [$code, (int)round((microtime(true) - $p0) * 1000)];
             }
         }
         return $out;

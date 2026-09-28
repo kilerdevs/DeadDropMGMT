@@ -49,7 +49,7 @@ for ($t = 0; $t < 10 && $port === 0; $t++) {
             }
         } catch (Throwable) {
         }
-        usleep(200000);
+        usleep(50000);
     }
     if ($ready) {
         $port = $cand;

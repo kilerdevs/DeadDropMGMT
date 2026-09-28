@@ -65,7 +65,10 @@ mkdir -p "$DOCROOT/logs" "$DOCROOT/uploads" "$DOCROOT/cache/osm_tiles"
 # The logs volume predates logs/.htaccess on existing stacks; seed it so the
 # folder is denied per-directory (and Setup check stays green).
 [ -f "$DOCROOT/logs/.htaccess" ] || printf 'Require all denied\n' > "$DOCROOT/logs/.htaccess"
-chown -R www-data:www-data "$DOCROOT/logs" "$DOCROOT/uploads" "$DOCROOT/cache" /config
+# Touch only files with wrong ownership: chown -R walks (and stats) the whole
+# tile cache on every start, which is thousands of files for active admins.
+find "$DOCROOT/logs" "$DOCROOT/uploads" "$DOCROOT/cache" /config \
+    ! -user www-data -exec chown www-data:www-data {} + 2>/dev/null || true
 
 if [ "${DDMGMT_DB_PASS:-}" = "deaddrop-db" ]; then
     echo "[entrypoint] WARNING: DDMGMT_DB_PASS is the published default — set DB_PASS in .env before exposing this stack" >&2

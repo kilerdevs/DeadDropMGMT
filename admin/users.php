@@ -195,7 +195,7 @@ $_active = 'users';
     </main>
 </div>
 
-<script src="/admin/admin.js"></script>
+<script src="/admin/admin.js?v=<?= asset_ver('/admin/admin.js') ?>"></script>
 <script nonce="<?= htmlspecialchars($csp_nonce, ENT_QUOTES, 'UTF-8') ?>">
 (function () {
     // Hide all pw-form-panels initially

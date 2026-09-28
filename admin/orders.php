@@ -38,6 +38,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delet
 // ── Courier filter (owner only) ───────────────────────────────────────────────
 $filter_courier = is_owner() ? (int)($_GET['courier'] ?? 0) : 0;
 
+// Paginated like audit_log.php: preparing orders never expire, so the list
+// only grows — and every row costs an AES-GCM decrypt. 50 per page keeps
+// the unbounded GROUP BY + decrypt-all off the request path.
+$page     = max(1, (int)($_GET['page'] ?? 1));
+$per_page = 50;
+
 try {
     $db = get_db();
 
@@ -58,6 +64,15 @@ try {
         $where_args = [];
     }
 
+    $cntStmt = $db->prepare("SELECT COUNT(*) FROM orders o {$where_sql}");
+    $cntStmt->execute($where_args);
+    $total = (int)$cntStmt->fetchColumn();
+    $pages = max(1, (int)ceil($total / $per_page));
+    // Clamp BEFORE the data query: an out-of-range ?page= must render the
+    // last valid page, not a permanently empty one.
+    $page   = min($page, $pages);
+    $offset = ($page - 1) * $per_page;
+
     $stmt = $db->prepare(
         "SELECT o.id, o.token_hmac, o.token_enc, o.token_iv, o.status, o.created_at, o.delivered_at, o.expires_at,
                 o.created_by,
@@ -68,9 +83,14 @@ try {
          LEFT JOIN order_photos p ON p.order_id = o.id
          {$where_sql}
          GROUP BY o.id
-         ORDER BY o.created_at DESC"
+         ORDER BY o.created_at DESC, o.id DESC LIMIT ? OFFSET ?"
     );
-    $stmt->execute($where_args);
+    foreach ($where_args as $i => $arg) {
+        $stmt->bindValue($i + 1, $arg, PDO::PARAM_INT);
+    }
+    $stmt->bindValue(count($where_args) + 1, $per_page, PDO::PARAM_INT);
+    $stmt->bindValue(count($where_args) + 2, $offset, PDO::PARAM_INT);
+    $stmt->execute();
     $rows = $stmt->fetchAll();
     // The token is stored encrypted (ADR-019); open it for display here so the
     // template below stays a plain read of $o['order_token'].
@@ -86,6 +106,8 @@ try {
     log_err('Admin fetch: ' . $e->getMessage());
     $orders   = [];
     $couriers = [];
+    $total    = 0;
+    $pages    = 1;
     $flash    = t('admin.orders.flash.load_failed');
     $flash_ok = false;
 }
@@ -134,11 +156,11 @@ $_active = 'orders';
 
         <div class="section-label">
             <?php if (is_courier()): ?>
-            <?= t('admin.orders.section.mine', ['n' => count($orders)]) ?>
+            <?= t('admin.orders.section.mine', ['n' => $total]) ?>
             <?php elseif ($filter_courier > 0): ?>
-            <?= t('admin.orders.section.courier', ['n' => count($orders)]) ?>
+            <?= t('admin.orders.section.courier', ['n' => $total]) ?>
             <?php else: ?>
-            <?= t('admin.orders.section.all', ['n' => count($orders)]) ?>
+            <?= t('admin.orders.section.all', ['n' => $total]) ?>
             <?php endif; ?>
         </div>
         <div class="table-wrap">
@@ -224,8 +246,22 @@ $_active = 'orders';
                 </tbody>
             </table>
         </div>
+
+        <?php if ($pages > 1): ?>
+        <div class="log-toolbar">
+            <span class="td-muted"><?= htmlspecialchars(t('admin.audit.page_summary', ['page' => $page, 'pages' => $pages, 'total' => number_format($total)]), ENT_QUOTES, 'UTF-8') ?></span>
+            <div class="log-toolbar-actions">
+                <?php
+                // Raw & here: the whole URL is escaped below (an &amp; entity
+                // would double-encode). Both values are ints by construction.
+                $page_qs = $filter_courier > 0 ? '?courier=' . $filter_courier . '&page=' : '?page=';
+                if ($page > 1): ?><a class="action-btn" href="<?= htmlspecialchars($page_qs . ($page - 1), ENT_QUOTES, 'UTF-8') ?>">&larr; <?= t('admin.analytics.prev_page') ?></a><?php endif; ?>
+                <?php if ($page < $pages): ?><a class="action-btn" href="<?= htmlspecialchars($page_qs . ($page + 1), ENT_QUOTES, 'UTF-8') ?>"><?= t('admin.analytics.next_page') ?> &rarr;</a><?php endif; ?>
+            </div>
+        </div>
+        <?php endif; ?>
     </main>
 </div>
-<script src="/admin/admin.js"></script>
+<script src="/admin/admin.js?v=<?= asset_ver('/admin/admin.js') ?>"></script>
 </body>
 </html>

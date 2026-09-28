@@ -11,6 +11,9 @@ updates:
     target-branch: dev
     schedule:
       interval: weekly
+    groups:
+      minor-patch:
+        update-types: [minor, patch]
 
   # Dev-only tooling (php-code-coverage). Runtime is dependency-free by
   # design (ADR-001) — this keeps the tooling honest anyway.
@@ -19,9 +22,22 @@ updates:
     target-branch: dev
     schedule:
       interval: weekly
+    groups:
+      minor-patch:
+        update-types: [minor, patch]
+
+  # Browser-test runner. Without this entry @playwright/test is never bumped.
+  - package-ecosystem: npm
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: weekly
+    groups:
+      minor-patch:
+        update-types: [minor, patch]
 
   # Docker base images (php:8.5-apache, php:8.5-fpm): security patches land
-  # in the Debian layers constantly, and the Trivy gate holds the built
+  # in the Debian layers constantly, and the Grype gate holds the built
   # images to them. The digest-pinned Semgrep container lives in a workflow
   # `container:` block, which the docker ecosystem does not cover — bump it
   # together with the weekly actions updates.
@@ -30,6 +46,9 @@ updates:
     target-branch: dev
     schedule:
       interval: weekly
+    groups:
+      minor-patch:
+        update-types: [minor, patch]
 
   # Service images in the compose files (mariadb, nginx, caddy), pinned by
   # digest like the Dockerfile bases — without this entry nothing would ever
@@ -39,3 +58,6 @@ updates:
     target-branch: dev
     schedule:
       interval: weekly
+    groups:
+      minor-patch:
+        update-types: [minor, patch]

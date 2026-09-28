@@ -18,6 +18,8 @@ function do_cleanup(): int {
     _purge_stale_records();
     _warn_legacy_tokens();
     osm_tile_cache_prune();
+    osm_geocode_cache_prune();
+    _sweep_staging_uploads();
     error_log_trim();
     return cleanup_expired_orders();
 }
@@ -28,14 +30,47 @@ function do_cleanup(): int {
 const ORPHAN_EVENT_RETENTION_DAYS = 30;
 const AUDIT_RETENTION_DAYS = 365;
 
+// Staged uploads (create.php processes photos before the order row exists,
+// under uploads/0/): a crash between staging and claiming orphans them — no
+// order_photos row ever points at 0/, so anything older than an hour dies.
+// Never throws.
+function _sweep_staging_uploads(): void {
+    try {
+        $dir = dirname(__DIR__) . '/uploads/0/';
+        if (!is_dir($dir)) {
+            return;
+        }
+        $now = time();
+        foreach (glob_list($dir . '*') as $f) {
+            if ((is_file($f) || is_link($f)) && ($now - (int)@filemtime($f)) > 3600) {
+                overwrite_and_unlink($f);
+            }
+        }
+        @rmdir($dir);
+    } catch (Throwable $e) {
+        log_err('Staging sweep failed: ' . $e->getMessage());
+    }
+}
+
 function _purge_stale_records(): void {
     try {
         $db = get_db();
-        $db->prepare(
-            'DELETE e FROM order_events e
-             LEFT JOIN orders o ON o.id = e.order_id OR o.token_hmac = e.token_hmac
-             WHERE o.id IS NULL AND e.created_at < (NOW() - INTERVAL ' . ORPHAN_EVENT_RETENTION_DAYS . ' DAY)'
-        )->execute();
+        // Two indexed NOT EXISTS checks (orders.id, orders.token_hmac) in
+        // small batches: the old LEFT JOIN ... OR ... matched every old
+        // event against the whole orders table with no index, and one
+        // unbounded statement locked every matching row at once.
+        $cutoff = 'NOW() - INTERVAL ' . ORPHAN_EVENT_RETENTION_DAYS . ' DAY';
+        do {
+            $st = $db->prepare(
+                'DELETE FROM order_events
+                 WHERE created_at < (' . $cutoff . ')
+                   AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.id = order_events.order_id)
+                   AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.token_hmac = order_events.token_hmac)
+                 LIMIT 5000'
+            );
+            $st->execute();
+            $n = $st->rowCount();
+        } while ($n === 5000);
         $db->prepare(
             'DELETE FROM audit_log WHERE created_at < (NOW() - INTERVAL ' . AUDIT_RETENTION_DAYS . ' DAY)'
         )->execute();

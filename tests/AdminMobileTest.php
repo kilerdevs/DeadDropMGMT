@@ -60,7 +60,7 @@ $up = false;
 for ($i = 0; $i < 50; $i++) {
     try { [$st] = _am('GET', "$B/healthz.php", null, ''); if ($st === 200) { $up = true; break; } }
     catch (Throwable) { }
-    usleep(200000);
+    usleep(50000);
 }
 T::ok('server booted', $up);
 if (!$up) { $stopServer(); exit(T::done()); }
@@ -96,7 +96,7 @@ foreach (['/admin/new_order.php'] as $path) {
         $html = $page($prov, $px, $path);
         $tag  = "$path $prov proxy=$px";
         T::ok("$tag renders", str_contains($html, '</html>'));
-        T::ok("$tag loads admin.js (mobile menu button)", str_contains($html, 'src="/admin/admin.js"'));
+        T::ok("$tag loads admin.js (mobile menu button)", str_contains($html, 'src="/admin/admin.js?v='));
         $wantBadge = $prov === 'osm' && $px === '1';
         T::eq("$tag OSM badge " . ($wantBadge ? 'rendered' : 'absent'),
               $wantBadge, str_contains($html, 'id="osm-monit"'));
@@ -118,7 +118,7 @@ $src = (string)file_get_contents($root . '/admin/edit.php');
 T::ok('edit.php guards the badge on provider and proxy toggle',
       str_contains($src, 'map_provider() === MAP_PROVIDER_OSM && osm_proxy_enabled()'));
 $src = (string)file_get_contents($root . '/admin/new_order.php');
-T::eq('new_order.php includes admin.js exactly once', 1, substr_count($src, '/admin/admin.js'));
+T::eq('new_order.php includes admin.js exactly once', 1, substr_count($src, '<script src="/admin/admin.js'));
 
 // Zone editor gestures: mouse events never fire for a finger drag, so the
 // editor must ride Pointer Events (mouse, touch and pen alike) — and the
