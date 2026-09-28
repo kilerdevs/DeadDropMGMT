@@ -59,7 +59,7 @@ $up = false;
 for ($i = 0; $i < 50; $i++) {
     try { [$st] = _v2('GET', "$B/healthz.php", null, ''); if ($st === 200) { $up = true; break; } }
     catch (Throwable) { }
-    usleep(200000);
+    usleep(50000);
 }
 T::ok('server booted', $up);
 if (!$up) { exit(T::done()); }

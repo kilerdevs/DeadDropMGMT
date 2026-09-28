@@ -58,7 +58,7 @@ function _pc_server(): array {
     $base = "http://127.0.0.1:$port";
     for ($i = 0; $i < 50; $i++) {
         if (_pc_get("$base/healthz.php") === 200) { return [$proc, $base, $stop]; }
-        usleep(200000);
+        usleep(50000);
     }
     return [$proc, '', $stop];
 }
@@ -89,16 +89,19 @@ foreach ([
 }
 
 // ── healthz stays out of it ──────────────────────────────────────────────────
+// No fixed sleep: the sweep runs in a shutdown function and php -S answers
+// one request at a time, so a follow-up healthz only returns after the
+// previous request (sweep included) fully finished — an exact wait.
 $old = $age();
 _pc_get($on . '/healthz.php');
-usleep(1500000);
+_pc_get($on . '/healthz.php');
 T::eq('healthz.php never triggers the sweep', $old, $stamp());
 
 // ── a fresh stamp: nothing to do ─────────────────────────────────────────────
 $fresh = time();
 $db->prepare("UPDATE settings SET value = ? WHERE key_name = 'last_cleanup'")->execute([(string)$fresh]);
 _pc_get($on . '/index.php');
-usleep(1500000);
+_pc_get($on . '/healthz.php');
 T::eq('a stamp younger than an hour is left alone', $fresh, $stamp());
 
 // ── OFF: DDMGMT_PSEUDO_CRON=0 ────────────────────────────────────────────────
@@ -108,7 +111,7 @@ T::ok('server (pseudo-cron off) booted', $off !== '');
 $old = $age();
 _pc_get($off . '/index.php');
 _pc_get($off . '/admin/index.php');
-usleep(1500000);
+_pc_get($off . '/healthz.php');
 T::eq('DDMGMT_PSEUDO_CRON=0 disables it', $old, $stamp());
 
 T::ok('the switch is read from the environment', pseudo_cron_enabled() === false); // CLI never runs it either

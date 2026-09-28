@@ -471,7 +471,7 @@ $boot = static function (string $script, callable $argsFn, callable $ready) use 
                 $ok = true;
                 break;
             }
-            usleep(200000);
+            usleep(50000);
         }
         if ($ok) {
             $procs[] = $try;

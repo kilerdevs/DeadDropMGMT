@@ -112,7 +112,6 @@ if (function_exists('proc_open')) {
             $s = @stream_socket_client('tcp://127.0.0.1:' . $port, $e, $str, 0.2);
             if (is_resource($s)) {
                 fclose($s);
-                usleep(200000);
                 $up = true;
                 break;
             }

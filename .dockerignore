@@ -36,3 +36,24 @@ build-info.json
 backups/*
 !backups/.htaccess
 auto-update.*
+# Runtime artifacts and host tooling: zone extracts, downloaded map data,
+# JS tooling, test reports and dependency manifests. Any of these next to
+# the Dockerfile busts the COPY . layer cache — and the smoke job would then
+# test an image the CVE scan never saw (and even serve some of it, e.g. an
+# SBOM dropped in the workspace, from the docroot).
+tiles/*.pmtiles
+data/maps/*
+node_modules/
+e2e/
+test-results/
+playwright-report/
+coverage-html/
+*.phar
+package*.json
+playwright.config.js
+phpstan.neon
+.php-cs-fixer.php
+composer.json
+.semgrep*
+fromftp/
+.claude/

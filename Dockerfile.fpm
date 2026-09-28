@@ -7,7 +7,10 @@
 # Pinned by digest (Dependabot bumps it), like the Apache image.
 FROM php:8.5-fpm@sha256:584e584083bada479f0ee733a3025722a68e366eb721e618d1b6a252e4ff45c5
 
-RUN apt-get update \
+# APT_BUST (CI: ISO week) re-dates the apt layer weekly — see Dockerfile.
+ARG APT_BUST=none
+RUN echo "apt cache week: $APT_BUST" \
+ && apt-get update \
  && apt-get upgrade -y \
  && apt-get install -y --no-install-recommends \
         libfreetype6-dev \
@@ -16,24 +19,33 @@ RUN apt-get update \
         libwebp-dev \
  && docker-php-ext-configure gd --with-freetype --with-jpeg --with-webp \
  && docker-php-ext-install -j"$(nproc)" gd pdo_mysql \
+ # The -dev packages stay only for the compile above: mark what the built
+ # extensions actually link, then purge the headers (30-60 MB and fewer
+ # packages for Grype/Syft). dpkg-query keeps this robust across Debian
+ # suites (t64 renames and all) — unknown names simply match nothing.
+ && _rtlibs="$(dpkg-query -W -f='${Package}\n' 'libfreetype6*' 'libjpeg62-turbo*' 'libpng16*' 'libwebp*' 2>/dev/null)" \
+ && { [ -z "$_rtlibs" ] || apt-mark manual $_rtlibs; } \
+ && apt-get purge -y --auto-remove \
+        libfreetype6-dev \
+        libjpeg62-turbo-dev \
+        libpng-dev \
+        libwebp-dev \
  && rm -rf /var/lib/apt/lists/*
 
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY docker/php-ddmgmt.ini /usr/local/etc/php/conf.d/zz-ddmgmt-runtime.ini
-COPY . /var/www/html
-# The lifecycle journey (CI) re-runs the schema loader inside the container;
-# tests/ as a whole is dockerignored, but this one file ships deliberately.
-COPY tests/schema_loader.php /var/www/html/tests/schema_loader.php
+# Straight into the pristine copy (no second cp -a): the entrypoint refreshes
+# the shared docroot volume from here on every start. tests/schema_loader.php
+# rides along through the .dockerignore negation (tests/* excluded, that one
+# file re-included) for first-boot schema setup.
+COPY . /usr/src/ddmgmt
 
 RUN chmod +x /usr/local/bin/entrypoint.sh \
- # pristine config template outside the docroot for first-boot rendering
- && cp /var/www/html/config.php.example /usr/local/share/config.php.template \
- && mkdir -p /var/www/html/logs /var/www/html/uploads /var/www/html/cache/osm_tiles /var/www/html/data/maps /var/www/html/tiles /config \
- && chown -R www-data:www-data /var/www/html/logs /var/www/html/uploads /var/www/html/cache /var/www/html/data /var/www/html/tiles /config \
- && chown root:root /var/www/html && chmod 755 /var/www/html \
- # pristine code copy: the entrypoint refreshes the shared docroot volume from
- # it on every start (Docker seeds a named volume only while it is empty)
- && cp -a /var/www/html /usr/src/ddmgmt
+  # pristine config template outside the docroot for first-boot rendering
+  && cp /usr/src/ddmgmt/config.php.example /usr/local/share/config.php.template \
+  && mkdir -p /var/www/html/logs /var/www/html/uploads /var/www/html/cache/osm_tiles /var/www/html/data/maps /var/www/html/tiles /config \
+  && chown -R www-data:www-data /var/www/html/logs /var/www/html/uploads /var/www/html/cache /var/www/html/data /var/www/html/tiles /config \
+  && chown root:root /var/www/html && chmod 755 /var/www/html
 
 # Build provenance for Settings → Version (owners only). Produced on the
 # build host by tools/build_info.sh and passed through the compose files as

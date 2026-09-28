@@ -30,6 +30,10 @@ services:
       retries: 10
 
   app:
+    # The scanned image is the tested image: CI prebuilds this tag (and the
+    # smoke steps run plain `up`, never `--build`), local `up --build`
+    # rebuilds and re-tags it the same way.
+    image: deaddrop:apache
     build:
       context: .
       args:

@@ -60,9 +60,9 @@ register_shutdown_function(static function () use ($proc, $router, $stubDir): vo
 });
 $up = false;
 for ($i = 0; $i < 30; $i++) {
-    try { [$st] = _px_req("http://127.0.0.1:$port/ok"); } catch (Throwable) { $st = 0; usleep(200000); continue; }
+    try { [$st] = _px_req("http://127.0.0.1:$port/ok"); } catch (Throwable) { $st = 0; usleep(50000); continue; }
     if ($st === 200) { $up = true; break; }
-    usleep(200000);
+    usleep(50000);
 }
 T::ok('stub server booted', $up);
 

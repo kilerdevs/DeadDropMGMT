@@ -91,9 +91,9 @@ register_shutdown_function(static function () use ($proc): void {
 $up = false;
 for ($i = 0; $i < 30; $i++) {
     try { [$st] = _pl_get("http://127.0.0.1:$port/"); }
-    catch (Throwable) { $st = 0; usleep(200000); continue; }
+    catch (Throwable) { $st = 0; usleep(50000); continue; }
     if ($st === 200) { $up = true; break; }
-    usleep(200000);
+    usleep(50000);
 }
 T::ok('built-in server booted', $up);
 if (!$up) { exit(T::done()); }
@@ -175,9 +175,9 @@ if (is_resource($proc2)) {
     $up2 = false;
     for ($i = 0; $i < 30; $i++) {
         try { [$st2] = _pl_get("http://127.0.0.1:$port2/"); }
-        catch (Throwable) { $st2 = 0; usleep(200000); continue; }
+        catch (Throwable) { $st2 = 0; usleep(50000); continue; }
         if ($st2 === 500) { $up2 = true; break; }
-        usleep(200000);
+        usleep(50000);
     }
     T::ok('boundary answers 500', $up2 && $st2 === 500);
     [, $bodyB] = _pl_get("http://127.0.0.1:$port2/");
