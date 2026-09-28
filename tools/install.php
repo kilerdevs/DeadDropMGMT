@@ -572,7 +572,12 @@ if ($action !== '') {
                 continue;
             }
             rmdir_r($dst);
-            if (!@rename($from . '/' . $e, $dst)) { rmdir_r($src); jer('cannot move ' . $e . ' into place — permissions?'); }
+            if (!@rename($from . '/' . $e, $dst)) {
+                // rename() cannot cross filesystems (EXDEV): runtime-data
+                // dirs are often volume mounts while staging lives on the
+                // image layer. Merge the tree instead of replacing it.
+                if (!is_dir($from . '/' . $e) || !merge_tree($from . '/' . $e, $dst)) { rmdir_r($src); jer('cannot move ' . $e . ' into place — permissions?'); }
+            }
             $moved++;
         }
         rmdir_r($src); @unlink($zip);
@@ -697,11 +702,20 @@ function merge_tree(string $from, string $to): bool {
         if (is_dir($s) && !is_link($s)) {
             if (is_link($d) || is_file($d)) return false; // never follow or clobber a non-dir
             if (!merge_tree($s, $d)) return false;
-        } elseif (is_dir($d) || !@rename($s, $d)) {
+        } elseif (is_dir($d) || !move_into($s, $d)) {
             return false;
         }
     }
     return true;
+}
+// rename() first, copy + unlink when the move crosses filesystems (EXDEV):
+// staging sits on the image layer while runtime-data dirs are often mounts.
+// Never clobbers a directory with a file.
+function move_into(string $s, string $d): bool {
+    if (@rename($s, $d)) return true;
+    if (!is_file($s) || is_dir($d)) return false;
+    if (!@copy($s, $d)) return false;
+    return @unlink($s);
 }
 function rmdir_r(string $p): void {
     if (is_link($p) || is_file($p)) { @unlink($p); return; }
