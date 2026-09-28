@@ -19,6 +19,32 @@ permissions:
   contents: read
 
 jobs:
+  # Path gate for the heavy jobs: docs-only changes (markdown, docs/) skip
+  # image scans, smoke/DAST and e2e. `paths-ignore` exists only at trigger
+  # level (a job-level key is invalid and fails the whole run), so a tiny
+  # always-running gate job carries the verdict instead. Its outputs drive
+  # `if:` on the heavy jobs; the `docker` aggregate below keeps a stable
+  # gate name for branch protection. NOTE: if image-scan / smoke-dast / e2e
+  # are required checks today, require `changed paths` + `docker` instead —
+  # a skipped required check blocks the merge.
+  changes:
+    runs-on: ubuntu-24.04
+    name: changed paths
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        with:
+          filters: |
+            code:
+              - '!**.md'
+              - '!docs/**'
+
   tests:
     runs-on: ubuntu-24.04
     # README promises PHP 8.2+ (8.0/8.1 are EOL — testing them would bless
@@ -315,8 +341,9 @@ jobs:
   image-scan:
     runs-on: ubuntu-24.04
     name: image scan (Grype + SBOM)
-    # Docs-only changes need no rebuild or vulnerability scan.
-    paths-ignore: ['**.md', 'docs/**']
+    # Docs-only changes need no rebuild or vulnerability scan (via `changes`).
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -403,7 +430,8 @@ jobs:
   smoke-dast:
     runs-on: ubuntu-24.04
     name: smoke + DAST (compose + ZAP)
-    paths-ignore: ['**.md', 'docs/**']
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
     env:
       DDMGMT_DB_HOST: db
       DDMGMT_DB_PORT: '3306'
@@ -541,10 +569,12 @@ jobs:
   e2e:
     runs-on: ubuntu-24.04
     name: e2e (Playwright/Chromium)
-    # Docs-only changes exercise no browser behaviour. NOTE: if e2e is a
-    # required branch-protection check, a skipped run blocks the merge —
-    # verify in Settings → Branches before relying on this.
-    paths-ignore: ['**.md', 'docs/**']
+    # Docs-only changes exercise no browser behaviour (via `changes`).
+    # NOTE: same branch-protection caveat as above — a skipped required
+    # check blocks the merge; require `changed paths` instead if e2e is
+    # required today.
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
     services:
       mariadb:
         image: mariadb:11
