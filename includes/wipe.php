@@ -56,8 +56,30 @@ function do_panic_wipe(): array {
         throw new RuntimeException('DB wipe failed, nothing destroyed: ' . $e->getMessage(), 0, $e);
     }
 
-    // Filesystem side: after the DB is authoritative-zero. Pattern-checked
-    // paths plus a directory sweep catch orphans from earlier partial runs.
+    // Filesystem side: after the DB is authoritative-zero. Order matters:
+    // logs and backups (IPs, tokens, full dumps) die FIRST, then photos,
+    // then the tile cache last — an interrupted wipe must strand the least
+    // sensitive bytes, not the most. Pattern-checked paths plus a directory
+    // sweep catch orphans from earlier partial runs.
+    // On-disk logs carry IPs and tokens — destroyed along with everything
+    // else. Same overwrite treatment as photo files (finding: truncation
+    // alone leaves the old blocks recoverable); both daemons reopen their
+    // logs per write, so unlinking under them is safe. The rotated .1
+    // generation carries the same history and must die too.
+    foreach ([ERROR_LOG_PATH, APP_LOG_PATH, APP_LOG_PATH . '.1'] as $log_path) {
+        if (is_file($log_path) || is_link($log_path)) {
+            overwrite_and_unlink($log_path);
+        }
+    }
+
+    // Database dumps (auto-update.sh's pre-upgrade backups, manual dumps)
+    // hold every order the wipe just deleted — they die with the rest.
+    foreach (glob_list(dirname(__DIR__) . '/backups/*') as $bk) {
+        if (basename($bk) !== '.htaccess' && (is_file($bk) || is_link($bk))) {
+            _panic_unlink($bk, $report);
+        }
+    }
+
     foreach ($files as $fn) {
         if (is_string($fn) && preg_match('#^\d+/[0-9a-f]+\.(jpg|jpeg|png|webp|gif)$#i', $fn)) {
             _panic_unlink(dirname(__DIR__) . '/uploads/' . $fn, $report);
@@ -71,25 +93,6 @@ function do_panic_wipe(): array {
     // The admin tile cache remembers every map area an admin looked at — at
     // street zoom around a drop that IS the location. It dies with the rest.
     _panic_wipe_tile_cache(dirname(__DIR__) . '/cache/osm_tiles', $report);
-
-    // Database dumps (auto-update.sh's pre-upgrade backups, manual dumps)
-    // hold every order the wipe just deleted — they die with the rest.
-    foreach (glob_list(dirname(__DIR__) . '/backups/*') as $bk) {
-        if (basename($bk) !== '.htaccess' && (is_file($bk) || is_link($bk))) {
-            _panic_unlink($bk, $report);
-        }
-    }
-
-    // On-disk logs carry IPs and tokens — destroyed along with everything
-    // else. Same overwrite treatment as photo files (finding: truncation
-    // alone leaves the old blocks recoverable); both daemons reopen their
-    // logs per write, so unlinking under them is safe. The rotated .1
-    // generation carries the same history and must die too.
-    foreach ([ERROR_LOG_PATH, APP_LOG_PATH, APP_LOG_PATH . '.1'] as $log_path) {
-        if (is_file($log_path) || is_link($log_path)) {
-            overwrite_and_unlink($log_path);
-        }
-    }
 
     return $report;
 }

@@ -140,6 +140,21 @@ T::ok('winner staged for badge', is_array($staged) && ($staged['failed'] ?? null
     && ($staged['attempts'] ?? 0) === 1 && ($staged['via'] ?? '') === "http://127.0.0.1:$port");
 $db->exec('DELETE FROM osm_proxies');
 
+// ── Pool circuit breaker ────────────────────────────────────────────────────
+// A wholesale failure trips the breaker for the SAME pool: the next request
+// fails at once (no attempts) instead of re-walking dead proxies. A changed
+// pool (new member IDs) and any success clear it.
+$db->exec("INSERT INTO osm_proxies (url, label, source, last_status) VALUES ('http://127.0.0.1:1', 'deadE', 'manual', 'new')");
+T::ok('fresh dead pool walks once, then fails closed', osm_fetch("http://127.0.0.1:$port/ok") === false);
+$t0 = microtime(true);
+T::ok('tripped breaker fails at once', osm_fetch("http://127.0.0.1:$port/ok") === false && (microtime(true) - $t0) < 1.5);
+$staged = osm_last_via_stage();
+T::ok('breaker short-circuit stages zero attempts', is_array($staged) && ($staged['failed'] ?? null) === true && ($staged['attempts'] ?? -1) === 0);
+$db->exec('DELETE FROM osm_proxies');
+$db->exec("INSERT INTO osm_proxies (url, label, source, last_status) VALUES ('http://127.0.0.1:$port', 'selfstub2', 'manual', 'new')");
+T::eq('changed pool ignores the old trip', 'STUB-BODY-OK', osm_fetch("http://127.0.0.1:$port/ok"));
+$db->exec('DELETE FROM osm_proxies');
+
 // Pool ordering: previously-ok proxies sort ahead of dead ones regardless of latency
 $pool = [
     ['url' => 'a', 'last_status' => 'fail', 'latency_ms' => 1],
@@ -261,6 +276,8 @@ T::eq('empty pool revalidates to nothing', [], osm_proxy_revalidate_stale(10, 7,
 
 // Cleanup
 $db->exec("DELETE FROM osm_proxies WHERE url LIKE 'http://127.0.0.1:%'");
+$db->exec("DELETE FROM settings WHERE key_name IN ('pool_down_until', 'pool_down_fp')");
+$c = &_settings_store(); $c = null;
 set_setting('osm_proxy_enabled', '0');
 
 exit(T::done());

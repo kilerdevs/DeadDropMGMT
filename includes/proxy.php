@@ -837,6 +837,40 @@ function osm_proxy_revalidate_stale(int $max = 3, int $stale_days = 7, ?string $
     }
 }
 
+// ── Pool circuit breaker ──────────────────────────────────────────────────
+// One map view fires 15-30 tile requests at once; when every proxy is dead
+// they all walk the whole pool (seconds each) and take every PHP worker
+// with them. Tripping records "pool down until T" plus a fingerprint of the
+// pool that failed, so later requests against the SAME pool fail at once
+// instead of re-probing. A changed pool (heal/discovery swapped members)
+// clears the trip implicitly through the fingerprint; any success clears it
+// explicitly. Shared through the settings table so all FPM workers see it.
+function osm_pool_circuit_fp(array $pool): string {
+    $ids = [];
+    foreach ($pool as $px) {
+        $ids[] = (int)($px['id'] ?? 0);
+    }
+    sort($ids);
+    return implode(',', $ids);
+}
+
+function osm_pool_circuit_open(array $pool): bool {
+    if ((int)get_setting('pool_down_until', '0') <= time()) {
+        return false;
+    }
+    return get_setting('pool_down_fp', '') === osm_pool_circuit_fp($pool);
+}
+
+function osm_pool_circuit_trip(array $pool, int $secs = 60): void {
+    set_setting('pool_down_until', (string)(time() + $secs));
+    set_setting('pool_down_fp', osm_pool_circuit_fp($pool));
+}
+
+function osm_pool_circuit_clear(): void {
+    set_setting('pool_down_until', '0');
+    set_setting('pool_down_fp', '');
+}
+
 // Fetch an OSM resource honouring the osm_proxy_enabled setting. Tries each
 // pool member fastest-first; gives up (returns false) if all fail while
 // routing is enabled — that is the point of fail-closed.
@@ -864,7 +898,12 @@ function osm_fetch(string $url, int $maxBytes = 2097152): string|false {
 
     // Try the fastest known-good proxy first: working ones ordered by last
     // measured latency, then untested, then previously-dead as last resort.
-    // Each attempt gets 3 seconds before moving on to the next candidate.
+    // Each attempt gets 2 seconds before moving on to the next candidate;
+    // the whole request is capped at 10 s. A tripped circuit breaker (the
+    // same pool failed wholesale under a minute ago) skips the walk and
+    // fails at once — one map view fires dozens of parallel tile requests,
+    // and without this they re-probe the dead pool together and stall
+    // every PHP worker.
     usort($pool, function ($a, $b) {
         $rank = function ($p) {
             return match ($p['last_status'] ?? '') {
@@ -878,19 +917,24 @@ function osm_fetch(string $url, int $maxBytes = 2097152): string|false {
         return ((int)($a['latency_ms'] ?? PHP_INT_MAX)) <=> ((int)($b['latency_ms'] ?? PHP_INT_MAX));
     });
 
-    $deadline = microtime(true) + 20.0; // whole-request budget across all attempts
+    $deadline = microtime(true) + 10.0; // whole-request budget across all attempts
     $attempts = 0;
     $skipped  = []; // proxies that timed out / failed before the winner
+    if (osm_pool_circuit_open($pool)) {
+        osm_last_via_set(['via' => null, 'failed' => true, 'attempts' => 0, 'skipped' => []]);
+        return false; // same pool just failed wholesale — don't re-probe it
+    }
     foreach ($pool as $px) {
         if (microtime(true) >= $deadline || connection_aborted()) {
             break; // budget exhausted or client gone — stop burning the pool
         }
         $attempts++;
         $t0     = microtime(true);
-        $result = osm_fetch_via($url, $px['url'], 3, $maxBytes);
+        $result = osm_fetch_via($url, $px['url'], 2, $maxBytes);
         $ms     = (int)round((microtime(true) - $t0) * 1000);
         osm_proxy_mark((int)$px['id'], $result !== false, $ms);
         if ($result !== false) {
+            osm_pool_circuit_clear(); // the pool works again — lift any trip
             osm_last_via_set([
                 'via'        => osm_proxy_redact($px['url']),
                 'latency_ms' => $ms,
@@ -906,6 +950,9 @@ function osm_fetch(string $url, int $maxBytes = 2097152): string|false {
         $skipped[] = osm_proxy_redact($px['url']);
     }
     osm_last_via_set(['via' => null, 'failed' => true, 'attempts' => $attempts, 'skipped' => $skipped]);
+    if ($attempts > 0) {
+        osm_pool_circuit_trip($pool); // wholesale failure — spare the next requests the walk
+    }
     if ($skipped) {
         osm_proxy_heal_kick();
     }

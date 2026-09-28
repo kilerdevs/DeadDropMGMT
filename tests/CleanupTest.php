@@ -58,6 +58,14 @@ T::ok('overwrite_and_unlink removes the file', !is_file($tmp));
 overwrite_and_unlink($tmp . '-does-not-exist');
 T::ok('overwrite_and_unlink tolerates missing path', !is_file($tmp . '-does-not-exist'));
 
+// Chunked overwrite: a multi-MB file (larger than the 1 MiB zero chunk) is
+// fully shredded without ever allocating its whole size in RAM.
+$big = tempnam(sys_get_temp_dir(), 'ddl');
+file_put_contents($big, random_bytes(3 * 1048576));
+T::eq('large fixture really is large', 3 * 1048576, filesize($big));
+overwrite_and_unlink($big);
+T::ok('overwrite_and_unlink removes multi-MB files', !is_file($big));
+
 // ── Pseudo-cron plumbing: dice and pass are directly testable halves ──────
 T::ok('dice always runs at 1.0', _cleanup_roll(1.0) === true);
 T::ok('dice never runs at 0.0', _cleanup_roll(0.0) === false);

@@ -17,6 +17,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $step === 3) {
         $step  = 0;
     } else {
         try {
+            // A wipe interrupted halfway strands the MOST sensitive bytes
+            // (dumps, logs) while deleting the audit trail — the exact
+            // wrong outcome. Survive client disconnects and PHP time limits
+            // for the duration of the wipe; hosts without set_time_limit
+            // keep their configured limit instead of fataling here.
+            ignore_user_abort(true);
+            if (function_exists('set_time_limit')) { @set_time_limit(0); }
             $counts = do_panic_wipe();
             $done   = true;
             admin_logout();

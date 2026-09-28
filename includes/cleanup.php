@@ -31,11 +31,22 @@ const AUDIT_RETENTION_DAYS = 365;
 function _purge_stale_records(): void {
     try {
         $db = get_db();
-        $db->prepare(
-            'DELETE e FROM order_events e
-             LEFT JOIN orders o ON o.id = e.order_id OR o.token_hmac = e.token_hmac
-             WHERE o.id IS NULL AND e.created_at < (NOW() - INTERVAL ' . ORPHAN_EVENT_RETENTION_DAYS . ' DAY)'
-        )->execute();
+        // Two indexed NOT EXISTS checks (orders.id, orders.token_hmac) in
+        // small batches: the old LEFT JOIN ... OR ... matched every old
+        // event against the whole orders table with no index, and one
+        // unbounded statement locked every matching row at once.
+        $cutoff = 'NOW() - INTERVAL ' . ORPHAN_EVENT_RETENTION_DAYS . ' DAY';
+        do {
+            $st = $db->prepare(
+                'DELETE FROM order_events
+                 WHERE created_at < (' . $cutoff . ')
+                   AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.id = order_events.order_id)
+                   AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.token_hmac = order_events.token_hmac)
+                 LIMIT 5000'
+            );
+            $st->execute();
+            $n = $st->rowCount();
+        } while ($n === 5000);
         $db->prepare(
             'DELETE FROM audit_log WHERE created_at < (NOW() - INTERVAL ' . AUDIT_RETENTION_DAYS . ' DAY)'
         )->execute();
