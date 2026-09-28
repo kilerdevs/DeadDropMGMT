@@ -66,7 +66,33 @@ T::ok('chunked garbage fails closed', proxy_chunked_feed("zz\r\nhello\r\n") === 
 T::ok('absurd chunk size fails closed', proxy_chunked_feed("7fffffffffff\r\nx") === null);
 T::ok('chunk over the per-chunk cap fails closed', proxy_chunked_feed(dechex(PROXY_CHUNK_MAX + 1) . "\r\nx") === null);
 T::ok('endless size line fails closed', proxy_chunked_feed(str_repeat('a', PROXY_CHUNK_LINE_MAX + 1)) === null);
-T::ok('partial size line still waits for more', is_array(proxy_chunked_feed('5')));
+    T::ok('partial size line still waits for more', is_array(proxy_chunked_feed('5')));
+
+    // Incremental decoder: same verdicts as the one-shot feed, without
+    // re-scanning the buffered remainder on every read.
+    $st = proxy_chunked_state();
+    T::eq('push single feed', ['hello', true], proxy_chunked_push($st, "5\r\nhello\r\n0\r\n\r\n"));
+    $st = proxy_chunked_state();
+    T::eq('push emits payload incrementally', ['hel', false], proxy_chunked_push($st, "5\r\nhel"));
+    T::eq('push split completes', ['lo', true], proxy_chunked_push($st, "lo\r\n0\r\n\r\n"));
+    $st = proxy_chunked_state();
+    T::ok('push garbage fails closed', proxy_chunked_push($st, "zz\r\nhello\r\n") === null);
+    $st = proxy_chunked_state();
+    T::ok('push absurd size fails closed', proxy_chunked_push($st, "7fffffffffff\r\nx") === null);
+    // Multi-MB chunk streams through 64 KiB reads with no re-buffering.
+    $big = str_repeat('C', 3 * 1048576);
+    $st = proxy_chunked_state();
+    $got = '';
+    $fin = false;
+    $failed = false;
+    $wire = dechex(strlen($big)) . "\r\n" . $big . "\r\n0\r\n\r\n";
+    for ($o = 0; $o < strlen($wire); $o += 65536) {
+        $r = proxy_chunked_push($st, substr($wire, $o, 65536));
+        if ($r === null) { $failed = true; break; }
+        $got .= $r[0];
+        $fin = $r[1];
+    }
+    T::ok('push streams multi-MB chunks', !$failed && $fin && $got === $big);
 $fields = proxy_head_fields("HTTP/1.1 200 OK\r\nContent-Length: 5\r\ncontent-length: 9\r\nX-A: b");
 T::eq('first duplicate header wins, names lowercase', ['content-length' => '5', 'x-a' => 'b'], $fields);
 $pt = proxy_parse_target('https://a.tile.openstreetmap.org/13/4051/2749.png');
@@ -663,6 +689,16 @@ T::eq('no-cURL direct fetch still works', $BODY, osm_fetch_via($originBase . '/t
 T::eq('no-cURL proxied fetch works', $BODY, osm_fetch_via($originBase . '/tile', $freshConnectPx, 10));
 T::eq('no-cURL SOCKS fetch works', $BODY, osm_fetch_via($originBase . '/tile', $freshSocksPx, 10));
 T::ok('no-cURL routing stays honoured', osm_proxy_enabled() === (get_setting('osm_proxy_enabled', '1') === '1'));
+// The streams half of the parallel fetcher (same contract as the curl half).
+$streamFetched = proxy_multi_fetch(
+    [['k' => 's-ok', 'url' => "$originBase/tile", 'proxy' => null],
+     ['k' => 's-dead', 'url' => "$originBase/tile", 'proxy' => 'http://127.0.0.1:9']],
+    10);
+T::eq('no-cURL parallel fetch works', $BODY, $streamFetched['s-ok'][1] ?? null);
+T::ok('no-cURL parallel fetch marks dead', ($streamFetched['s-dead'][0] ?? -1) === 0);
+$streamLists = proxy_fetch_lists_parallel([$originBase . '/tile', 'http://127.0.0.1:9/x'], 10);
+T::eq('no-cURL list fetch works', $BODY, $streamLists[$originBase . '/tile'] ?? null);
+T::ok('no-cURL dead list reads false', $streamLists['http://127.0.0.1:9/x'] === false);
 host_override(null, true);
 
 // ── curl-less download-to-disk with resume ──────────────────────────────────

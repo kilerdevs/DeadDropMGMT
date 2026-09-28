@@ -205,6 +205,17 @@ T::ok('mark ok records status+latency', $m['last_status'] === 'ok' && (int)$m['l
 osm_proxy_mark($mid, false);
 $m = $db->query("SELECT last_status FROM osm_proxies WHERE id = $mid")->fetch();
 T::eq('mark fail records failure', 'fail', $m['last_status']);
+// Change-only marking: same status + fresh check + close latency skips the
+// DB write; a moved latency or a status flip writes through.
+$db->exec("INSERT INTO osm_proxies (url, label, source, last_status, latency_ms, last_checked) VALUES ('http://127.0.0.1:11', 'skipme', 'manual', 'ok', 42, NOW())");
+$sid = (int)$db->query("SELECT id FROM osm_proxies WHERE url = 'http://127.0.0.1:11'")->fetchColumn();
+$prev = $db->query("SELECT last_status, latency_ms, last_checked FROM osm_proxies WHERE id = $sid")->fetch();
+osm_proxy_mark($sid, true, 45, $prev);
+T::eq('unchanged mark skips the write', 42, (int)$db->query("SELECT latency_ms FROM osm_proxies WHERE id = $sid")->fetchColumn());
+osm_proxy_mark($sid, true, 5000, $prev);
+T::eq('moved latency writes through', 5000, (int)$db->query("SELECT latency_ms FROM osm_proxies WHERE id = $sid")->fetchColumn());
+osm_proxy_mark($sid, false, 5000, $prev);
+T::eq('status flip writes through', 'fail', $db->query("SELECT last_status FROM osm_proxies WHERE id = $sid")->fetchColumn());
 with_table_hidden_px('osm_proxies', function (): void {
     osm_proxy_mark(1, true, 5); // must degrade silently
 });
@@ -271,6 +282,26 @@ T::ok('batch probe records timings',
 $resHead = proxy_multi_probe(['http://127.0.0.1:1'], "http://127.0.0.1:$port/ok", 3, 3);
 T::ok('HEAD-mode batch probe works',
       isset($resHead['http://127.0.0.1:1']) && ($resHead['http://127.0.0.1:1'][0] ?? -1) === 0);
+
+// Parallel fetch: bodies come back per job key (the stub doubles as the
+// forward proxy, same absolute-URI trick as the winner test).
+$jobs = [
+    ['k' => 'ok',   'url' => "http://127.0.0.1:$port/ok",   'proxy' => "http://127.0.0.1:$port"],
+    ['k' => 'miss', 'url' => "http://127.0.0.1:$port/nope", 'proxy' => "http://127.0.0.1:$port"],
+    ['k' => 'dead', 'url' => "http://127.0.0.1:$port/ok",   'proxy' => 'http://127.0.0.1:1'],
+];
+$fetched = proxy_multi_fetch($jobs, 5);
+T::eq('parallel fetch returns bodies per key', 'STUB-BODY-OK', $fetched['ok'][1] ?? null);
+T::ok('parallel fetch marks non-2xx and dead jobs [0, ...]',
+    ($fetched['miss'][0] ?? -1) === 0 && ($fetched['dead'][0] ?? -1) === 0);
+// List fetch: the same round, direct.
+$lists = proxy_fetch_lists_parallel(["http://127.0.0.1:$port/ok", 'http://127.0.0.1:9/x'], 5);
+T::eq('list fetch returns the body', 'STUB-BODY-OK', $lists["http://127.0.0.1:$port/ok"] ?? null);
+T::ok('dead list reads false', $lists['http://127.0.0.1:9/x'] === false);
+// Shared verdict: unanimity + fail-closed, the same table as the single judge.
+T::ok('verdict needs a reachable judge', proxy_judge_bodies_verdict([[0, ''], [0, '']], 'x') === false);
+T::ok('verdict passes unanimous clean', proxy_judge_bodies_verdict([[200, 'clean'], [200, 'ok']], 'x') === true);
+T::ok('verdict rejects any leak', proxy_judge_bodies_verdict([[200, 'clean'], [200, 'has x here']], 'x') === false);
 
 // Stale-pool revalidation: never-checked and week-old entries get probed,
 // fresh ones are left alone. The stub doubles as probe target AND working
