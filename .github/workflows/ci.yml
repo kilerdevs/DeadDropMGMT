@@ -40,6 +40,10 @@ jobs:
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
         with:
+          # Pushes compare the pushed range; PRs compare against their base.
+          # The default (merge-base with the default branch) would see all
+          # of dev on every dev push, since master lags behind releases.
+          base: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
           filters: |
             code:
               - '!**.md'
@@ -342,8 +346,10 @@ jobs:
     runs-on: ubuntu-24.04
     name: image scan (Grype + SBOM)
     # Docs-only changes need no rebuild or vulnerability scan (via `changes`).
+    # != 'false' (not == 'true'): a detection hiccup must run everything,
+    # never silently skip it.
     needs: [changes]
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code != 'false'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -436,7 +442,7 @@ jobs:
     runs-on: ubuntu-24.04
     name: smoke + DAST (compose + ZAP)
     needs: [changes]
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code != 'false'
     env:
       DDMGMT_DB_HOST: db
       DDMGMT_DB_PORT: '3306'
@@ -582,7 +588,7 @@ jobs:
     # check blocks the merge; require `changed paths` instead if e2e is
     # required today.
     needs: [changes]
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code != 'false'
     services:
       mariadb:
         image: mariadb:11
