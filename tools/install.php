@@ -712,10 +712,14 @@ function merge_tree(string $from, string $to): bool {
 // staging sits on the image layer while runtime-data dirs are often mounts.
 // Never clobbers a directory with a file.
 function move_into(string $s, string $d): bool {
-    if (@rename($s, $d)) return true;
     if (!is_file($s) || is_dir($d)) return false;
-    if (!@copy($s, $d)) return false;
-    return @unlink($s);
+    if (@rename($s, $d)) return true;
+    // Uncooperative dst owner (root-/FTP-owned file in a writable dir):
+    // unlink needs only directory rights, then the path is free to take.
+    @unlink($d);
+    if (@rename($s, $d)) return true;
+    if (@copy($s, $d)) { @unlink($s); return true; }
+    return false;
 }
 function rmdir_r(string $p): void {
     if (is_link($p) || is_file($p)) { @unlink($p); return; }
