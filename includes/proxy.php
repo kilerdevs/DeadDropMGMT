@@ -1624,17 +1624,13 @@ function proxy_multi_probe_streams(array $proxies, string $url, int $timeout_s, 
             // so re-selecting them would return at once and spin hot until
             // the deadline while the hangers pend. (A writable socket may
             // still be a FAILED connect — the peer-name check below sorts
-            // those out; both end up in $connected here.)
-            $moved = false;
+            // those out; both end up in $connected here.) A quiet timeout
+            // slice just re-waits the remainder.
             foreach ($socks as $u => $s) {
                 if (in_array($s, $w, true)) {
                     $connected[$u] = $s;
                     unset($socks[$u]);
-                    $moved = true;
                 }
-            }
-            if (!$moved && ($w === [] || $w === null)) {
-                continue; // quiet timeout slice — re-wait the remainder
             }
         }
         $socks = $connected + $socks;
