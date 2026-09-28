@@ -38,9 +38,17 @@ CREATE TABLE IF NOT EXISTS users (
     enrollment_hash  CHAR(64)               DEFAULT NULL,
     enrollment_expires DATETIME             DEFAULT NULL,
     lang             CHAR(2)       NOT NULL DEFAULT 'en',
-    created_at       DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_username (username)
+    created_at       DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP
+    -- No separate username index: the UNIQUE constraint on username serves
+    -- lookups itself. A second index would only tax every INSERT/UPDATE.
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Redundant pre-optimization index on upgrades: drop it, the UNIQUE key
+-- covers username lookups.
+SET @c = (SELECT COUNT(*) FROM information_schema.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND INDEX_NAME = 'idx_username');
+SET @s = IF(@c > 0, 'ALTER TABLE users DROP INDEX idx_username', 'SELECT 1');
+PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 
 -- Installs from before 2FA / per-account language / enrollment secrets
 -- existed won't have these columns yet. One guarded ALTER per column —
@@ -116,7 +124,9 @@ CREATE TABLE IF NOT EXISTS orders (
     INDEX idx_status     (status),
     INDEX idx_created    (created_at),
     INDEX idx_expires    (expires_at),
-    INDEX idx_created_by (created_by),
+    -- Composite for the courier view (WHERE created_by = ? ORDER BY
+    -- created_at): also satisfies the created_by FK's index requirement.
+    INDEX idx_created_by_at (created_by, created_at),
     CONSTRAINT fk_orders_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -124,6 +134,18 @@ CREATE TABLE IF NOT EXISTS orders (
 SET @c = (SELECT COUNT(*) FROM information_schema.COLUMNS
     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'orders' AND COLUMN_NAME = 'created_by');
 SET @s = IF(@c = 0, 'ALTER TABLE orders ADD COLUMN created_by INT DEFAULT NULL AFTER id', 'SELECT 1');
+PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
+
+-- Courier-view composite (created_by, created_at) for upgrades. It also
+-- replaces the old single-column index, which becomes redundant.
+SET @c = (SELECT COUNT(*) FROM information_schema.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'orders' AND INDEX_NAME = 'idx_created_by_at');
+SET @s = IF(@c = 0, 'ALTER TABLE orders ADD INDEX idx_created_by_at (created_by, created_at)', 'SELECT 1');
+PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
+
+SET @c = (SELECT COUNT(*) FROM information_schema.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'orders' AND INDEX_NAME = 'idx_created_by');
+SET @s = IF(@c > 0, 'ALTER TABLE orders DROP INDEX idx_created_by', 'SELECT 1');
 PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 
 -- Installs from before hashed tokens (ADR-019) lack the three token columns.
@@ -146,10 +168,9 @@ SET @c = (SELECT COUNT(*) FROM information_schema.COLUMNS
 SET @s = IF(@c = 1, 'ALTER TABLE orders MODIFY order_token CHAR(16) DEFAULT NULL', 'SELECT 1');
 PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 
-SET @c = (SELECT COUNT(*) FROM information_schema.STATISTICS
-    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'orders' AND INDEX_NAME = 'idx_created_by');
-SET @s = IF(@c = 0, 'ALTER TABLE orders ADD INDEX idx_created_by (created_by)', 'SELECT 1');
-PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
+-- Superseded: the courier-view composite idx_created_by_at (added above)
+-- covers created_by, so the old singleton must NOT be re-added after its
+-- drop — this guard used to ensure the FK had an index at all.
 
 -- Neither engine has "ADD CONSTRAINT IF NOT EXISTS" for foreign keys, so
 -- guard it by hand — only add fk_orders_created_by if it isn't already there.
@@ -300,9 +321,12 @@ CREATE TABLE IF NOT EXISTS order_events (
 
     INDEX idx_order_id   (order_id),
     INDEX idx_token_hmac (token_hmac),
-    INDEX idx_event_type (event_type),
-    INDEX idx_ip         (ip_address(20)),
-    INDEX idx_created    (created_at)
+    INDEX idx_created    (created_at),
+    -- Composite covering the analytics hot paths (WHERE event_type = ? AND
+    -- created_at >= ? GROUP BY ip_address). It replaces the single-column
+    -- event_type index (4 distinct values — useless alone) and the ip prefix
+    -- index (never used in a WHERE, and a prefix can't serve GROUP BY).
+    INDEX idx_type_created_ip (event_type, created_at, ip_address)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Older installs carry a plaintext order_token here instead (ADR-019):
@@ -316,6 +340,23 @@ PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 SET @c = (SELECT COUNT(*) FROM information_schema.STATISTICS
     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'order_events' AND INDEX_NAME = 'idx_token_hmac');
 SET @s = IF(@c = 0, 'ALTER TABLE order_events ADD INDEX idx_token_hmac (token_hmac)', 'SELECT 1');
+PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
+
+-- Analytics composite for upgrades. The two indexes it replaces are dropped
+-- below (redundant event_type singleton, unused ip prefix).
+SET @c = (SELECT COUNT(*) FROM information_schema.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'order_events' AND INDEX_NAME = 'idx_type_created_ip');
+SET @s = IF(@c = 0, 'ALTER TABLE order_events ADD INDEX idx_type_created_ip (event_type, created_at, ip_address)', 'SELECT 1');
+PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
+
+SET @c = (SELECT COUNT(*) FROM information_schema.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'order_events' AND INDEX_NAME = 'idx_event_type');
+SET @s = IF(@c > 0, 'ALTER TABLE order_events DROP INDEX idx_event_type', 'SELECT 1');
+PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
+
+SET @c = (SELECT COUNT(*) FROM information_schema.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'order_events' AND INDEX_NAME = 'idx_ip');
+SET @s = IF(@c > 0, 'ALTER TABLE order_events DROP INDEX idx_ip', 'SELECT 1');
 PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 
 -- ── Rate limiting (IP-based, DB-backed) ──────────────────────────────────────
@@ -350,12 +391,20 @@ CREATE TABLE IF NOT EXISTS audit_log (
 
     INDEX idx_created (created_at),
     INDEX idx_user     (user_id),
-    INDEX idx_action   (action)
+    INDEX idx_action   (action),
+    -- Key-rotation joins audit_log against orders per token_hmac. Without an
+    -- index that is a full scan per order (orders x audit rows).
+    INDEX idx_token_hmac (token_hmac)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 SET @c = (SELECT COUNT(*) FROM information_schema.COLUMNS
     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'audit_log' AND COLUMN_NAME = 'token_hmac');
 SET @s = IF(@c = 0, 'ALTER TABLE audit_log ADD COLUMN token_hmac CHAR(64) DEFAULT NULL', 'SELECT 1');
+PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
+
+SET @c = (SELECT COUNT(*) FROM information_schema.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'audit_log' AND INDEX_NAME = 'idx_token_hmac');
+SET @s = IF(@c = 0, 'ALTER TABLE audit_log ADD INDEX idx_token_hmac (token_hmac)', 'SELECT 1');
 PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 
 -- ── Settings ──────────────────────────────────────────────────────────────────

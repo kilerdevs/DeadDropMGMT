@@ -168,6 +168,7 @@ $targets = [
 foreach ($targets as [$table, $pk, $encCol, $ivCol, $info, $nullable, $bound]) {
     $stmt = $db->query("SELECT $pk AS id, $encCol AS enc, $ivCol AS iv FROM $table WHERE $encCol IS NOT NULL FOR UPDATE");
     $upd  = $db->prepare("UPDATE $table SET $encCol = ?, $ivCol = ? WHERE $pk = ?");
+    $chk  = $db->prepare("SELECT $encCol AS enc, $ivCol AS iv FROM $table WHERE $pk = ?");
     $n = 0;
 
     foreach ($stmt->fetchAll() as $row) {
@@ -188,7 +189,6 @@ foreach ($targets as [$table, $pk, $encCol, $ivCol, $info, $nullable, $bound]) {
             $e = rot_encrypt($newKey, $info, $plain, $newBind);
             $upd->execute([$e['ciphertext'], $e['iv'], $row['id']]);
             // read-back sanity: the row must now decrypt with the NEW key
-            $chk = $db->prepare("SELECT $encCol AS enc, $ivCol AS iv FROM $table WHERE $pk = ?");
             $chk->execute([$row['id']]);
             $cur = $chk->fetch();
             if (rot_decrypt($newKey, $info, $cur['enc'], $cur['iv'], $newBind) !== $plain) {
@@ -212,13 +212,13 @@ if (!$dry && $fail === 0) {
     $remapEv = $db->prepare('UPDATE order_events SET token_hmac = ? WHERE token_hmac = ?');
     $remapAu = $db->prepare('UPDATE audit_log SET token_hmac = ? WHERE token_hmac = ?');
     $setOrd  = $db->prepare('UPDATE orders SET token_hmac = ?, token_enc = ?, token_iv = ? WHERE id = ?');
+    $chkOrd  = $db->prepare('SELECT token_hmac, token_enc, token_iv FROM orders WHERE id = ?');
     foreach ($tokenMap as $oldHmac => $m) {
         $remapEv->execute([$m['hmac'], $oldHmac]);
         $remapAu->execute([$m['hmac'], $oldHmac]);
         $setOrd->execute([$m['hmac'], $m['enc']['ciphertext'], $m['enc']['iv'], $m['id']]);
-        $chk = $db->prepare('SELECT token_hmac, token_enc, token_iv FROM orders WHERE id = ?');
-        $chk->execute([$m['id']]);
-        $cur = $chk->fetch();
+        $chkOrd->execute([$m['id']]);
+            $cur = $chkOrd->fetch();
         if (!is_array($cur) || $cur['token_hmac'] !== $m['hmac']
             || rot_decrypt($newKey, 'deaddrop:token-v1', $cur['token_enc'], $cur['token_iv']) !== $m['plain']) {
             fwrite(STDERR, sprintf("FAIL orders#%d token: read-back verification failed\n", $m['id']));

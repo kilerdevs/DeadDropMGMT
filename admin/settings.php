@@ -55,10 +55,13 @@ try {
 
 $csrf = generate_csrf();
 
-// Analytics stats for the warning label
+// Analytics stats for the warning label — one pass over the table, not two
+// full scans. (COUNT(DISTINCT) skips NULLs itself, and no admin_* event
+// types are ever written, so both old WHERE clauses were dead weight.)
 try {
-    $analytics_events = (int)get_db()->query("SELECT COUNT(*) FROM order_events WHERE event_type NOT LIKE 'admin_%'")->fetchColumn();
-    $analytics_orders = (int)get_db()->query('SELECT COUNT(DISTINCT token_hmac) FROM order_events WHERE token_hmac IS NOT NULL')->fetchColumn();
+    $aStats = get_db()->query('SELECT COUNT(*) AS events, COUNT(DISTINCT token_hmac) AS orders FROM order_events')->fetch();
+    $analytics_events = (int)($aStats['events'] ?? 0);
+    $analytics_orders = (int)($aStats['orders'] ?? 0);
 } catch (Exception $e) {
     $analytics_events = 0;
     $analytics_orders = 0;

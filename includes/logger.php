@@ -362,21 +362,56 @@ function log_entry_summary(array $rec): string {
 
 // The newest $limit entries of the structured log, newest first, for the
 // Settings viewer — the same file the integrity check covers. Lines that are
-// not valid JSON records are shown raw rather than hidden. The file is capped
-// at 5 MiB by rotation, so reading it whole is bounded.
+// not valid JSON records are shown raw rather than hidden. Backward block
+// scan: the file caps at 5 MiB but only the tail is ever shown, so the last
+// $limit lines plus an exact total are collected without file()ing the
+// whole thing (which kept ~10 MB decoded).
 /** @return array{total:int,entries:list<array{seq:?int,ts:string,level:string,text:string}>} */
 function log_recent_entries(int $limit = 200, ?string $path = null): array {
     $path = $path ?? APP_LOG_PATH;
-    if (!is_file($path) || filesize($path) === 0) {
+    $limit = max(1, $limit);
+    clearstatcache(true, $path);
+    $size = @filesize($path);
+    if ($size === false || $size === 0 || !is_file($path)) {
         return ['total' => 0, 'entries' => []];
     }
-    $lines = @file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-    if ($lines === false) {
+    $fh = @fopen($path, 'r');
+    if ($fh === false) {
         return ['total' => 0, 'entries' => []];
     }
-    $total = count($lines);
+    $total = 0;
+    $kept = []; // newest-first raw lines, at most $limit non-empty ones
+    $carry = ''; // partial first line, completed by the earlier block
+    $pos = $size;
+    while ($pos > 0) {
+        $n = (int)min(65536, $pos);
+        $pos -= $n;
+        fseek($fh, $pos);
+        $block = (string)fread($fh, $n);
+        $parts = explode("\n", $block . $carry);
+        // Every part except [0] ends at a newline inside this window, so it
+        // is a complete line; [0] continues into the earlier window (unless
+        // this was the first block, i.e. the start of the file).
+        for ($i = count($parts) - 1; $i >= 1; $i--) {
+            if ($parts[$i] === '') {
+                continue; // FILE_SKIP_EMPTY_LINES parity for the total
+            }
+            $total++;
+            if (count($kept) < $limit) {
+                $kept[] = $parts[$i];
+            }
+        }
+        $carry = $parts[0];
+        if ($pos === 0 && $carry !== '') {
+            $total++;
+            if (count($kept) < $limit) {
+                $kept[] = $carry;
+            }
+        }
+    }
+    fclose($fh);
     $out = [];
-    foreach (array_reverse(array_slice($lines, -max(1, $limit))) as $line) {
+    foreach ($kept as $line) {
         $rec = json_decode($line, true);
         if (!is_array($rec)) {
             $out[] = ['seq' => null, 'ts' => '', 'level' => 'raw', 'text' => mb_strimwidth($line, 0, 400, '…', 'UTF-8')];
@@ -631,50 +666,55 @@ function verify_log_continuity(?string $path = null): array {
     if (!$cp) {
         return ['status' => 'none', 'detail' => 'no checkpoint written yet'];
     }
-    $entries = []; // ordered [seq|null, hash] across the rotated + live file
+    // Single streaming pass over both generations: only min/max seq, the
+    // entry count and the anchor match are retained — the old version kept
+    // every [seq, hash] pair of both files in memory and effectively read
+    // the same bytes a second time after verify_log_chain().
+    $cHash = trim((string)$cp['tip_hash']);
+    $cSeq = (int)$cp['tip_seq'];
+    $found = false;
+    $rewritten = false;
+    $count = 0;
+    $minSeq = null;
+    $maxSeq = null;
     foreach ([$path . '.1', $path] as $f) {
         if (!is_file($f)) {
             continue;
         }
-        $lines = @file($f, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-        if (!is_array($lines)) {
+        $fh = @fopen($f, 'r');
+        if ($fh === false) {
             continue;
         }
-        foreach ($lines as $line) {
+        while (($line = fgets($fh)) !== false) {
             $rec = json_decode(trim($line), true);
-            if (is_array($rec) && isset($rec['hash']) && is_string($rec['hash'])) {
-                $entries[] = [isset($rec['seq']) ? (int)$rec['seq'] : null, $rec['hash']];
+            if (!is_array($rec) || !isset($rec['hash']) || !is_string($rec['hash'])) {
+                continue;
             }
+            $s = isset($rec['seq']) ? (int)$rec['seq'] : null;
+            if ($s !== null) {
+                $minSeq = $minSeq === null ? $s : min($minSeq, $s);
+                $maxSeq = $maxSeq === null ? $s : max($maxSeq, $s);
+            }
+            if (!$found && hash_equals($cHash, $rec['hash'])) {
+                $found = true;
+            } elseif ($found && $s !== null && $s < $cSeq) {
+                // File order is append order, so a lower seq past the anchor
+                // means the history was rewritten, not extended.
+                $rewritten = true;
+            }
+            $count++;
         }
+        fclose($fh);
     }
-    $cHash = trim((string)$cp['tip_hash']);
-    $cSeq = (int)$cp['tip_seq'];
     $base = [
         'checkpoint_seq' => $cSeq,
         'checkpoint_at'  => (string)($cp['created_at'] ?? ''),
-        'entries'        => count($entries),
+        'entries'        => $count,
     ];
-    $foundIdx = null;
-    $minSeq = null;
-    $maxSeq = null;
-    foreach ($entries as $i => [$s, $h]) {
-        if ($foundIdx === null && hash_equals($cHash, $h)) {
-            $foundIdx = $i;
-        }
-        if ($s !== null) {
-            $minSeq = $minSeq === null ? $s : min($minSeq, $s);
-            $maxSeq = $maxSeq === null ? $s : max($maxSeq, $s);
-        }
-    }
     $base['tip_seq'] = $maxSeq;
-    if ($foundIdx !== null) {
-        // Anything sequenced after the anchor must continue past it: file
-        // order is append order, so a lower seq past the anchor means the
-        // history was rewritten, not extended.
-        foreach (array_slice($entries, $foundIdx + 1) as [$s]) {
-            if ($s !== null && $s < $cSeq) {
-                return ['status' => 'truncated', 'detail' => 'history rewritten after the anchor'] + $base;
-            }
+    if ($found) {
+        if ($rewritten) {
+            return ['status' => 'truncated', 'detail' => 'history rewritten after the anchor'] + $base;
         }
         if ($maxSeq !== null && $maxSeq < $cSeq) {
             return ['status' => 'truncated', 'detail' => 'tip predates the anchor'] + $base;

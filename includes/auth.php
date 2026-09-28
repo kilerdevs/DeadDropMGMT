@@ -642,12 +642,14 @@ function rl_status(string $scope = 'public', ?string $subject = null): array {
     ];
 }
 
-// Spend one attempt from the IP budget AND decide, atomically. The whole
-// read-decide-write runs inside one transaction on a row lock (SELECT ...
-// FOR UPDATE): concurrent requests from the same IP are serialized, so no
-// increment can be lost and two simultaneous visitors can never both see
-// "one attempt left". The returned 'blocked' verdict comes from the
-// post-increment count of that single state transition.
+// Spend one attempt from the IP budget AND decide, atomically. One
+// INSERT ... ON DUPLICATE KEY UPDATE does the read-decide-write inside a
+// single statement (no transaction, no round trips): concurrent requests
+// from the same IP are serialized by the unique key, so no increment can
+// be lost and two simultaneous visitors can never both see "one attempt
+// left". A second statement then reads the post-state for the verdict.
+// The returned 'blocked' verdict comes from the post-increment count of
+// that single state transition.
 function rl_hit(string $scope = 'public', ?int $max_override = null, ?int $window_override = null, ?string $subject = null): array {
     if (rl_scope_switchable($scope) && !rl_enabled()) {
         return ['blocked' => false, 'remaining' => 0, 'count' => 0];
@@ -658,41 +660,48 @@ function rl_hit(string $scope = 'public', ?int $max_override = null, ?int $windo
     $window = $window_override ?? rl_window_seconds();
     $db     = get_db();
     try {
-        $db->beginTransaction();
-        $stmt = $db->prepare(
-            'SELECT count, window_start FROM rate_limits WHERE ip_address = ? AND scope = ? LIMIT 1 FOR UPDATE'
+        // A damaged row must be denied WITHOUT being reset: the probe above
+        // is the only extra round trip, and only a corrupt row ever pays it
+        // (the hot path stays a single atomic upsert plus one read).
+        $probe = $db->prepare(
+            'SELECT window_start FROM rate_limits WHERE ip_address = ? AND scope = ? LIMIT 1'
         );
-        $stmt->execute([$ip, $scope]);
-        $row = $stmt->fetch();
+        $probe->execute([$ip, $scope]);
+        $existing = $probe->fetch();
+        if ($existing) {
+            $damaged = _rl_parse_window_start((string)$existing['window_start']);
+            if ($damaged === false || $damaged <= 0) {
+                log_err('Rate limit increment: unparseable window_start, failing closed');
+                return ['blocked' => true, 'remaining' => $window, 'count' => 0];
+            }
+        }
 
-        // Unparseable window_start fails CLOSED (see rl_status): rolling back
-        // and denying beats resetting the budget on a damaged row.
-        $started = $row ? _rl_parse_window_start((string)$row['window_start']) : time();
-        if ($started === false || $started <= 0) {
-            $db->rollBack();
+        // Stale windows restart at 1, live ones increment — decided by the
+        // engine on the locked row, not by a SELECT in PHP first.
+        $cutoff = gmdate('Y-m-d H:i:s', time() - $window);
+        $db->prepare(
+            'INSERT INTO rate_limits (ip_address, scope, count, window_start) VALUES (?, ?, 1, UTC_TIMESTAMP())
+             ON DUPLICATE KEY UPDATE
+               count = IF(window_start < ?, 1, count + 1),
+               window_start = IF(window_start < ?, UTC_TIMESTAMP(), window_start)'
+        )->execute([$ip, $scope, $cutoff, $cutoff]);
+
+        $row = $db->prepare(
+            'SELECT count, window_start FROM rate_limits WHERE ip_address = ? AND scope = ? LIMIT 1'
+        );
+        $row->execute([$ip, $scope]);
+        $state = $row->fetch();
+
+        // The pre-check above already excluded damaged rows; a parse failure
+        // here means the row changed mid-request — still deny, never wave
+        // through on it.
+        $window_start = $state ? _rl_parse_window_start((string)$state['window_start']) : false;
+        if ($window_start === false || $window_start <= 0) {
             log_err('Rate limit increment: unparseable window_start, failing closed');
             return ['blocked' => true, 'remaining' => $window, 'count' => 0];
         }
-
-        $stale = !$row || (time() - $started) >= $window;
-        if ($stale) {
-            $db->prepare(
-                'INSERT INTO rate_limits (ip_address, scope, count, window_start) VALUES (?, ?, 1, UTC_TIMESTAMP())
-                 ON DUPLICATE KEY UPDATE count = 1, window_start = UTC_TIMESTAMP()'
-            )->execute([$ip, $scope]);
-            $count = 1;
-            $window_start = time();
-        } else {
-            $count = (int)$row['count'] + 1;
-            $window_start = $started;
-            $db->prepare('UPDATE rate_limits SET count = count + 1 WHERE ip_address = ? AND scope = ?')
-               ->execute([$ip, $scope]);
-        }
-        $db->commit();
+        $count = (int)$state['count'];
     } catch (Exception $e) {
-        if ($db->inTransaction()) {
-            $db->rollBack();
-        }
         // Fail CLOSED: an uncountable limiter must deny, never wave through.
         log_err('Rate limit increment failed (fail closed): ' . $e->getMessage());
         return ['blocked' => true, 'remaining' => $window, 'count' => 0];
