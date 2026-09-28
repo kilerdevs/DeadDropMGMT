@@ -95,7 +95,7 @@ jobs:
         run: cp config.php.example config.php
 
       - name: Lint
-        run: git ls-files '*.php' | xargs -n1 -P"$(nproc)" php -l > /dev/null
+        run: git ls-files '*.php' | xargs -n1 php -l > /dev/null
 
       - name: Load schema into test database
         run: php tests/schema_loader.php
@@ -254,9 +254,6 @@ jobs:
   mutation:
     runs-on: ubuntu-24.04
     name: Mutation probe (report-only)
-    # Report-only signal, not a merge gate: dev pushes and the weekly sweep
-    # are enough to watch the MSI trend; PRs and release builds skip it.
-    if: github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')
     services:
       mariadb:
         image: mariadb:11
