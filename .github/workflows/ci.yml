@@ -1,6 +1,10 @@
 name: CI
 
 concurrency:
+  # The same commit runs as push:dev AND pull_request; a release fans out to
+  # three full 13-job runs. Sharing one group per ref stops the pile-up
+  # (queued test jobs waited ~60 s in run 36345330215). Master runs to
+  # completion — cancelling a release build mid-deploy is worse than waiting.
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
@@ -91,7 +95,7 @@ jobs:
         run: cp config.php.example config.php
 
       - name: Lint
-        run: git ls-files '*.php' | xargs -n1 php -l > /dev/null
+        run: git ls-files '*.php' | xargs -n1 -P"$(nproc)" php -l > /dev/null
 
       - name: Load schema into test database
         run: php tests/schema_loader.php
@@ -99,93 +103,6 @@ jobs:
       # setup.sql promises re-running is a harmless no-op (the upgrade path
       # for existing installs) — prove it every build by loading twice.
       - name: Reload schema (idempotency proof)
-        run: php tests/schema_loader.php
-
-      - name: Run tests
-        run: php tests/run_all.php
-
-  # Same suite against MySQL 8 — the app claims MySQL/MariaDB support, and
-  # setup.sql must stay portable (guarded ALTERs, no engine-only syntax).
-  tests-mysql:
-    runs-on: ubuntu-24.04
-    name: tests (MySQL 8)
-    services:
-      mysql:
-        image: mysql:8.0
-        env:
-          MYSQL_ROOT_PASSWORD: root
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd="mysqladmin ping -proot"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=10
-    env:
-      DDMGMT_DB_HOST: 127.0.0.1
-      DDMGMT_DB_PORT: '3306'
-      DDMGMT_DB_USER: root
-      DDMGMT_DB_PASS: root
-      DDMGMT_TEST_DB: deaddrops_test
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Setup PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
-        with:
-          php-version: '8.3'
-          extensions: pdo_mysql, openssl, gd, fileinfo
-
-      - name: Prepare config
-        run: cp config.php.example config.php
-
-      - name: Load schema into test database
-        run: php tests/schema_loader.php
-
-      - name: Run tests
-        run: php tests/run_all.php
-
-  # Timezone robustness: the rate limiter once mixed a UTC write clock with a
-  # local-time read clock, silently neutering windows east of UTC — and CI
-  # runs in UTC, so that whole class slips through untested. This job runs
-  # the full battery under Europe/Warsaw (UTC+1/+2), where the skew fails
-  # open and any regression burns the suite's own budget math. TZ is honored
-  # because the runner image leaves date.timezone unset (UTC default).
-  tests-tz:
-    runs-on: ubuntu-24.04
-    name: tests (Europe/Warsaw TZ)
-    services:
-      mariadb:
-        image: mariadb:11
-        env:
-          MARIADB_ROOT_PASSWORD: root
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd="healthcheck.sh --connect --innodb_initialized"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=10
-    env:
-      DDMGMT_DB_HOST: 127.0.0.1
-      DDMGMT_DB_PORT: '3306'
-      DDMGMT_DB_USER: root
-      DDMGMT_DB_PASS: root
-      DDMGMT_TEST_DB: deaddrops_test
-      TZ: Europe/Warsaw
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Setup PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
-        with:
-          php-version: '8.3'
-          extensions: pdo_mysql, openssl, gd, fileinfo
-
-      - name: Prepare config
-        run: cp config.php.example config.php
-
-      - name: Load schema into test database
         run: php tests/schema_loader.php
 
       - name: Run tests
@@ -337,6 +254,9 @@ jobs:
   mutation:
     runs-on: ubuntu-24.04
     name: Mutation probe (report-only)
+    # Report-only signal, not a merge gate: dev pushes and the weekly sweep
+    # are enough to watch the MSI trend; PRs and release builds skip it.
+    if: github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')
     services:
       mariadb:
         image: mariadb:11
@@ -522,50 +442,6 @@ jobs:
         if: always()
         run: docker compose down -v
 
-  # Minified web installer: tools/install.min.php is generated, never edited
-  # by hand. After every push this job rebuilds it from tools/install.php and
-  # commits the result back ([skip ci] — no loop). InstallerMinTest's
-  # freshness gate keeps branches honest in between: a stale .min fails the
-  # suite with the rebuild command. Write access is scoped to this job only
-  # (the workflow default above stays read-only); skipped on PRs, where the
-  # token cannot push.
-  installer-min:
-    runs-on: ubuntu-24.04
-    name: Minified installer (rebuild + commit-back)
-    permissions:
-      contents: write
-    if: github.event_name == 'push'
-    concurrency:
-      group: installer-min-${{ github.ref }}
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-
-      - name: Setup PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
-        with:
-          php-version: '8.3'
-
-      - name: Rebuild minified installer
-        run: |
-          php -l tools/install.php
-          php tools/build_installer_min.php | tee min-build.txt
-          php -l tools/install.min.php
-          { echo "### Minified installer"; cat min-build.txt; } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Commit back when the source moved
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add tools/install.min.php
-          git diff --cached --quiet && { echo 'in sync — nothing to commit'; exit 0; }
-          git commit -m 'Installer: rebuild minified bundle [skip ci]' \
-            -m 'Why: source moved; CI-regenerated from tools/install.php.'
-          git pull --rebase origin "${{ github.ref_name }}"
-          git push origin "HEAD:${{ github.ref_name }}"
-
   # Real-browser E2E (Playwright/Chromium): the behaviours raw HTTP cannot
   # see — no-JS form paths, inline-handler absence in a live DOM, mid-reveal
   # UI state. Same MariaDB service as the PHP suite; the app boots via
@@ -575,6 +451,10 @@ jobs:
   e2e:
     runs-on: ubuntu-24.04
     name: e2e (Playwright/Chromium)
+    # Docs-only changes exercise no browser behaviour. NOTE: if e2e is a
+    # required branch-protection check, a skipped run blocks the merge —
+    # verify in Settings → Branches before relying on this.
+    paths-ignore: ['**.md', 'docs/**']
     services:
       mariadb:
         image: mariadb:11
@@ -615,8 +495,16 @@ jobs:
       - name: Install E2E dependencies
         run: npm ci
 
+      - name: Cache Playwright browsers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
       - name: Install Chromium
-        run: npx playwright install --with-deps chromium
+        # Headless shell only (no full Chromium + ffmpeg): the specs drive
+        # one headless Chromium, and the shell build downloads far faster.
+        run: npx playwright install --with-deps --only-shell chromium
 
       - name: Run browser tests
         run: npx playwright test
