@@ -135,6 +135,18 @@ T::ok('zone labels re-sync after the status poll re-renders rows',
       str_contains($set, "typeof mzSyncZoneLayers === 'function'"));
 
 $css = (string)file_get_contents($root . '/admin/style.css');
+// One centering method for every centered block: margin-inline: auto in the
+// content area — never a relative nudge toward the viewport center (it only
+// applied to a subset, so settings sat off-column from 2FA / new order /
+// edit, and it broke whenever the sidebar width changed).
+T::ok('style.css: no relative viewport nudge on centered panels',
+      preg_match('/left:\s*calc\(-1/', $css) !== 1);
+T::ok('style.css: settings, 2FA and order forms all center the same way',
+      preg_match('/\.settings-panel\s*\{\s*margin-inline:\s*auto/', $css) === 1
+      && preg_match('/\.totp-panel\s*\{\s*max-width:\s*560px;\s*margin-inline:\s*auto/', $css) === 1
+      && preg_match('/\.centered-panel\s*\{\s*margin-inline:\s*auto/', $css) === 1);
+T::ok('style.css: create-account form keeps its narrow column',
+      preg_match('/\.form-panel\.users-add-panel\s*\{\s*max-width:\s*480px/', $css) === 1);
 // The OSM status strip must never be an overlay again: a fixed badge covered
 // the heading and forms, and on failover (several lines) covered more.
 T::ok('style.css: the OSM status strip is in the page flow, not fixed or layered',

@@ -14,7 +14,7 @@ $restore = ['osm_proxy_enabled' => get_setting('osm_proxy_enabled', '1')];
 $teardown = t_teardown(static function () use ($restore): void {
     $db = get_db();
     $db->exec('DELETE FROM osm_proxies');
-    $db->exec("DELETE FROM settings WHERE key_name IN ('proxy_heal_lock', 'proxy_heal_last', 'proxy_heal_checked', 'proxy_seed_failures', 'osm_proxy_auto_off')");
+    $db->exec("DELETE FROM settings WHERE key_name IN ('proxy_heal_lock', 'proxy_heal_last', 'proxy_heal_checked', 'proxy_heal_urgent', 'proxy_seed_failures', 'osm_proxy_auto_off')");
     $db->exec("DELETE FROM audit_log WHERE action IN ('proxy_seed', 'proxy_replace', 'proxy_auto_off')");
     foreach ($restore as $k => $v) { set_setting($k, $v); }
     host_override(null, true);
@@ -22,7 +22,7 @@ $teardown = t_teardown(static function () use ($restore): void {
 });
 $reset = static function () use ($db): void {
     $db->exec('DELETE FROM osm_proxies');
-    $db->exec("DELETE FROM settings WHERE key_name IN ('proxy_heal_lock', 'proxy_heal_last', 'proxy_heal_checked', 'proxy_seed_failures', 'osm_proxy_auto_off')");
+    $db->exec("DELETE FROM settings WHERE key_name IN ('proxy_heal_lock', 'proxy_heal_last', 'proxy_heal_checked', 'proxy_heal_urgent', 'proxy_seed_failures', 'osm_proxy_auto_off')");
     $db->exec("DELETE FROM audit_log WHERE action IN ('proxy_seed', 'proxy_replace', 'proxy_auto_off')");
     $c = &_settings_store(); $c = null;
     set_setting('osm_proxy_enabled', '1');
@@ -104,6 +104,19 @@ T::ok('the inline pass stamps the cooldown', (int)get_setting('proxy_heal_last',
 $again = 0;
 osm_proxy_heal_pseudo_cron(function () use (&$again): array { $again++; return []; }, $neverDiscover);
 T::eq('inside the cooldown nothing runs again', 0, $again);
+
+// Urgent healing with no way to detach: the kick leaves a flag and the
+// after-response slot runs the pass inline on the next request — a failure
+// seen by one request heals on the next, not one cooldown later.
+$db->exec('DELETE FROM osm_proxies'); // empty pool: seeding work is due
+$db->exec("DELETE FROM settings WHERE key_name IN ('proxy_heal_lock', 'proxy_heal_last', 'proxy_heal_checked', 'proxy_heal_urgent', 'proxy_seed_failures')");
+$c = &_settings_store(); $c = null;
+set_setting('osm_proxy_enabled', '1');
+T::ok('no exec/CLI: urgent kick leaves a flag instead of spawning', osm_proxy_heal_kick(true) === false);
+T::ok('...and the flag is fresh', (int)get_setting('proxy_heal_urgent', '0') > time() - 5);
+osm_proxy_heal_pseudo_cron(fn() => [$fresh('http://10.9.9.1:80'), $fresh('http://10.9.9.2:80')], $neverDiscover);
+T::eq('the urgent flag seeds the pool inline on the next request', 2, (int)$db->query('SELECT COUNT(*) FROM osm_proxies')->fetchColumn());
+T::eq('...and the flag is consumed', '', get_setting('proxy_heal_urgent', ''));
 osm_proxy_heal_spawner(static fn(): bool => false);
 
 // a healthy pool costs one query per cooldown, not one per request

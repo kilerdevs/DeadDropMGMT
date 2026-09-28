@@ -5,14 +5,18 @@ require_once __DIR__ . '/bootstrap.php';
 // ── Build provenance: interpretation and who gets to see it ───────────────────
 // A build is a release only when it sits exactly on a v* tag with a clean
 // tree; commits after the tag (a build from dev), a dirty tree, or no tag to
-// compare against make it a beta. No provenance file means "unknown" — no
-// claim either way. The line is shown to owners on Settings and nowhere
-// else. The file's text is untrusted: validated on read, escaped on output.
+// compare against make it a beta. No provenance file falls back to the
+// version baked into includes/version.php (still beta — a checkout cannot
+// certify a release), so Settings names a version instead of "unknown build"
+// even where .git did not survive. The line is shown to owners on Settings
+// and nowhere else. The file's text is untrusted: validated, escaped.
 
 $doc = static fn(array $o): string => (string)json_encode($o);
 $sha = '610eff73772a939d6304a9c8316103d586aa2d2b';
 
 // ── parse ────────────────────────────────────────────────────────────────────
+T::ok('bundled fallback version is a plain version',
+      preg_match('/^\d{1,4}\.\d{1,4}\.\d{1,4}$/', DDMGMT_BUNDLED_VERSION) === 1);
 $rel = build_info_parse($doc(['describe' => 'v1.5.0-0-g610eff7', 'commit' => $sha, 'branch' => '', 'dirty' => false]));
 T::ok('exact tag + clean tree is a release', $rel['known'] && $rel['release'] && !$rel['beta']);
 T::eq('release version', '1.5.0', $rel['version']);
@@ -139,7 +143,9 @@ T::ok('release build: no commit line', !str_contains($html, 'class="version-comm
 
 @unlink($file);
 $html = $settings();
-T::ok('no provenance file: says unknown, no badge', str_contains($html, 'class="version-muted"') && !str_contains($html, 'class="beta-badge"'));
+T::ok('no provenance file: bundled version shown, still beta',
+      str_contains($html, 'v' . DDMGMT_BUNDLED_VERSION) && str_contains($html, 'class="beta-badge"'));
+T::ok('no provenance file: no commit line without a hash', !str_contains($html, 'class="version-commit"'));
 
 // Audience: never on a public or unauthenticated surface.
 file_put_contents($file, $doc(['describe' => 'v1.5.0-8-g610eff7', 'commit' => $sha, 'branch' => 'dev']));

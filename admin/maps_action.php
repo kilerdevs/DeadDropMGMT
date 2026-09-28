@@ -19,7 +19,7 @@ if (!verify_csrf($_POST['csrf_token'] ?? '')) {
 $action = $_POST['action'] ?? '';
 
 // Long worker calls (poll slice, inline finish) must not hold the session
-// lock: the status poll fires every 3 s, and every other admin request from
+// lock: the status poll fires every 1 s, and every other admin request from
 // this owner — tiles included — would queue behind the download. Closing
 // first persists verify_csrf()'s rotation and frees the lock; re-opening
 // afterwards lets json_out() mint the next token into a live session.

@@ -70,6 +70,10 @@ try {
     set_setting($key, $value);
     if ($key === 'osm_proxy_enabled' && $value === '1') {
         osm_proxy_auto_off_clear(); // the owner decided: drop the "switched off automatically" notice
+        // ...and start building the first pool at once: an empty pool fails
+        // closed, so without this the maps stay dead until the next cooldown
+        // lets a scheduled pass discover. Fire-and-forget — never throws.
+        osm_proxy_heal_kick(true);
     }
     audit('setting_change', null, null, "{$key}={$value}");
     json_out(['ok' => true]);

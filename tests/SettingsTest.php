@@ -67,6 +67,16 @@ T::ok('osm proxy routing on', osm_proxy_enabled());
 set_setting('osm_proxy_enabled', '0');
 T::ok('osm proxy routing off', !osm_proxy_enabled());
 
+// Fresh-install defaults (no row stored): analytics off, OSM proxy routing
+// on, public site in English. The snapshot at the top restores every row
+// below, so later suites inherit a sane database.
+$db->exec("DELETE FROM settings WHERE key_name IN ('analytics_enabled', 'osm_proxy_enabled', 'default_lang')");
+$cache = &_settings_store();
+$cache = null;
+T::ok('analytics off by default', !analytics_enabled());
+T::ok('OSM proxy routing on by default', osm_proxy_enabled());
+T::eq('public language defaults to English', 'en', default_lang());
+
 // extend_hours_options parsing: spaces tolerated, junk dropped, sane default
 set_setting('extend_hours_options', ' 12 , x, -4, 36 ');
 T::eq('options parse and clean', [12, 36], extend_hours_options());

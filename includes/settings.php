@@ -102,7 +102,7 @@ function max_photos_per_order(): int {
 }
 
 function analytics_enabled(): bool {
-    return get_setting('analytics_enabled', '1') === '1';
+    return get_setting('analytics_enabled', '0') === '1';
 }
 
 function default_lang(): string {
@@ -116,18 +116,21 @@ function compliance_note_enabled(): bool {
 }
 
 // Route admin-panel OpenStreetMap traffic (tiles, geocoding) through the
-// osm_proxies pool. OFF by default (opt-in): enabling it makes the server
-// download third-party public proxy lists and probe hundreds of unknown
-// hosts, which an owner must choose knowingly. Once on, an empty pool fails
-// closed, so the healer (includes/proxy.php) discovers a first pool
-// automatically — until it has, OSM-backed maps answer 502 rather than leak.
-// (Installs that stored '1' keep routing; setup.sql never overwrites values.)
+// osm_proxies pool. ON by default: enabling it makes the server download
+// third-party public proxy lists and probe hundreds of unknown hosts, but
+// the pool seeds itself automatically (see osm_proxy_heal()), so a fresh
+// install builds its first pool in the background instead of asking the
+// owner to find the Auto-discover button. An empty pool still fails closed,
+// so until the first seeding pass finishes OSM-backed maps answer 502
+// rather than leak — and a host that can never build a pool is switched
+// back off loudly after 3 empty attempts (osm_proxy_auto_off()).
+// (Installs that stored '0' keep it; setup.sql never overwrites values.)
 //
 // Routing works with or without cURL now (the pure-PHP transport speaks
 // every proxy scheme); the setting is honoured wherever outbound HTTPS
 // exists. An empty pool still fails closed — see osm_fetch().
 function osm_proxy_enabled(): bool {
-    return get_setting('osm_proxy_enabled', '0') === '1';
+    return get_setting('osm_proxy_enabled', '1') === '1';
 }
 
 function extend_hours_options(): array {

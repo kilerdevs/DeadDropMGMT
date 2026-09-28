@@ -100,15 +100,15 @@ T::ok('style.css defines .setup-explain', str_contains($css, '.setup-explain'));
 T::ok('style.css defines .notice', str_contains($css, '.notice'));
 T::ok('panels center in .main, no per-panel viewport offset hack', !str_contains($css, 'left: -115px')
     && str_contains($css, 'margin-inline: auto'));
-// The settings column is viewport-centered (Windows-app behaviour) by ONE
-// shared rule: every centered block must be listed in it, or the column
-// breaks apart again.
-$needle = 'min(115px, max(0px, (100% - 600px) / 2))';
-T::ok('viewport-centering nudge exists', str_contains($css, $needle));
-$rule = substr($css, max(0, (int)strpos($css, $needle) - 500), 600);
-foreach (['.version-strip', '.settings-panel', '.host-section-label', '.host-list'] as $sel) {
-    T::ok("viewport-center rule covers $sel", str_contains($rule, $sel));
-}
+// One centering method: every centered block (settings, 2FA, order forms,
+// version strip) centers in the content area via margin-inline: auto. The
+// old viewport-centering nudge (a relative left offset toward the screen
+// center, applied to a subset of blocks) misaligned settings against 2FA
+// and broke whenever the sidebar width changed — it must stay gone.
+T::ok('no viewport-centering nudge', !str_contains($css, 'min(115px, max(0px, (100% - 600px) / 2))'));
+T::ok('settings and 2FA panels center the same way',
+    str_contains($css, '.settings-panel { margin-inline: auto; }')
+    && preg_match('/\.totp-panel\s*\{\s*max-width:\s*560px;\s*margin-inline:\s*auto/', $css) === 1);
 
 // Bootstrap needs an empty users table; rate_limits are wiped too so no
 // earlier suite's 127.0.0.1 budget can rate-limit this flow.

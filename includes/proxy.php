@@ -976,7 +976,7 @@ function osm_fetch(string $url, int $maxBytes = 2097152): string|false {
     $pool = osm_proxy_pool();
     if (!$pool) {
         osm_last_via_set(['via' => null, 'failed' => true, 'attempts' => 0, 'skipped' => []]);
-        osm_proxy_heal_kick(); // first run / emptied pool: discover one in the background
+        osm_proxy_heal_kick(true); // first run / emptied pool: seed one urgently — maps fail closed until it lands
         return false; // enabled with an empty pool would mean going direct = leak
     }
 
@@ -1027,7 +1027,7 @@ function osm_fetch(string $url, int $maxBytes = 2097152): string|false {
                 'skipped'    => $skipped,
             ]);
             if ($skipped) {
-                osm_proxy_heal_kick(); // members ahead of the winner just failed
+                osm_proxy_heal_kick(true); // members ahead of the winner just failed — replace them now
             }
             return $result;
         }
@@ -1038,7 +1038,7 @@ function osm_fetch(string $url, int $maxBytes = 2097152): string|false {
         osm_pool_circuit_trip($pool); // wholesale failure — spare the next requests the walk
     }
     if ($skipped) {
-        osm_proxy_heal_kick();
+        osm_proxy_heal_kick(true); // the pool just failed a request — heal urgently, not next cooldown
     }
     return false;
 }
@@ -1790,7 +1790,15 @@ function proxy_sock_open_from(mixed $s, array $px, array $t, float $deadline): ?
 //     (list downloads, the public-IP lookup, up to 400 probes), so it runs
 //     in a detached CLI job (cron/proxy_heal.php), never inside a request,
 //     under a lock and a cooldown.
+//   - Failures heal urgently: a kick from live traffic that just watched a
+//     proxy die (or found the pool empty) waits at most URGENT seconds for
+//     the previous run instead of the full cooldown, so a dead member is
+//     confirmed and replaced on the next requests, not minutes later. Where
+//     no detached job is possible the kick leaves an urgent flag and the
+//     after-response slot runs the pass inline.
 const OSM_PROXY_HEAL_COOLDOWN    = 600;  // seconds between discovery runs
+const OSM_PROXY_HEAL_URGENT_COOLDOWN = 60; // seconds between failure-triggered runs (storm guard, not a delay)
+const OSM_PROXY_HEAL_URGENT_WINDOW = 300; // seconds an urgent flag stays actionable for the inline slot
 const OSM_PROXY_HEAL_INLINE_BUDGET = 22.0; // wall-clock seconds of an inline pass (shared hosts stop scripts at ~30 s)
 const OSM_PROXY_SEED_MAX_FAILURES = 3;   // empty-pool discoveries in a row before routing is switched off
 const OSM_PROXY_HEAL_LOCK_STALL  = 900;  // a lock older than this is dead
@@ -1870,14 +1878,18 @@ function osm_proxy_heal_spawner(?callable $set = null, bool $reset = false): ?ca
 // automatic discovery not disabled, the cooldown passed, and either a
 // replaceable dead entry or an empty pool. $throttle (the pseudo-cron slot,
 // which asks on every request) also remembers "nothing to do" for one
-// cooldown so a healthy pool costs a single query per interval.
-function osm_proxy_heal_pending(bool $throttle = false): bool {
+// cooldown so a healthy pool costs a single query per interval. $urgent
+// (a kick from live traffic that just watched a proxy die) uses the short
+// urgent window instead of the full cooldown, so failures heal on the next
+// requests, not minutes later.
+function osm_proxy_heal_pending(bool $throttle = false, bool $urgent = false): bool {
     if (!osm_proxy_heal_allowed() || !osm_proxy_enabled()) return false;
     $since = (int)get_setting('proxy_heal_last', '0');
     if ($throttle) {
         $since = max($since, (int)get_setting('proxy_heal_checked', '0'));
     }
-    if ((time() - $since) < OSM_PROXY_HEAL_COOLDOWN) return false;
+    $window = ($urgent && !$throttle) ? OSM_PROXY_HEAL_URGENT_COOLDOWN : OSM_PROXY_HEAL_COOLDOWN;
+    if ((time() - $since) < $window) return false;
     if (osm_proxy_replaceable_dead() !== [] || osm_proxy_pool_empty()) return true;
     if ($throttle) {
         set_setting('proxy_heal_checked', (string)time());
@@ -1886,18 +1898,29 @@ function osm_proxy_heal_pending(bool $throttle = false): bool {
 }
 
 // The pseudo-cron's proxy slot (runs after the response). Where a detached
-// job can be started, start one; where it cannot — shared hosting without
-// exec or CLI PHP — run a time-budgeted pass right here. Never throws.
+// job can be started, start one on the normal schedule (urgent live-traffic
+// kicks already bypass the cooldown through osm_proxy_heal_kick()); where
+// it cannot — shared hosting without exec or CLI PHP — an urgent flag left
+// by a kick runs a time-budgeted pass right here, so a failure seen by one
+// request heals on the next instead of one cooldown later. Never throws.
 // ($discover / $probe: test seams, as in osm_proxy_heal().)
 function osm_proxy_heal_pseudo_cron(?callable $discover = null, ?callable $probe = null): void {
     try {
-        if (!osm_proxy_heal_pending(true)) return;
+        if (!osm_proxy_heal_allowed() || !osm_proxy_enabled()) return;
         if (osm_proxy_heal_spawner() !== null || host_can_detach()) {
+            if (!osm_proxy_heal_pending(true)) return;
             osm_proxy_heal_kick();
+            return;
+        }
+        $urgent = (time() - (int)get_setting('proxy_heal_urgent', '0')) < OSM_PROXY_HEAL_URGENT_WINDOW;
+        if (!$urgent && !osm_proxy_heal_pending(true)) return;
+        if (osm_proxy_replaceable_dead() === [] && !osm_proxy_pool_empty()) {
+            delete_setting('proxy_heal_urgent');
             return;
         }
         @set_time_limit(60);
         osm_proxy_heal($discover, $probe, false, OSM_PROXY_HEAL_INLINE_BUDGET);
+        delete_setting('proxy_heal_urgent');
     } catch (Throwable $e) {
         log_err('Proxy heal slot: ' . $e->getMessage());
     }
@@ -1953,16 +1976,25 @@ function osm_proxy_auto_off_clear(): void {
 
 // Start a detached heal job when one is warranted: routing on, a replaceable
 // dead entry exists (or the pool is empty and needs seeding), and the
-// cooldown has passed. Cheap when nothing is due
+// cooldown has passed. $urgent (live traffic just watched a proxy die, or
+// the pool is empty and maps are failing) uses the short urgent window so
+// the replacement starts on the next requests. Where no detached job is
+// possible the kick leaves an urgent flag for the after-response slot
+// instead of spawning. Cheap when nothing is due
 // (one setting read plus one SELECT), never throws, never blocks. Returns
 // whether a job was started.
-function osm_proxy_heal_kick(): bool {
+function osm_proxy_heal_kick(bool $urgent = false): bool {
     try {
         $spawn = osm_proxy_heal_spawner();
         // No way to detach here (no exec / CLI PHP): the pseudo-cron slot runs
         // the pass inline instead — and must not find the cooldown burnt.
-        if ($spawn === null && !host_can_detach()) return false;
-        if (!osm_proxy_heal_pending()) return false;
+        if ($spawn === null && !host_can_detach()) {
+            if ($urgent && osm_proxy_heal_pending(false, true)) {
+                set_setting('proxy_heal_urgent', (string)time());
+            }
+            return false;
+        }
+        if (!osm_proxy_heal_pending(false, $urgent)) return false;
         // Stamp before spawning: concurrent requests must not each start a job.
         set_setting('proxy_heal_last', (string)time());
         if ($spawn !== null) {

@@ -7,8 +7,11 @@ require_once __DIR__ . '/bootstrap.php';
 // one from proxy_discover() — but never on a hunch: manual entries are exempt,
 // nothing is deleted without a replacement (outage safety), a recovered proxy
 // is kept, one healer runs at a time, and live traffic only *kicks* a detached
-// job (cooldown-limited) instead of running discovery in the request.
-// Discovery and probing are injected: no network is touched here.
+// job instead of running discovery in the request. A kick from traffic that
+// just watched a proxy die (or found the pool empty) heals urgently — at most
+// the short urgent window after the previous run, not the full cooldown —
+// and where no detached job is possible it leaves an urgent flag for the
+// after-response slot. Discovery and probing are injected: no network here.
 
 $db = get_db();
 $restore = [
@@ -17,7 +20,7 @@ $restore = [
 $teardown = t_teardown(static function () use ($restore): void {
     $db = get_db();
     $db->exec('DELETE FROM osm_proxies');
-    $db->exec("DELETE FROM settings WHERE key_name IN ('proxy_heal_lock', 'proxy_heal_last')");
+    $db->exec("DELETE FROM settings WHERE key_name IN ('proxy_heal_lock', 'proxy_heal_last', 'proxy_heal_urgent')");
     $db->exec("DELETE FROM audit_log WHERE action IN ('proxy_replace', 'proxy_seed')");
     putenv('DDMGMT_PROXY_HEAL');
     foreach ($restore as $k => $v) { set_setting($k, $v); }
@@ -25,7 +28,7 @@ $teardown = t_teardown(static function () use ($restore): void {
 
 $reset = static function () use ($db): void {
     $db->exec('DELETE FROM osm_proxies');
-    $db->exec("DELETE FROM settings WHERE key_name IN ('proxy_heal_lock', 'proxy_heal_last')");
+    $db->exec("DELETE FROM settings WHERE key_name IN ('proxy_heal_lock', 'proxy_heal_last', 'proxy_heal_urgent')");
     $db->exec("DELETE FROM audit_log WHERE action IN ('proxy_replace', 'proxy_seed')");
     // Settings are cached per process: drop what was just deleted.
     $c = &_settings_store();
@@ -205,19 +208,31 @@ set_setting('osm_proxy_enabled', '1');
 T::ok('kick: failed discovered entry starts one job', osm_proxy_heal_kick() === true && $started === 1);
 T::ok('kick: cooldown suppresses the next one', osm_proxy_heal_kick() === false && $started === 1);
 
+// Failures heal urgently: a kick from live traffic waits at most the short
+// urgent window after the previous run, not the full cooldown.
+$reset();
+$started = 0;
+$add('http://10.0.0.1:80', 'proxifly', 'fail');
+set_setting('proxy_heal_last', (string)(time() - OSM_PROXY_HEAL_COOLDOWN + 120)); // inside the full cooldown...
+T::ok('kick: ordinary kick inside the cooldown starts nothing', osm_proxy_heal_kick() === false && $started === 0);
+T::ok('kick: urgent kick from a failure starts the job at once', osm_proxy_heal_kick(true) === true && $started === 1);
+T::ok('kick: ...but even urgent kicks are storm-guarded', osm_proxy_heal_kick(true) === false && $started === 1);
+$started = 0;
+
 // ── osm_fetch on an empty pool (first request after install) seeds it ─────────
 $reset();
 $started = 0;
 T::ok('empty pool: fetch fails closed', osm_fetch('http://127.0.0.1:1/x', 1024) === false);
 osm_last_via_stage(null);
 T::eq('empty pool: fetch kicked the seeding job', 1, $started);
-// Opt-in: routing means downloading third-party lists and probing hundreds
-// of unknown hosts, which a fresh install must never start on its own.
-T::ok('routing defaults to OFF when no setting exists',
+// Routing default: fresh installs route OSM traffic through proxies and the
+// healer seeds the first pool automatically (kicked urgently by the first
+// request), instead of failing closed until the owner finds the button.
+T::ok('routing defaults to ON when no setting exists',
       (function () use ($db): bool {
           $db->exec("DELETE FROM settings WHERE key_name = 'osm_proxy_enabled'");
           $c = &_settings_store(); $c = null;
-          return osm_proxy_enabled() === false;
+          return osm_proxy_enabled() === true;
       })());
 // A list line is attacker-controlled: only globally routable literal IPs
 // may become probe targets.

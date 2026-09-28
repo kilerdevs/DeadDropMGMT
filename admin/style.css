@@ -548,7 +548,8 @@ tbody td:last-child { padding-right: 0; }
 .location-display-instr{ white-space: pre-line; font-size: 13px; line-height: 1.6; }
 .form-actions-settings { padding-top: 32px; border-top: 1px solid var(--border); margin-top: 8px; }
 
-.users-add-panel { max-width: 480px; }
+/* (The create-account width lives with the other panel modifiers in the
+   Form panels section — it needs higher specificity than .form-panel.) */
 
 .inline-pw-form {
     display:    flex;
@@ -701,32 +702,21 @@ input[type="range"]::-moz-range-track { height: 2px; background: var(--border); 
 /* Panels center within .main via margin-inline: auto — the same column as
    the version strip, the hosting list, and every other centered block, so
    they stay aligned at every viewport width. (A former relative-offset hack
-   pulled panels 115px left toward the viewport center; it only applied to
-   some blocks and broke the column whenever the sidebar width changed.) */
+   pulled some panels 115px left toward the viewport center; it applied to a
+   subset of blocks only, so settings sat off-column from 2FA / new order /
+   edit — and it broke whenever the sidebar width changed. Removed: every
+   centered block now uses this one method.) */
 
-/* ── Viewport-centered settings column ─────────────────────────────────── */
-/* Windows-app behaviour: the settings column sits on the true screen center,
-   not just in the area right of the sidebar. Every centered block carries the
-   same relative nudge — half the 230px sidebar — so the column moves as one
-   and stays aligned with itself. The nudge self-limits to the free side
-   margin, so narrow windows never push the column under the sidebar. At phone
-   widths the sidebar is a drawer and .main already is the viewport, hence the
-   breakpoint (it mirrors the sidebar's own 781px media query). */
-@media (min-width: 781px) {
-    .version-strip,
-    .settings-panel,
-    .host-section-label,
-    .host-list {
-        position: relative;
-        left: calc(-1 * min(115px, max(0px, (100% - 600px) / 2)));
-    }
-}
-
-/* Centered panels for the settings and 2FA screens */
+/* Centered panels: .form-panel centers in the content area; modifiers below
+   only narrow the column, never move it. */
 .settings-panel { margin-inline: auto; }
 .totp-panel     { max-width: 560px; margin-inline: auto; }
 .totp-panel .totp-enroll { align-items: center; }
 .centered-panel { margin-inline: auto; }
+/* Higher specificity than .form-panel on purpose: this width must win
+   regardless of rule order, so the create-account form keeps its narrow
+   column instead of inheriting the 680px default. */
+.form-panel.users-add-panel { max-width: 480px; }
 .form-group { margin-bottom: 30px; }
 
 label, .field-label {

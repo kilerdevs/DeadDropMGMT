@@ -1680,7 +1680,11 @@ function maps_process_php(array $zone, int $timeBox): array {
     $t0 = microtime(true);
     $lastRow = 0.0;
     $progress = static function (int $fetched, int $total) use ($db, $id, $t0, &$lastRow): void {
-        if ($fetched < $total && (microtime(true) - $lastRow) < 2.0) {
+        // Row writes are throttled to 2/s: the Settings page polls every
+        // second, and anything slower leaves the progress bar and ETA visibly
+        // stale on multi-minute downloads. One narrow UPDATE per row per
+        // half-second is cheap next to the fetch traffic itself.
+        if ($fetched < $total && (microtime(true) - $lastRow) < 0.5) {
             return;
         }
         $lastRow = microtime(true);
@@ -1911,7 +1915,7 @@ function maps_process_one(array $zone): array {
                 $prog = $p;
             }
         }
-        if ($prog === null || (microtime(true) - $lastWrite) < 2.0) {
+        if ($prog === null || (microtime(true) - $lastWrite) < 0.5) {
             return;
         }
         $lastWrite = microtime(true);

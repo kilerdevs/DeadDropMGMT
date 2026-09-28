@@ -152,14 +152,17 @@ function s_label(array $s, string $key): string {
                 : '&mdash;' ?></span>
             <?php if ($bi['beta']): ?>
             <span class="beta-badge" title="<?= htmlspecialchars(t('admin.settings.version_beta_hint'), ENT_QUOTES, 'UTF-8') ?>">BETA</span>
-            <span class="version-commit"><?php
+            <?php
                 // One line: hash, branch, and (when the tree was modified) a note.
+                // No provenance detail (bundled fallback: version only) means no
+                // line at all — an empty span would be pointless markup.
                 $parts = [];
                 if ($bi['commit'] !== null) { $parts[] = '<code>' . htmlspecialchars($bi['commit'], ENT_QUOTES, 'UTF-8') . '</code>'; }
                 if ($bi['branch'] !== null) { $parts[] = '<span class="version-muted">' . htmlspecialchars($bi['branch'], ENT_QUOTES, 'UTF-8') . '</span>'; }
                 if ($bi['dirty']) { $parts[] = '<span class="version-muted">' . htmlspecialchars(t('admin.settings.version_dirty'), ENT_QUOTES, 'UTF-8') . '</span>'; }
-                echo implode(' <span class="version-muted">&middot;</span> ', $parts);
-            ?></span>
+                if ($parts !== []): ?>
+            <span class="version-commit"><?= implode(' <span class="version-muted">&middot;</span> ', $parts) ?></span>
+            <?php endif; ?>
             <?php endif; ?>
             <?php endif; ?>
         </div>
@@ -891,6 +894,8 @@ function s_label(array $s, string $key): string {
     // answer arrives, so a slow slice (up to 8 s server-side) never overlaps
     // itself. Background tabs pause instead of queueing authed requests —
     // which also stops refreshing login_time and holding sessions open.
+    // One-second cadence while a download runs: the row now updates twice a
+    // second, so progress and ETA track the fetch instead of jumping.
     var mzTimer = null;
     function mzSchedule(ms) {
         if (mzTimer) clearTimeout(mzTimer);
@@ -902,13 +907,13 @@ function s_label(array $s, string $key): string {
     }
     function mzPoll() {
         mzStop();
-        if (document.hidden) { mzSchedule(3000); return; }
+        if (document.hidden) { mzSchedule(1000); return; }
         mzPost('status').then(function (res) {
-            if (!(res.ok && res.j.ok)) { mzSchedule(3000); return; }
+            if (!(res.ok && res.j.ok)) { mzSchedule(1000); return; }
             if (!mzRender(res.j.zones, res.j.disk_free)) {
                 return; // queue drained — stay stopped until an action re-arms
             }
-            mzSchedule(3000);
+            mzSchedule(1000);
         });
     }
 
