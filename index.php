@@ -65,6 +65,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && !empty($_SESSION['reveal'])) {
 }
 
 // ── GET ?token= pre-fill: auto-show password step ─────────────────────────────
+// Deliberately event-free: the POST lookup logs the lookup event, and this
+// pre-fill is UI convenience, not a lookup of record. (Spending the public
+// budget here would punish legitimate re-opens with no refund concept, and
+// guessing the ~82-bit token is infeasible — so neither a limit nor an
+// event insert belongs on this path.)
 if ($_SERVER['REQUEST_METHOD'] === 'GET' && $loc_data === null && !$correct_preparing) {
     $get_token = trim(get_string('token'));
     if (strlen($get_token) === 16 && ctype_alnum($get_token)) {
@@ -76,7 +81,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && $loc_data === null && !$correct_prep
             if ($ord_g) {
                 $prefill_token = $get_token;
                 if ($allow_status_lookup) {
-                    log_event('lookup', (int)$ord_g['id'], $get_token);
                     $order_status = $ord_g['status'];
                     $show_pw_step = true;
                 }

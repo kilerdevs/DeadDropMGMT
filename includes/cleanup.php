@@ -19,6 +19,7 @@ function do_cleanup(): int {
     _warn_legacy_tokens();
     osm_tile_cache_prune();
     osm_geocode_cache_prune();
+    _sweep_staging_uploads();
     error_log_trim();
     return cleanup_expired_orders();
 }
@@ -28,6 +29,28 @@ function do_cleanup(): int {
 // them along; the audit trail keeps a year, long enough for any review.
 const ORPHAN_EVENT_RETENTION_DAYS = 30;
 const AUDIT_RETENTION_DAYS = 365;
+
+// Staged uploads (create.php processes photos before the order row exists,
+// under uploads/0/): a crash between staging and claiming orphans them — no
+// order_photos row ever points at 0/, so anything older than an hour dies.
+// Never throws.
+function _sweep_staging_uploads(): void {
+    try {
+        $dir = dirname(__DIR__) . '/uploads/0/';
+        if (!is_dir($dir)) {
+            return;
+        }
+        $now = time();
+        foreach (glob_list($dir . '*') as $f) {
+            if ((is_file($f) || is_link($f)) && ($now - (int)@filemtime($f)) > 3600) {
+                overwrite_and_unlink($f);
+            }
+        }
+        @rmdir($dir);
+    } catch (Throwable $e) {
+        log_err('Staging sweep failed: ' . $e->getMessage());
+    }
+}
 
 function _purge_stale_records(): void {
     try {

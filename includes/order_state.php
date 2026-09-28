@@ -140,6 +140,7 @@ function order_delete_atomic(int $id): ?array {
 function cleanup_expired_orders(int $batch = 200): int {
     $db      = get_db();
     $deleted = 0;
+    $sweptIds = [];
     $batch   = max(1, $batch);
     $lock   = $db->prepare(
         'SELECT id, token_hmac FROM orders WHERE id = ? AND status = "delivered" AND expires_at IS NOT NULL AND expires_at <= NOW() LIMIT 1 FOR UPDATE'
@@ -176,7 +177,7 @@ function cleanup_expired_orders(int $batch = 200): int {
                 $db->commit();
 
                 _unlink_order_files($oid, $files);
-                log_info('cleanup_deleted', ['msg' => 'Cleanup: deleted expired order #' . $oid]);
+                $sweptIds[] = $oid;
                 $deleted++;
             } catch (Throwable $e) {
                 if ($db->inTransaction()) {
@@ -189,6 +190,14 @@ function cleanup_expired_orders(int $batch = 200): int {
             $lastId = max($lastId, (int)end($expired)['id']);
         }
     } while (count($expired) === $batch);
+
+    // One summary line per sweep, not one per order: the per-order lines
+    // were the bulk of cleanup's own log volume on backlogs.
+    if ($deleted > 0) {
+        $shown = array_slice($sweptIds, 0, 10);
+        log_info('cleanup_sweep', ['msg' => 'Cleanup: deleted ' . $deleted . ' expired order(s)'
+            . ($deleted > count($shown) ? ' (first ' . count($shown) . ': ' . implode(',', $shown) . ')' : ': ' . implode(',', $shown))]);
+    }
 
     return $deleted;
 }

@@ -204,28 +204,14 @@ function app_log(string $level, string $event, array $ctx = []): bool {
         @mkdir($dir, 0750, true);
     }
 
-    // Serialize rotation AND writing on a sidecar lock: rotating outside the
-    // lock let two processes at the 5 MiB boundary both rename (the second
-    // deleting the first's .1 generation outright) or append post-rotation
-    // entries to the renamed .1 file.
-    $lock = @fopen($path . '.lock', 'c');
-    if ($lock === false) {
-        return false;
-    }
-    flock($lock, LOCK_EX);
-    try {
-        _log_rotate_if_needed($path);
-    } finally {
-        flock($lock, LOCK_UN);
-        fclose($lock);
-    }
-
+    // Everything lock-free happens first: the critical section below is
+    // rotate + tip + append only, held as briefly as possible.
     $user = null;
     if (isset($_SESSION['user_name']) && is_string($_SESSION['user_name'])) {
         $user = $_SESSION['user_name'];
     }
 
-    $rec = [
+    $base = [
         'ts'    => gmdate('Y-m-d\TH:i:s.v\Z'),
         'level' => $level,
         'event' => $event,
@@ -245,75 +231,94 @@ function app_log(string $level, string $event, array $ctx = []): bool {
         // array_key_exists, not isset: under CLI 'ip' is null and anonymous
         // requests carry 'user' null — isset(null) would let a context value
         // forge those fields. Base record always wins.
-        if (!array_key_exists($k, $rec)) {
-            $rec[$k] = $v;
+        if (!array_key_exists($k, $base)) {
+            $base[$k] = $v;
         }
     }
 
-    $fh = @fopen($path, 'c+');
-    if ($fh === false) {
+    // ONE lock across rotate AND append (the sidecar): the old shape opened
+    // and locked two files per write (sidecar for the rotation check, then
+    // the log itself) and left a window where another process could rotate
+    // between the check and the append. Lock order is fixed everywhere
+    // (sidecar, then file — nothing ever takes them in reverse), so nesting
+    // cannot deadlock.
+    $lock = @fopen($path . '.lock', 'c');
+    if ($lock === false) {
         return false;
     }
-    flock($fh, LOCK_EX);
-    [$prev, $tipSeq] = _log_tail_tip($fh);
-    if ($prev === '') {
-        flock($fh, LOCK_UN);
-        fclose($fh);
-        return false;
-    }
-    // A fresh generation links to the rotated one's tip (hash AND seq), so
-    // the chain runs across files: deleting app.log.1, or renaming app.log
-    // to fake a rotation and then editing it, breaks verification instead of
-    // restarting a clean chain at GENESIS.
-    $fresh = $prev === APP_LOG_GENESIS && $tipSeq === 0;
-    $rot = $fresh ? _log_rot_tip($path . '.1') : [APP_LOG_GENESIS, 0];
-    $rec['prev'] = $fresh ? $rot[0] : $prev;
-    // Seq inputs stay lazy (ternaries): the full count runs only for legacy
-    // tips, the rotation peek only for a fresh file — the common sequenced
-    // path pays just the tail scan above.
-    $rec['seq'] = _log_compute_seq(
-        $prev,
-        $tipSeq,
-        $tipSeq > 0 ? 0 : _log_count_entries($fh),
-        $rot[1]
-    );
-
-    $payload = json_encode($rec, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-    if ($payload === false) {
-        // Non-UTF8 context — drop the offending context rather than lose the entry
-        foreach ($rec as $k => $v) {
-            if (!in_array($k, ['ts', 'level', 'event', 'msg', 'ip', 'user', 'req', 'prev', 'seq'], true)) {
-                unset($rec[$k]);
-            }
-        }
-        // Identical flags to the stored line AND the verifier (unescaped +
-        // substitute): hashing the default-flags encoding here while the
-        // line below is written unescaped made every non-ASCII base field
-        // (Polish msgs, names) verify as "hash mismatch" — a false tamper
-        // alarm on a perfectly honest entry.
-        $payload = json_encode($rec, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
-        if ($payload === false) {
-            flock($fh, LOCK_UN);
-            fclose($fh);
+    flock($lock, LOCK_EX);
+    try {
+        // Serialize rotation AND writing: rotating outside the lock let two
+        // processes at the 5 MiB boundary both rename (the second deleting
+        // the first's .1 generation outright) or append post-rotation
+        // entries to the renamed .1 file.
+        _log_rotate_if_needed($path);
+        $fh = @fopen($path, 'c+');
+        if ($fh === false) {
             return false;
         }
-    }
-    $rec['hash'] = hash_hmac('sha256', $payload, _log_key());
+        flock($fh, LOCK_EX);
+        try {
+            [$prev, $tipSeq] = _log_tail_tip($fh);
+            if ($prev === '') {
+                return false;
+            }
+            // A fresh generation links to the rotated one's tip (hash AND seq), so
+            // the chain runs across files: deleting app.log.1, or renaming app.log
+            // to fake a rotation and then editing it, breaks verification instead of
+            // restarting a clean chain at GENESIS.
+            $fresh = $prev === APP_LOG_GENESIS && $tipSeq === 0;
+            $rot = $fresh ? _log_rot_tip($path . '.1') : [APP_LOG_GENESIS, 0];
+            $rec = $base;
+            $rec['prev'] = $fresh ? $rot[0] : $prev;
+            // Seq inputs stay lazy (ternaries): the full count runs only for legacy
+            // tips, the rotation peek only for a fresh file — the common sequenced
+            // path pays just the tail scan above.
+            $rec['seq'] = _log_compute_seq(
+                $prev,
+                $tipSeq,
+                $tipSeq > 0 ? 0 : _log_count_entries($fh),
+                $rot[1]
+            );
 
-    $line = json_encode($rec, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
-    if ($line === false) {
-        // Unencodable even with substitution (e.g. INF/NAN floats in ctx) —
-        // refuse loudly instead of appending a blank line the verifier
-        // would silently skip, losing the entry without a trace.
-        flock($fh, LOCK_UN);
-        fclose($fh);
-        return false;
+            $payload = json_encode($rec, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            if ($payload === false) {
+                // Non-UTF8 context — drop the offending context rather than lose the entry
+                foreach ($rec as $k => $v) {
+                    if (!in_array($k, ['ts', 'level', 'event', 'msg', 'ip', 'user', 'req', 'prev', 'seq'], true)) {
+                        unset($rec[$k]);
+                    }
+                }
+                // Identical flags to the stored line AND the verifier (unescaped +
+                // substitute): hashing the default-flags encoding here while the
+                // line below is written unescaped made every non-ASCII base field
+                // (Polish msgs, names) verify as "hash mismatch" — a false tamper
+                // alarm on a perfectly honest entry.
+                $payload = json_encode($rec, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+                if ($payload === false) {
+                    return false;
+                }
+            }
+            $rec['hash'] = hash_hmac('sha256', $payload, _log_key());
+
+            $line = json_encode($rec, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+            if ($line === false) {
+                // Unencodable even with substitution (e.g. INF/NAN floats in ctx) —
+                // refuse loudly instead of appending a blank line the verifier
+                // would silently skip, losing the entry without a trace.
+                return false;
+            }
+            fwrite($fh, $line . "\n");
+            fflush($fh);
+            return true;
+        } finally {
+            flock($fh, LOCK_UN);
+            fclose($fh);
+        }
+    } finally {
+        flock($lock, LOCK_UN);
+        fclose($lock);
     }
-    fwrite($fh, $line . "\n");
-    fflush($fh);
-    flock($fh, LOCK_UN);
-    fclose($fh);
-    return true;
 }
 
 function log_err(string $message): void {

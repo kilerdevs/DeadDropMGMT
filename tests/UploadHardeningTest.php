@@ -208,6 +208,38 @@ $forged['size'] = 200 * 1024 * 1024;
 $oid = 910098; _uh_track($oid);
 T::ok('forged client size cannot skip the ceiling', save_uploaded_photo($forged, $oid, 2 * 1024 * 1024) === false);
 
+// 9c ── staged uploads: processed before the order row, claimed after it
+$stg = "$tmpdir/stage.jpg";
+$img = imagecreatetruecolor(100, 60);
+imagefill($img, 0, 0, imagecolorallocate($img, 40, 200, 40));
+imagejpeg($img, $stg, 90);
+$img = null; // PHP 8.5 deprecates imagedestroy(); GC frees the GdImage
+$oid = 910030; _uh_track($oid);
+$stagedRel = save_uploaded_photo(_uh_entry($stg), 0, 2 * 1024 * 1024);
+T::ok('photo stages under uploads/0/', is_string($stagedRel) && str_starts_with($stagedRel, '0/'));
+if (is_string($stagedRel)) {
+    $claimed = photo_staged_claim($stagedRel, $oid);
+    T::eq('claim moves the photo to the order', "$oid/" . substr($stagedRel, 2), $claimed);
+    T::ok('stage is empty after claim', !is_file("$up/$stagedRel"));
+    $cthumb = $claimed !== null ? photo_thumb_rel($claimed) : null;
+    T::ok('thumbnail moved with the claim', $cthumb !== null && is_file("$up/$cthumb"));
+    T::ok('claim of garbage is null', photo_staged_claim('../../config.php', $oid) === null);
+    T::ok('claim to order 0 is null', photo_staged_claim($stagedRel, 0) === null);
+    if ($claimed !== null) { @unlink("$up/$claimed"); }
+    if ($cthumb !== null) { @unlink("$up/$cthumb"); }
+    @rmdir("$up/$oid");
+}
+// Staging sweep reaps crash orphans but keeps fresh stages.
+@mkdir("$up/0", 0770, true);
+file_put_contents("$up/0/old.jpg", 'x');
+touch("$up/0/old.jpg", time() - 3700);
+file_put_contents("$up/0/fresh.jpg", 'x');
+_sweep_staging_uploads();
+T::ok('sweep reaps aged stages', !is_file("$up/0/old.jpg"));
+T::ok('sweep keeps fresh stages', is_file("$up/0/fresh.jpg"));
+@unlink("$up/0/fresh.jpg");
+@rmdir("$up/0");
+
 // Cleanup: files + rows
 foreach ($orderIds as $oidDel) {
     foreach (glob_list("$up/$oidDel/*") as $f) { @unlink($f); }

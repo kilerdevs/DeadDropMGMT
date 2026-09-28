@@ -447,6 +447,30 @@ function photo_thumb_rel(string $rel): ?string {
     return $m[1] . $m[2] . '_thumb.jpg';
 }
 
+// Claim a staged upload (uploads/0/<hex>.<ext>, written before the order row
+// exists) for its order: renames the photo and its thumbnail into
+// uploads/<id>/ and answers the final rel. Null when the stage is missing
+// or the move fails — the caller treats it like a rejected upload, and the
+// hourly staging sweep reaps the leftover (never referenced, never served).
+function photo_staged_claim(string $rel, int $order_id): ?string {
+    if ($order_id <= 0 || preg_match('#^0/([0-9a-f]+)\.(jpg|jpeg|png|webp|gif)$#i', $rel, $m) !== 1) {
+        return null;
+    }
+    $base = dirname(__DIR__) . '/uploads/';
+    $dir = $base . $order_id . '/';
+    if (!is_dir($dir) && !@mkdir($dir, 0750, true)) {
+        return null;
+    }
+    if (!@rename($base . $rel, $dir . $m[1] . '.' . $m[2])) {
+        return null;
+    }
+    $thumb = '0/' . $m[1] . '_thumb.jpg';
+    if (is_file($base . $thumb)) {
+        @rename($base . $thumb, $dir . $m[1] . '_thumb.jpg');
+    }
+    return $order_id . '/' . $m[1] . '.' . $m[2];
+}
+
 // Grid <img> source: the thumbnail when it exists, the full file otherwise
 // (pre-thumbnail rows, or a thumb that failed to write, keep working).
 function photo_grid_src(string $rel): string {

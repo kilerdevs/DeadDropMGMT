@@ -84,6 +84,38 @@ try {
     $pw_hash = hash_password($password);
 
     $db   = get_db();
+    // Photos are processed BEFORE the transaction opens: GD decode+re-encode
+    // is the slow part and must not hold the order row lock. Files stage
+    // under uploads/0/ (no order 0 ever exists) and move into place after
+    // the INSERT; a failed insert discards them, crash leftovers are swept
+    // hourly — the transaction below stays a short row write.
+    $photo_errors = [];
+    $count = 0;
+    $limit = max_photos_per_order();
+    $files = ['name' => []];
+    $staged = [];
+    if (isset($_FILES['photos']['name']) && is_array($_FILES['photos']['name']) && !empty($_FILES['photos']['name'][0])) {
+        $files = $_FILES['photos'];
+        $count = count($files['name']);
+        for ($i = 0; $i < $count && $i < $limit; $i++) {
+            $entry = [
+                'name'     => $files['name'][$i],
+                'type'     => $files['type'][$i],
+                'tmp_name' => $files['tmp_name'][$i],
+                'error'    => $files['error'][$i],
+                'size'     => $files['size'][$i],
+            ];
+            $rel = save_uploaded_photo($entry, 0, max_photo_bytes());
+            if ($rel === false) {
+                // Raw name: t() escapes params at the sink (see orders.php) —
+                // pre-escaping here would double-escape it in the flash.
+                $photo_errors[] = (string)$files['name'][$i];
+            } else {
+                $staged[] = $rel;
+            }
+        }
+    }
+
     // Order row and photo rows commit together or not at all: a photo-row
     // failure used to report "create failed" for an order that existed (its
     // generated password never shown). Files saved for a rolled-back order
@@ -109,34 +141,18 @@ try {
     $order_id = (int)$db->lastInsertId();
     audit('order_create', $order_id, $token);
 
-    // Handle photo uploads — capped per request (see max_photos_per_order):
-    // extras are reported, never silently dropped and never processed.
-    $photo_errors = [];
-    $count = 0;
-    $limit = max_photos_per_order();
-    $files = ['name' => []];
+    // Handle staged uploads: claim each into the order directory (instant
+    // renames), then record the row. A failed claim reports like a rejected
+    // upload — the file stays staged for the hourly sweep.
     $saved = [];
-    if (isset($_FILES['photos']['name']) && is_array($_FILES['photos']['name']) && !empty($_FILES['photos']['name'][0])) {
-        $files = $_FILES['photos'];
-        $count = count($files['name']);
-        for ($i = 0; $i < $count && $i < $limit; $i++) {
-            $entry = [
-                'name'     => $files['name'][$i],
-                'type'     => $files['type'][$i],
-                'tmp_name' => $files['tmp_name'][$i],
-                'error'    => $files['error'][$i],
-                'size'     => $files['size'][$i],
-            ];
-            $rel = save_uploaded_photo($entry, $order_id, max_photo_bytes());
-            if ($rel === false) {
-                // Raw name: t() escapes params at the sink (see orders.php) —
-                // pre-escaping here would double-escape it in the flash.
-                $photo_errors[] = (string)$files['name'][$i];
-            } else {
-                $saved[] = $rel;
-                store_order_photo($db, $order_id, $rel);
-            }
+    foreach ($staged as $stagedRel) {
+        $final = photo_staged_claim($stagedRel, $order_id);
+        if ($final === null) {
+            $photo_errors[] = basename($stagedRel);
+            continue;
         }
+        $saved[] = $final;
+        store_order_photo($db, $order_id, $final);
     }
     $db->commit();
 
@@ -159,7 +175,9 @@ try {
     if (isset($db) && $db->inTransaction()) {
         $db->rollBack();
     }
-    foreach ($saved ?? [] as $rel) {
+    // Both claimed files and files still staged under uploads/0/ die with
+    // the failed create (anything missed is swept hourly, never referenced).
+    foreach (array_merge($saved ?? [], $staged ?? []) as $rel) {
         discard_order_photo_file($rel);
     }
     log_err('Create order error: ' . $e->getMessage());
