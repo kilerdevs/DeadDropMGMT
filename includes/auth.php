@@ -239,7 +239,7 @@ function courier_owns_order(int $order_id): bool {
         }
 
         $cacheKey = 'admin_session_status:' . $uid . ':' . session_id();
-        if ($singleAdmin && function_exists('apcu_fetch') && apcu_exists($cacheKey)) {
+        if ($singleAdmin && extension_loaded('apcu') && function_exists('apcu_fetch') && apcu_exists($cacheKey)) {
             $cached = apcu_fetch($cacheKey);
             if (is_string($cached)) {
                 return $cached;
@@ -269,7 +269,7 @@ function courier_owns_order(int $order_id): bool {
             $status = hash_equals($active, session_id()) ? 'ok' : 'superseded';
         }
 
-        if ($singleAdmin && function_exists('apcu_store')) {
+        if ($singleAdmin && extension_loaded('apcu') && function_exists('apcu_store')) {
             apcu_store($cacheKey, $status, 30);
         }
 
@@ -732,7 +732,7 @@ function rl_status(string $scope = 'public', ?string $subject = null): array {
     // pays once per second per client. Only cache when users table exists
     // (i.e., not during pre-schema bootstrap).
     $cacheKey = 'rl_status:' . $ip . ':' . $scope . ':' . (int)(time() / $window);
-    if (function_exists('apcu_fetch') && apcu_exists($cacheKey)) {
+    if (extension_loaded('apcu') && function_exists('apcu_fetch') && apcu_exists($cacheKey)) {
         $cached = apcu_fetch($cacheKey);
         if (is_array($cached) && isset($cached['started'], $cached['count'])) {
             $started = $cached['started'];
@@ -796,7 +796,7 @@ function rl_status(string $scope = 'public', ?string $subject = null): array {
     }
 
     // Cache the valid probe result for 1 second (window roll = new key)
-    if (function_exists('apcu_store')) {
+    if (extension_loaded('apcu') && function_exists('apcu_store')) {
         apcu_store($cacheKey, ['started' => $started, 'count' => (int)$row['count']], 1);
     }
 

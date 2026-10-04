@@ -65,18 +65,51 @@ T::eq('page strings render in chosen language',
 $_SESSION = [];
 
 // ── HTTP: persistence across requests and visits ───────────────────────────
-$port = 8300 + (int)(getmypid() % 400);
+$port = 0;
+$proc = null;
 $root = dirname(__DIR__);
 $null = DIRECTORY_SEPARATOR === '\\' ? 'NUL' : '/dev/null';
-$cmd  = escapeshellarg(PHP_BINARY)
-    . ' -d session.save_path=' . escapeshellarg(ini_get('session.save_path'))
-    . " -S 127.0.0.1:$port -t " . escapeshellarg($root);
-$proc = proc_open(t_exec_cmd($cmd), [['pipe', 'r'], ['file', $null, 'w'], ['file', $null, 'w']], $pipes);
-if (!is_resource($proc)) {
-    fwrite(STDERR, "cannot spawn built-in server\n");
+for ($attempt = 0; $attempt < 5; $attempt++) {
+    $tryPort = 8300 + (int)(getmypid() % 400) + $attempt;
+    $cmd  = [
+        PHP_BINARY,
+        '-d', 'session.save_path=' . ini_get('session.save_path'),
+        '-S', "127.0.0.1:$tryPort",
+        '-t', $root,
+    ];
+    $proc = proc_open($cmd, [
+        ['pipe', 'r'],
+        ['file', $null, 'w'],
+        ['file', $null, 'w'],
+    ], $pipes);
+    if (!is_resource($proc)) continue;
+    // Wait for server to be ready
+    $up = false;
+    for ($i = 0; $i < 30; $i++) {
+        try { [$st] = _pl_get("http://127.0.0.1:$tryPort/"); }
+        catch (Throwable) { $st = 0; usleep(50000); continue; }
+        if ($st === 200) { $up = true; $port = $tryPort; break; }
+        usleep(50000);
+    }
+    if ($up) break;
+    // Server didn't start, clean up and try next port
+    $st = proc_get_status($proc);
+    if (!empty($st['running'])) {
+        if (DIRECTORY_SEPARATOR === '\\') {
+            exec('taskkill /F /T /PID ' . (int)$st['pid'] . ' >NUL 2>&1');
+        } else {
+            proc_terminate($proc);
+        }
+    }
+    proc_close($proc);
+    $proc = null;
+}
+if (!$port) {
+    fwrite(STDERR, "cannot spawn built-in server after 5 attempts\n");
     exit(1);
 }
 register_shutdown_function(static function () use ($proc): void {
+    if (!is_resource($proc)) return;
     $st = proc_get_status($proc);
     if (!empty($st['running'])) {
         if (DIRECTORY_SEPARATOR === '\\') {
@@ -168,7 +201,7 @@ $router = $webDir . '/index.php';
 file_put_contents($router, '<?php declare(strict_types=1); require '
     . var_export(str_replace('\\', '/', $root) . '/includes/kernel.php', true)
     . '; throw new RuntimeException("boundary-probe");');
-$port2 = 8360 + (int)(getmypid() % 400);
+$port2 = 8800 + (int)(getmypid() % 400);
 $null = DIRECTORY_SEPARATOR === '\\' ? 'NUL' : '/dev/null';
 $cmd2 = [
     PHP_BINARY,
@@ -182,8 +215,10 @@ $proc2 = proc_open($cmd2, [
     ['file', $null, 'w'],
 ], $pipes2);
 if (is_resource($proc2)) {
+    // Give the PHP built-in server a moment to bind the socket before probing
+    usleep(200000);
     $up2 = false;
-    for ($i = 0; $i < 30; $i++) {
+    for ($i = 0; $i < 60; $i++) {
         try { [$st2] = _pl_get("http://127.0.0.1:$port2/"); }
         catch (Throwable) { $st2 = 0; usleep(50000); continue; }
         if ($st2 === 500) { $up2 = true; break; }
