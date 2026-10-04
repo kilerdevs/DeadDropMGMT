@@ -78,6 +78,73 @@ function pq(string $v): string { // php-quote for config patching
     return str_replace(['\\', "'"], ['\\\\', "\\'"], $v);
 }
 
+// ── unzip fallback (hosts without the php-zip extension) ───────────────────
+// ZipArchive is the fast path; where it is missing the installer falls back
+// to the `unzip` binary (Info-ZIP — present on virtually every Linux host)
+// driven through whichever process function the host still allows. Only
+// proc_open/exec qualify: shell_exec reports no exit code, and a silent
+// half-extract is worse than a clear error. Never throws.
+function ix_shell_exec(): ?string {
+    foreach (['proc_open', 'exec'] as $fn) if (function_exists($fn)) return $fn;
+    return null;
+}
+function ix_unzip_bin(): ?string {
+    if (ix_shell_exec() === null) return null;
+    $path = function_exists('getenv') ? (string)@getenv('PATH') : '';
+    if ($path !== '') {
+        $exe = 'unzip' . (DIRECTORY_SEPARATOR === '\\' ? '.exe' : '');
+        foreach (explode(PATH_SEPARATOR, $path) as $d) {
+            $c = rtrim($d, '/\\') . DIRECTORY_SEPARATOR . $exe;
+            if ($c !== $exe && is_file($c)) return $c;
+        }
+    }
+    foreach (['/usr/bin/unzip', '/bin/unzip', '/usr/local/bin/unzip'] as $c) {
+        if (is_file($c)) return $c;
+    }
+    return null;
+}
+// Returns [exit code, output] or null when it could not run.
+function ix_run_unzip(string $bin, array $args): ?array {
+    $cmd = escapeshellarg($bin);
+    foreach ($args as $a) $cmd .= ' ' . escapeshellarg($a);
+    if (function_exists('proc_open')) {
+        $p = @proc_open($cmd, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+        if (!is_resource($p)) return null;
+        $out = stream_get_contents($pipes[1]); fclose($pipes[1]);
+        $err = stream_get_contents($pipes[2]); fclose($pipes[2]);
+        return [proc_close($p), (string)$out . (string)$err];
+    }
+    if (function_exists('exec')) {
+        $lines = []; $code = 0;
+        @exec($cmd . ' 2>&1', $lines, $code);
+        return [(int)$code, implode("\n", $lines)];
+    }
+    return null;
+}
+// `unzip -Z1` output → clean name list (trailing newline, nothing else).
+function ix_unzip_names(string $out): array {
+    $names = [];
+    foreach (explode("\n", $out) as $ln) {
+        $ln = trim($ln);
+        if ($ln !== '') $names[] = $ln;
+    }
+    return $names;
+}
+// Zip-slip guard for user-supplied zips (the manual-upload button accepts
+// arbitrary files): only relative paths under one top folder ever extract.
+function ix_zip_names_ok(array $names): bool {
+    foreach ($names as $nm) {
+        $nm = (string)$nm;
+        if ($nm === '') continue;
+        if ($nm[0] === '/' || $nm[0] === '\\') return false;
+        if (preg_match('#^[A-Za-z]:#', $nm) === 1) return false;
+        foreach (explode('/', str_replace('\\', '/', $nm)) as $seg) {
+            if ($seg === '..') return false;
+        }
+    }
+    return true;
+}
+
 // ── direct HTTP fetch with manual redirect loop ──────────────────────────────
 // No proxy support by design: the installer downloads from GitHub over a
 // plain direct connection. A host that cannot reach GitHub at all gets the
@@ -153,6 +220,12 @@ function curl_hop(string $url, string $method, int $timeout = 25): array {
         CURLOPT_CONNECTTIMEOUT => min(10, $timeout), CURLOPT_USERAGENT => 'DeadDropMGMT-installer/' . INST_VERSION,
         CURLOPT_SSL_VERIFYPEER => true, CURLOPT_HTTPHEADER => ['Accept: */*'],
     ]);
+    // Watchdog: while bytes flow the PHP time limit is re-armed, so a slow
+    // link can never kill a ~4 MB download mid-flight (the max_time check
+    // row reports this instead of warning about it). Anonymous closure —
+    // extra progress args are simply ignored.
+    curl_setopt($ch, CURLOPT_NOPROGRESS, false);
+    curl_setopt($ch, CURLOPT_PROGRESSFUNCTION, function (): int { unlimit(); return 0; });
     if ($method === 'HEAD') curl_setopt($ch, CURLOPT_NOBODY, true);
     $raw = curl_exec($ch);
     if ($raw === false) { $e = curl_error($ch); curl_close($ch); return ['error' => 'cURL: ' . $e]; }
@@ -213,6 +286,7 @@ function ix_read_until($sock, float $deadline, callable $done, int $cap) {
         $res = $done($buf);
         if ($res !== null) return $res;
         if (strlen($buf) > $cap) return null;
+        unlimit(); // slow link: re-arm while waiting (see curl_hop watchdog)
         $left = $deadline - microtime(true);
         if ($left <= 0) return null;
         $r = [$sock]; $w = null; $e = null;
@@ -308,6 +382,7 @@ function ix_sock_hop(string $url, string $method, int $timeout = 25): array {
             $want = $sized ? (int)$fields['content-length'] : 0;
             $buf = $rest;
             while (true) {
+                unlimit(); // slow link: re-arm per chunk (see curl_hop watchdog)
                 if ($buf !== '') {
                     $take = $buf;
                     if ($sized) {
@@ -353,7 +428,7 @@ function cap_checks(): array {
     $out[] = version_compare(PHP_VERSION, '8.2.0', '>=')
         ? row('php', 'PHP ' . PHP_VERSION, 'ok')
         : row('php', 'PHP ' . PHP_VERSION, 'fail', 'DeadDropMGMT needs PHP 8.2+. Ask the host to switch the PHP version for this domain.');
-    foreach (['pdo_mysql' => 'fail', 'mbstring' => 'fail', 'openssl' => 'warn', 'zlib' => 'warn'] as $ext => $lvl) {
+    foreach (['pdo_mysql' => 'fail', 'mbstring' => 'fail', 'zlib' => 'warn'] as $ext => $lvl) {
         $out[] = extension_loaded($ext)
             ? row('ext_' . $ext, $ext . ' ' . pver($ext), 'ok')
             : row('ext_' . $ext, $ext . ($lvl === 'fail' ? ' MISSING' : ' missing'), $lvl,
@@ -361,19 +436,27 @@ function cap_checks(): array {
                     : "Optional: without $ext some features degrade (updates need zlib).");
     }
     $hasCurl = function_exists('curl_init');
+    // openssl only matters when cURL is absent: cURL brings its own TLS,
+    // the bundled socket engine needs the PHP extension for https://.
+    $out[] = extension_loaded('openssl') ? row('ext_openssl', 'openssl ' . pver('openssl'), 'ok')
+        : row('ext_openssl', 'openssl missing', $hasCurl ? 'info' : 'warn',
+            $hasCurl ? 'Fine — cURL handles TLS itself; only the socket fallback stays HTTP-only.'
+                : 'HTTPS downloads would ride the socket engine, which needs openssl. Enable cURL or openssl.');
     $out[] = $hasCurl ? row('ext_curl', 'curl ' . pver('curl'), 'ok')
         : row('ext_curl', 'curl missing', 'info', 'Optional. Direct downloads fall back to the bundled socket engine.');
-    $fopen = filter_var(eini('allow_url_fopen'), FILTER_VALIDATE_BOOLEAN);
-    $tls = $hasCurl || ($fopen && function_exists('stream_socket_client') && extension_loaded('openssl'));
+    // One working HTTPS path is enough: cURL, or raw sockets + openssl.
+    // (allow_url_fopen is NOT one: HTTP no longer rides streams — file://
+    // test hooks only — so hosts with it off lose nothing. No row for it.)
+    $tls = $hasCurl || (function_exists('stream_socket_client') && extension_loaded('openssl'));
     $out[] = $tls ? row('tls', 'HTTPS transport', 'ok')
-        : row('tls', 'HTTPS transport', 'fail', 'Neither cURL nor (allow_url_fopen + openssl) available — GitHub downloads are impossible. Enable cURL.');
-    $out[] = $fopen ? row('fopen', 'allow_url_fopen on', 'ok')
-        : row('fopen', 'allow_url_fopen off', $hasCurl ? 'info' : 'fail',
-            $hasCurl ? 'Fine — cURL covers downloads.' : (function_exists('stream_socket_client')
-                ? 'Downloads fall back to the bundled socket engine.'
-                : 'With cURL also missing, downloads cannot work.'));
+        : row('tls', 'HTTPS transport', 'fail', 'No HTTPS transport: cURL is missing and the bundled socket engine needs openssl. Enable cURL or openssl.');
+    // ZipArchive is preferred, but the `unzip` binary unpacks just as well —
+    // a missing php-zip extension no longer blocks the install.
+    $ubin = class_exists('ZipArchive') ? null : ix_unzip_bin();
     $out[] = class_exists('ZipArchive') ? row('zip', 'ZipArchive', 'ok')
-        : row('zip', 'ZipArchive MISSING', 'fail', 'Required to unpack the release. Enable the zip extension in the panel.');
+        : ($ubin !== null
+            ? row('zip', 'ZipArchive via unzip binary', 'warn', 'No php-zip extension — unpacking uses the `unzip` binary instead (same result, a little slower).')
+            : row('zip', 'ZipArchive MISSING', 'fail', 'Required to unpack the release. Enable the zip extension in the panel.'));
     $w = is_writable(base());
     $out[] = $w ? row('writedir', 'directory writable', 'ok')
         : row('writedir', 'directory NOT writable', 'fail', 'The installer cannot write here. Fix ownership/permissions (755/775) or pick another dir.');
@@ -391,9 +474,11 @@ function cap_checks(): array {
             : row('upload', 'upload limit: ' . round($upCap / 1048576) . ' MB', 'warn',
                 'The ~4 MB release zip may not fit a manual upload — prefer direct download on this host.'));
     $met = eini('max_execution_time');
-    $out[] = row('max_time', 'max_execution_time=' . ($met !== '' ? $met : '?'),
-        ($met !== '' && (int)$met > 0 && (int)$met < 20) ? 'warn' : 'info',
-        'The package downloads in one request (~4 MB); under ~20 s limits a slow link can time out — retry or upload the zip manually.');
+    // Always info now: cURL re-arms the limit while bytes flow (watchdog),
+    // the socket engine re-arms per chunk, and a failed fetch never touches
+    // a previous good package (.part + validate + rename) — just retry.
+    $out[] = row('max_time', 'max_execution_time=' . ($met !== '' ? $met : '?'), 'info',
+        'Slow links are safe: downloads reset the time limit while bytes flow. An interrupted transfer validates before replacing the package — just retry.');
     $out[] = function_exists('set_time_limit') ? row('set_time_limit', 'set_time_limit', 'ok')
         : row('set_time_limit', 'set_time_limit disabled', 'warn', 'Long steps run in small chunks anyway — slower but fine.');
     $out[] = function_exists('proc_open') ? row('proc_open', 'proc_open', 'ok')
@@ -535,28 +620,62 @@ if ($action !== '') {
         jout(['ok' => true, 'code' => $r[0], 'bytes' => strlen($r[2]), 'ms' => $ms, 'via' => $r['via'] ?? '?']);
     }
     if ($action === 'upload') {
-        if (!class_exists('ZipArchive')) jer('ZipArchive missing — enable the zip extension in the panel first.');
+        $useZip = class_exists('ZipArchive');
+        $ubin = $useZip ? null : ix_unzip_bin();
+        if (!$useZip && $ubin === null) jer('ZipArchive missing — enable the zip extension in the panel first.');
         if (empty($_FILES['zip']['tmp_name']) || !is_uploaded_file($_FILES['zip']['tmp_name'])) jer('no file received');
         [$zip] = dl_paths();
         if (!@move_uploaded_file($_FILES['zip']['tmp_name'], $zip)) jer('cannot store upload — directory not writable?');
-        $z = new ZipArchive();
-        if ($z->open($zip) !== true) { @unlink($zip); jer('not a valid zip archive'); }
-        $n = $z->numFiles; $z->close();
+        if ($useZip) {
+            $z = new ZipArchive();
+            if ($z->open($zip) !== true) { @unlink($zip); jer('not a valid zip archive'); }
+            $n = $z->numFiles; $z->close();
+        } else {
+            // No -qq here: ZipInfo 3.00 (still shipped in some toolchains)
+            // rejects it and prints usage — which would parse as 15 files.
+            $list = ix_run_unzip($ubin, ['-Z1', $zip]);
+            $names = ($list !== null && $list[0] === 0) ? ix_unzip_names($list[1]) : [];
+            if ($names === []) { @unlink($zip); jer('not a valid zip archive'); }
+            $n = count($names);
+        }
         jout(['ok' => true, 'size' => filesize($zip), 'files' => $n,
             'log' => 'upload received: ' . number_format((int)filesize($zip)) . ' B, ' . $n . ' entries']);
     }
     if ($action === 'extract') {
-        if (!class_exists('ZipArchive')) jer('ZipArchive missing — enable the zip extension.');
+        $useZip = class_exists('ZipArchive');
+        $ubin = $useZip ? null : ix_unzip_bin();
+        if (!$useZip && $ubin === null) jer('ZipArchive missing — enable the zip extension.');
         [$zip, $src] = dl_paths();
         if (!is_file($zip)) jer('no package yet — download or upload the release zip first');
-        $z = new ZipArchive();
-        if ($z->open($zip) !== true) jer('cannot open zip — re-download (interrupted transfer?)');
-        $first = (string)$z->getNameIndex(0);
-        $prefix = str_contains($first, '/') ? substr($first, 0, strpos($first, '/') + 1) : '';
-        $n = $z->numFiles;
         @mkdir($src, 0755, true);
-        if (!$z->extractTo($src)) { $z->close(); jer('extract failed — disk full or permissions?'); }
-        $z->close();
+        if ($useZip) {
+            $z = new ZipArchive();
+            if ($z->open($zip) !== true) jer('cannot open zip — re-download (interrupted transfer?)');
+            $names = [];
+            $n = $z->numFiles;
+            for ($i = 0; $i < $n; $i++) $names[] = (string)$z->getNameIndex($i);
+            if (!ix_zip_names_ok($names)) { $z->close(); jer('zip has unsafe paths (absolute or ../ entries) — re-download from a trusted URL'); }
+            $first = $names !== [] ? $names[0] : '';
+            $prefix = str_contains($first, '/') ? substr($first, 0, strpos($first, '/') + 1) : '';
+            unlimit();
+            if (!$z->extractTo($src)) { $z->close(); jer('extract failed — disk full or permissions?'); }
+            $z->close();
+        } else {
+            $list = ix_run_unzip($ubin, ['-Z1', $zip]);
+            $names = ($list !== null && $list[0] === 0) ? ix_unzip_names($list[1]) : [];
+            if ($names === []) jer('cannot open zip — re-download (interrupted transfer?)');
+            if (!ix_zip_names_ok($names)) jer('zip has unsafe paths (absolute or ../ entries) — re-download from a trusted URL');
+            $first = $names[0];
+            $prefix = str_contains($first, '/') ? substr($first, 0, strpos($first, '/') + 1) : '';
+            $n = count($names);
+            unlimit();
+            $r = ix_run_unzip($ubin, ['-q', '-o', $zip, '-d', $src]);
+            if ($r === null || $r[0] !== 0) jer('extract failed — disk full or permissions?');
+            // The listing is trusted only after the payload proves it: the
+            // first entry must have materialized (a usage/error text parsed
+            // as names fails here instead of scattering garbage).
+            if (!file_exists($src . '/' . $first)) { rmdir_r($src); jer('cannot open zip — re-download (interrupted transfer?)'); }
+        }
         $from = $src . '/' . $prefix;
         if (!is_dir($from)) { rmdir_r($src); jer('unexpected zip layout (no top folder)'); }
         $keepCfg = !empty($_POST['keep_config']) && is_file(base() . '/config.php');

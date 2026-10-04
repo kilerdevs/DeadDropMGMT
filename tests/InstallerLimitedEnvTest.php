@@ -71,6 +71,37 @@ T::eq('php -n tags parse', 'v0', $tags['tags'][0]['tag'] ?? null);
 T::eq('php -n extract exits 0', 0, $code);
 T::eq('php -n extract refuses cleanly', false, $ex['ok'] ?? true);
 
+// ── 4b. smaller requirement surface + unzip-binary fallback ─────────────────
+// The child still runs `php -n` (no zip extension); the parent builds the
+// fixture with its own ZipArchive. Whether the CLI fallback can run depends
+// on the machine — the crippled check's own zip row is the oracle: warn =
+// fallback available, fail = nothing to unpack with (skip the proof).
+[$code, $nozipCheck] = ixl_run($work, ['action' => 'check'], [], ['-n']);
+T::eq('php -n re-check exits 0', 0, $code);
+$nozipById = [];
+foreach ($nozipCheck['rows'] ?? [] as $r) $nozipById[$r['id']] = $r;
+T::ok('no allow_url_fopen row (HTTP never rides streams now)', !isset($nozipById['fopen']));
+T::eq('max_execution_time row is pure info (watchdog re-arms it)', 'info', $nozipById['max_time']['status'] ?? null);
+if (($nozipById['zip']['status'] ?? 'fail') === 'warn' && class_exists('ZipArchive')) {
+    $zp = $work . '/.__install_dl.zip';
+    $z = new ZipArchive();
+    T::ok('fallback fixture opens', $z->open($zp, ZipArchive::CREATE | ZipArchive::OVERWRITE) === true);
+    $z->addFromString('fallback-pkg/setup.sql', '-- fallback fixture');
+    $z->addFromString('fallback-pkg/includes/kernel.php', '<?php // marker');
+    $z->addFromString('fallback-pkg/config.php.example', '<?php // marker');
+    $z->close();
+    [$code, $fex] = ixl_run($work, [], ['action' => 'extract'], ['-n']);
+    T::eq('CLI-fallback extract exits 0', 0, $code);
+    T::eq('CLI-fallback extract ok', true, $fex['ok'] ?? false);
+    T::ok('CLI-fallback placed files', is_file($work . '/setup.sql') && is_file($work . '/includes/kernel.php'));
+    @unlink($work . '/setup.sql');
+    @unlink($work . '/config.php.example');
+    @unlink($work . '/includes/kernel.php');
+    @rmdir($work . '/includes');
+} else {
+    T::ok('SKIP unzip-fallback proof (no unzip binary on this machine)', true);
+}
+
 // ── 5. locked-down directives, normal extensions ─────────────────────────────
 $crippled = [
     '-d', 'disable_functions=proc_open,exec,shell_exec,system,passthru,popen,set_time_limit',

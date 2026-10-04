@@ -9,6 +9,18 @@ All notable changes to DeadDropMGMT are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Web installer (`tools/install.php`) needs less from the host: the
+  `allow_url_fopen` row is gone (HTTP never rides streams — file:// test
+  hooks only — so off loses nothing), a missing php-zip extension no longer
+  blocks the install (the `unzip` binary unpacks instead, same result), and
+  `max_execution_time` is pure info (cURL and the socket engine re-arm the
+  limit while bytes flow, so slow links can't kill the download). Hard
+  requirements are now exactly: PHP 8.2+, pdo_mysql, mbstring, one HTTPS
+  transport (cURL, or sockets + openssl), a writable directory, 32 MB disk.
+  New upload/extract paths also reject zips with absolute or `../` entries
+  (zip-slip guard on manual uploads).
+
 ## [1.6.2] - 2026-09-28
 
 Optimization review findings: two real bugs (PMTiles run-length holes,
