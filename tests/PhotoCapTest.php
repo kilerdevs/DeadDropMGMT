@@ -186,8 +186,11 @@ foreach ($shots as $n => $path) {
           . "Content-Type: image/jpeg\r\n\r\n$data\r\n";
 }
 $raw .= "--$boundary--\r\n";
-[$st, , $ck, $loc] = _pc('POST', "$B/admin/create.php", null, $ck, $raw,
+[$st, $cb, $ck, $loc] = _pc('POST', "$B/admin/create.php", null, $ck, $raw,
     "multipart/form-data; boundary=$boundary");
+// DIAG-CI: single CI-only failure — dump the actual response line.
+fwrite(STDERR, 'DIAG create st=' . $st . ' loc=' . $loc . ' bodylen=' . strlen($cb)
+    . ' bodyhead=' . substr(preg_replace('/\s+/', ' ', $cb), 0, 200) . "\n");
 T::ok('create redirects to orders', $st === 302 && str_contains($loc, 'orders.php'));
 
 $oid = (int)$db->query("SELECT id FROM orders WHERE created_by = $ownerId ORDER BY id DESC LIMIT 1")->fetchColumn();
