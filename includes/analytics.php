@@ -11,7 +11,12 @@ function log_event(
     ?string $token     = null,
     bool    $anonymous = false
 ): void {
-    if (!analytics_enabled()) {
+    // The toggle gates tracking: attributable rows (token index, IP, user
+    // agent). An anonymous terminal row (a flow's last event after the order
+    // and its history were wiped: no token, no IP, no user agent) is a bare
+    // counter, not tracking — it records even while analytics is off, so
+    // switching analytics off never silently drops the receipt trail.
+    if (!$anonymous && !analytics_enabled()) {
         return;
     }
     try {

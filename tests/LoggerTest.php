@@ -467,6 +467,13 @@ set_setting('analytics_enabled', '0');
 log_event('t_disabled_event'); // early return, no insert, no error
 T::ok('disabled analytics writes nothing',
       $db->query("SELECT 1 FROM order_events WHERE event_type = 't_disabled_event'")->fetch() === false);
+// ...except the anonymous terminal row: no token, no IP, no UA — a bare
+// counter, not tracking. The receipt trail must survive analytics being off.
+log_event('t_anon_terminal', null, null, true);
+$anon = $db->query("SELECT * FROM order_events WHERE event_type = 't_anon_terminal' ORDER BY id DESC LIMIT 1")->fetch();
+T::ok('anonymous terminal event records while analytics is off',
+      $anon !== false && $anon['token_hmac'] === null && ($anon['ip_address'] ?? null) === ''
+      && ($anon['user_agent'] ?? null) === null);
 
 set_setting('analytics_enabled', '1');
 $_SERVER['HTTP_USER_AGENT'] = 'LoggerTest/1.0';
