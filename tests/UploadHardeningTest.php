@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 require_once __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/../includes/crypto.php';
 
 // ── Upload hardening ──────────────────────────────────────────────────────────
 // Every upload must survive GD decode+re-encode: EXIF, polyglot trailers,
@@ -17,7 +18,15 @@ function _uh_entry(string $tmp): array {
 }
 function _uh_track(int $oid): void { $GLOBALS['orderIds'][] = $oid; }
 function _uh_read(string $rel): string {
-    return (string)file_get_contents(dirname(__DIR__) . '/uploads/' . $rel);
+    $path = dirname(__DIR__) . '/uploads/' . $rel;
+    $meta = @json_decode(@file_get_contents($path), true);
+    if (is_array($meta) && isset($meta['ct'], $meta['iv'])) {
+        // Encrypted photo - decrypt and return raw image data
+        $dec = decrypt_photo($meta['ct'], $meta['iv']);
+        return $dec !== false ? $dec : '';
+    }
+    // Legacy unencrypted photo
+    return (string)file_get_contents($path);
 }
 
 $tmpdir = sys_get_temp_dir() . '/ddmgmt_upl_test';
@@ -136,31 +145,33 @@ $huge['tmp_name'] = $tmpdir . '/does-not-exist.jpg';
 T::ok('oversize rejected pre-sniff', save_uploaded_photo($huge, 910011, 1024) === false);
 
 // 9b ── grid thumbnails: a second small JPEG per photo, cleaned with it
-$big = "$tmpdir/grid.jpg";
-$img = imagecreatetruecolor(1200, 800);
-imagefill($img, 0, 0, imagecolorallocate($img, 30, 200, 90));
-imagejpeg($img, $big, 90);
-$img = null; // PHP 8.5 deprecates imagedestroy(); GC frees the GdImage
-$oid = 910020; _uh_track($oid);
-$relG = save_uploaded_photo(_uh_entry($big), $oid, 2 * 1024 * 1024);
-T::ok('large JPEG accepted', $relG !== false);
-if ($relG !== false) {
-    $thumb = photo_thumb_rel($relG);
-    T::ok('thumbnail path derives deterministically',
-        $thumb !== null && preg_match('#^910020/[0-9a-f]{28}_thumb\.jpg$#', (string)$thumb) === 1);
-    T::ok('thumbnail written', $thumb !== null && is_file("$up/$thumb"));
-    if ($thumb !== null && is_file("$up/$thumb")) {
-        $dim = getimagesize("$up/$thumb");
-        T::ok('thumbnail is small', $dim !== false && max($dim[0], $dim[1]) <= 400);
-        T::ok('thumbnail is a JPEG', str_starts_with((string)file_get_contents("$up/$thumb"), "\xFF\xD8"));
-        T::ok('grid serves the thumbnail', photo_grid_src($relG) === $thumb);
+    $big = "$tmpdir/grid.jpg";
+    $img = imagecreatetruecolor(1200, 800);
+    imagefill($img, 0, 0, imagecolorallocate($img, 30, 200, 90));
+    imagejpeg($img, $big, 90);
+    $img = null; // PHP 8.5 deprecates imagedestroy(); GC frees the GdImage
+    $oid = 910020; _uh_track($oid);
+    $relG = save_uploaded_photo(_uh_entry($big), $oid, 2 * 1024 * 1024);
+    T::ok('large JPEG accepted', $relG !== false);
+    if ($relG !== false) {
+        $thumb = photo_thumb_rel($relG);
+        T::ok('thumbnail path derives deterministically',
+            $thumb !== null && preg_match('#^910020/[0-9a-f]{28}_thumb\.jpg$#', (string)$thumb) === 1);
+        T::ok('thumbnail written', $thumb !== null && is_file("$up/$thumb"));
+        if ($thumb !== null && is_file("$up/$thumb")) {
+            // Thumbnail is encrypted at rest - decrypt to verify
+            $thumbData = _uh_read($thumb);
+            $dim = @getimagesizefromstring($thumbData);
+            T::ok('thumbnail is small', $dim !== false && max($dim[0], $dim[1]) <= 400);
+            T::ok('thumbnail is a JPEG', str_starts_with($thumbData, "\xFF\xD8"));
+            T::ok('grid serves the thumbnail', photo_grid_src($relG) === $thumb);
+        }
+        // Deletion takes the thumbnail with the original, no DB row involved.
+        _unlink_order_files($oid, [$relG]);
+        T::ok('order delete removes the original', !is_file("$up/$relG"));
+        T::ok('order delete removes the thumbnail', $thumb === null || !is_file("$up/$thumb"));
+        T::ok('grid falls back to the full file without a thumb', photo_grid_src($relG) === $relG);
     }
-    // Deletion takes the thumbnail with the original, no DB row involved.
-    _unlink_order_files($oid, [$relG]);
-    T::ok('order delete removes the original', !is_file("$up/$relG"));
-    T::ok('order delete removes the thumbnail', $thumb === null || !is_file("$up/$thumb"));
-    T::ok('grid falls back to the full file without a thumb', photo_grid_src($relG) === $relG);
-}
 
 // PNG magic but no parseable header: sniffed as image, dimensions unreadable
 $trunc = "$tmpdir/trunc.png";

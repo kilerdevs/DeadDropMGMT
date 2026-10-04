@@ -327,7 +327,7 @@ T::ok('deleted account is refused on the next request', $stGone === 302 && str_c
 
 $tmpB = $mkOwner('t_ah_temp_b');
 $ckB  = $login('t_ah_temp_b', 'AzPass123!')[0];
-$db->prepare('UPDATE users SET active_session_id = ? WHERE id = ?')->execute(['revoked', $tmpB]);
+$db->prepare('UPDATE users SET active_session_id = ? WHERE id = ?')->execute(['REVOKED:', $tmpB]);
 [$stRev,,, $locRev] = _az('GET', "$B/admin/orders.php", null, $ckB);
 T::ok('revoked sessions are refused on the next request', $stRev === 302 && str_contains($locRev, 'revoked=1'));
 $db->prepare('DELETE FROM users WHERE id = ?')->execute([$tmpB]);

@@ -413,8 +413,8 @@ if ($map_src !== '' && isset($lat, $lng) && map_provider() === MAP_PROVIDER_SELF
                 <div class="photos-grid">
                     <?php foreach ($photos as $ph): ?>
                     <div class="photo-item">
-                        <img src="/uploads/<?= htmlspecialchars(photo_grid_src((string)$ph['filename']), ENT_QUOTES, 'UTF-8') ?>"
-                             data-full="/uploads/<?= htmlspecialchars($ph['filename'], ENT_QUOTES, 'UTF-8') ?>"
+                        <img src="/photo.php?file=<?= htmlspecialchars(photo_grid_src((string)$ph['filename']), ENT_QUOTES, 'UTF-8') ?>"
+                             data-full="/photo.php?file=<?= htmlspecialchars($ph['filename'], ENT_QUOTES, 'UTF-8') ?>"
                              alt="<?= htmlspecialchars($ph['caption'] ?? '', ENT_QUOTES, 'UTF-8') ?>"
                              loading="lazy">
                         <?php if (!empty($ph['caption'])): ?>

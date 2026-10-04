@@ -30,12 +30,24 @@ function session_effective_path(): string {
 // exactly where they are, no mass logout).
 function session_save_path_ensure(): void {
     $probe = session_effective_path();
+
+    // First check: directory exists and is writable according to PHP
     if (is_dir($probe) && is_writable($probe)) {
-        return;
+        // Second check: actually try to write a test file to catch
+        // NFS quota issues, ACL problems, noexec mounts, etc.
+        $testFile = $probe . '/.session_write_test_' . bin2hex(random_bytes(8));
+        $written = @file_put_contents($testFile, 'test', LOCK_EX);
+        if ($written !== false && $written > 0) {
+            @unlink($testFile);
+            return; // Path is truly writable
+        }
+        // Test write failed -- clean up if file was created
+        @unlink($testFile);
     }
+
     $local = dirname(__DIR__) . '/cache/sessions';
     if (!is_dir($local) && !@mkdir($local, 0700, true)) {
-        return; // cannot improve — session_start() itself reports it
+        return; // cannot improve - session_start() itself reports it
     }
     @ini_set('session.save_path', $local);
 }
@@ -245,7 +257,10 @@ function admin_session_superseded(): bool {
 // recorded active session id becomes a value no browser can hold, so the
 // next request of each session is refused. The caller's own session is kept
 // when it acts on its own account.
-const ADMIN_SESSIONS_REVOKED = 'revoked';
+// Sentinel uses a colon — PHP session IDs are alphanumeric plus '-' and ','
+// only; they can never contain ':', so this cannot collide with a legitimate
+// session ID. Also avoids MySQL VARCHAR null-byte truncation issues.
+const ADMIN_SESSIONS_REVOKED = 'REVOKED:';
 
 function admin_revoke_sessions(int $user_id): void {
     if ($user_id <= 0) {
@@ -534,6 +549,7 @@ function _security_headers_list(bool $admin, string $nonce): array {
     $h[] = 'Permissions-Policy: geolocation=(), camera=(), microphone=()';
     $h[] = "Content-Security-Policy: default-src 'self'; " .
         "style-src 'self'; " .
+        "connect-src 'self'; " .
         "font-src 'self'; " .
         "script-src 'self' 'nonce-{$nonce}'; " .
         "worker-src 'self' blob:; " .
@@ -572,7 +588,7 @@ function rl_scope_switchable(string $scope): bool {
     return !in_array($scope, RL_ALWAYS_ON, true);
 }
 
-// window_start is written by MySQL UTC_TIMESTAMP() — a bare DATETIME with
+// window_start is written by MySQL UTC_TIMESTAMP() � a bare DATETIME with
 // no zone. Parsing it with plain strtotime() interprets it in PHP's
 // default timezone, skewing every window by the UTC offset: east of UTC
 // (Europe/Warsaw) windows expire hours early and budgets reset constantly
@@ -585,7 +601,69 @@ function _rl_parse_window_start(string $v): int|false {
     if ($v === '') {
         return false;
     }
-    return strtotime($v . ' UTC');
+
+    // Try multiple parsing strategies for different database datetime formats:
+    // 1. MySQL: 'YYYY-MM-DD HH:MM:SS' (UTC_TIMESTAMP) -- bare datetime, assume UTC
+    // 2. PostgreSQL: 'YYYY-MM-DD HH:MM:SS+00' or with timezone offset
+    // 3. SQLite: 'YYYY-MM-DD HH:MM:SS' (UTC) -- bare datetime, assume UTC
+    // 4. ISO 8601: 'YYYY-MM-DDTHH:MM:SSZ' or 'YYYY-MM-DDTHH:MM:SS+00:00'
+    //
+    // Strategy: Try each format in order, return first success. Fail closed (return false)
+    // if all strategies fail.
+
+    // Strategy 1: ISO 8601 with explicit timezone (DateTime::ISO8601 / RFC3339)
+    // Handles: 'YYYY-MM-DDTHH:MM:SSZ', 'YYYY-MM-DDTHH:MM:SS+00:00', 'YYYY-MM-DDTHH:MM:SS-05:00'
+    if (preg_match('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:?\d{2})$/', $v)) {
+        try {
+            $dt = new DateTime($v, new DateTimeZone('UTC'));
+            return $dt->getTimestamp();
+        } catch (Exception) {
+            // fall through to next strategy
+        }
+    }
+
+    // Strategy 2: PostgreSQL with timezone offset (space separator)
+    // Handles: 'YYYY-MM-DD HH:MM:SS+00', 'YYYY-MM-DD HH:MM:SS-05', 'YYYY-MM-DD HH:MM:SS+00:00'
+    if (preg_match('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[+-]\d{2}:?\d{2}$/', $v)) {
+        try {
+            $dt = new DateTime($v, new DateTimeZone('UTC'));
+            return $dt->getTimestamp();
+        } catch (Exception) {
+            // fall through to next strategy
+        }
+    }
+
+    // Strategy 3: Bare datetime (MySQL UTC_TIMESTAMP, SQLite) -- assume UTC
+    // Handles: 'YYYY-MM-DD HH:MM:SS'
+    if (preg_match('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/', $v)) {
+        try {
+            $dt = new DateTime($v, new DateTimeZone('UTC'));
+            return $dt->getTimestamp();
+        } catch (Exception) {
+            // fall through to next strategy
+        }
+    }
+
+    // Strategy 4: Bare ISO date only (unlikely but safe)
+    // Handles: 'YYYY-MM-DD'
+    if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $v)) {
+        try {
+            $dt = new DateTime($v, new DateTimeZone('UTC'));
+            return $dt->getTimestamp();
+        } catch (Exception) {
+            // fall through
+        }
+    }
+
+    // Strategy 5: Fallback to strtotime with explicit UTC (legacy behavior)
+    // This catches any format strtotime() understands when anchored to UTC
+    $ts = strtotime($v . ' UTC');
+    if ($ts !== false && $ts > 0) {
+        return $ts;
+    }
+
+    // All strategies failed -- fail closed
+    return false;
 }
 
 // The default budget subject: the client IP — but an IPv6 client counts as
@@ -612,9 +690,28 @@ function rl_status(string $scope = 'public', ?string $subject = null): array {
         $stmt->execute([$subject ?? rl_client_subject(), $scope]);
         $row = $stmt->fetch();
     } catch (Exception $e) {
-        // Fail CLOSED: this limiter guards pickup-password guessing and admin
-        // login. If the counter is unreadable the caller must treat the
-        // request as blocked (temporary outage), never as unblocked traffic.
+        // Table might not exist yet (pre-setup bootstrap phase). During the
+        // very first owner bootstrap the schema hasn't been applied, so the
+        // rate_limits table doesn't exist. We only fail OPEN if the users
+        // table is also missing (genuine pre-schema state). If users exists
+        // but rate_limits doesn't, it's corruption — fail CLOSED.
+        if (str_contains($e->getMessage(), 'no such table') || str_contains($e->getMessage(), 'doesn\'t exist')) {
+            try {
+                $db = get_db();
+                $usersExist = (bool)$db->query("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'users'")->fetchColumn();
+            } catch (Exception) {
+                $usersExist = false;
+            }
+            if (!$usersExist) {
+                // Genuine pre-schema bootstrap: no users table = first run.
+                return ['blocked' => false, 'remaining' => $window, 'count' => 0];
+            }
+            // users table exists but rate_limits doesn't = corruption.
+        }
+        // Fail CLOSED for all other DB errors: this limiter guards pickup-
+        // password guessing and admin login. If the counter is unreadable the
+        // caller must treat the request as blocked (temporary outage), never
+        // as unblocked traffic.
         log_err('Rate limit status failed (fail closed): ' . $e->getMessage());
         return ['blocked' => true, 'remaining' => $window, 'count' => 0];
     }
@@ -692,6 +789,24 @@ function rl_hit(string $scope = 'public', ?int $max_override = null, ?int $windo
 
         $window_start = (!$existing || (time() - $started) >= $window) ? time() : $started;
     } catch (Exception $e) {
+        // Table might not exist yet (pre-setup bootstrap phase). During the
+        // very first owner bootstrap the schema hasn't been applied, so the
+        // rate_limits table doesn't exist. We only fail OPEN if the users
+        // table is also missing (genuine pre-schema state). If users exists
+        // but rate_limits doesn't, it's corruption — fail CLOSED.
+        if (str_contains($e->getMessage(), 'no such table') || str_contains($e->getMessage(), 'doesn\'t exist')) {
+            try {
+                $db = get_db();
+                $usersExist = (bool)$db->query("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'users'")->fetchColumn();
+            } catch (Exception) {
+                $usersExist = false;
+            }
+            if (!$usersExist) {
+                // Genuine pre-schema bootstrap: no users table = first run.
+                return ['blocked' => false, 'remaining' => $window, 'count' => 0];
+            }
+            // users table exists but rate_limits doesn't = corruption.
+        }
         // Fail CLOSED: an uncountable limiter must deny, never wave through.
         log_err('Rate limit increment failed (fail closed): ' . $e->getMessage());
         return ['blocked' => true, 'remaining' => $window, 'count' => 0];

@@ -422,16 +422,16 @@ $init_zoom = $has_pin ? 17 : 12;
                         <?php endif; ?>
                     </div>
                     <div class="photo-grid">
-                        <?php foreach ($photos as $i => $ph): ?>
+<?php foreach ($photos as $i => $ph): ?>
                         <div class="photo-thumb <?= $i >= 3 ? 'photo-thumb--hidden' : '' ?>">
                             <a class="gallery-link"
-                               href="/uploads/<?= htmlspecialchars($ph['filename'], ENT_QUOTES, 'UTF-8') ?>"
+                               href="/photo.php?file=<?= htmlspecialchars($ph['filename'], ENT_QUOTES, 'UTF-8') ?>"
                                data-caption="<?= htmlspecialchars($ph['caption'] ?? '', ENT_QUOTES, 'UTF-8') ?>"
                                data-photo-id="<?= (int)$ph['id'] ?>"
                                data-order-id="<?= htmlspecialchars((string)$id, ENT_QUOTES, 'UTF-8') ?>">
-                                <img src="/uploads/<?= htmlspecialchars(photo_grid_src((string)$ph['filename']), ENT_QUOTES, 'UTF-8') ?>"
-                                     alt="<?= htmlspecialchars($ph['caption'] ?? '', ENT_QUOTES, 'UTF-8') ?>"
-                                     loading="lazy">
+                                 <img src="/photo.php?file=<?= htmlspecialchars(photo_grid_src((string)$ph['filename']), ENT_QUOTES, 'UTF-8') ?>"
+                                      alt="<?= htmlspecialchars($ph['caption'] ?? '', ENT_QUOTES, 'UTF-8') ?>"
+                                      loading="lazy">
                             </a>
                         </div>
                         <?php endforeach; ?>

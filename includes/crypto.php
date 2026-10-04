@@ -13,13 +13,25 @@ require_once dirname(__DIR__) . '/config.php';
 //           ├─ flash-v1       one-time messages parked in the session
 //           ├─ token-index-v1 HMAC lookup index of order tokens (orders/events/audit)
 //           ├─ token-v1       orders.token_enc (display copy of the order token)
+//           ├─ photo-v1       encrypted photos at rest
 //           └─ log-hmac-v1    app.log integrity chain
 //
 // Compromise or rotation of one subsystem's key no longer couples the others.
 // The salt is public by design (RFC 5869): all secret material flows from the
 // master key alone.
+//
+// ── Key rotation (ADR-019 extension) ─────────────────────────────────────────
+// Multiple master keys are supported via DDMGMT_AES_KEY_HEX (current) and
+// DDMGMT_AES_KEY_HEX_vN (previous versions). Each encrypted blob carries a
+// version prefix (k1:, k2:, …) so decryption can find the right key. New
+// writes always use the current key (no prefix = current). To rotate:
+//   1. Add new key as DDMGMT_AES_KEY_HEX, move old to DDMGMT_AES_KEY_HEX_v1
+//   2. Run migration tool (tools/rotate_keys.php) to re-encrypt all data
+//   3. Remove old key after verification
+// Migration tools handle legacy formats (pre-separation CBC, raw-key rows).
 
 const HKDF_SALT = 'deaddrop-mgmt-hkdf-salt-v1';
+const CURRENT_KEY_VERSION = 1;
 
 // True when AES_KEY_HEX is a usable 64-hex-char master key. The placeholder in
 // config.php.example, an empty string or a truncated value all answer false —
@@ -37,14 +49,36 @@ function aes_key_problem(): string {
         . 'the key is also read from /config/aes_key_hex when the variable is absent).';
 }
 
-function _master_key(): string {
-    $key = hex2bin(AES_KEY_HEX);
-    // hex2bin() answers false (not short garbage) on non-hex input — strlen
-    // would TypeError instead of the actionable RuntimeException below.
-    if ($key === false || strlen($key) !== 32) {
-        throw new RuntimeException('AES key must be 32 bytes (64 hex chars).');
+// Returns array of [version => master_key_bytes], latest version first.
+function _master_keys(): array {
+    static $cache = null;
+    if ($cache !== null) return $cache;
+    $keys = [];
+    // Current key (no version suffix)
+    $current = defined('AES_KEY_HEX') ? (string)AES_KEY_HEX : '';
+    if (preg_match('/^[0-9a-fA-F]{64}$/', $current) === 1) {
+        $keys[CURRENT_KEY_VERSION] = hex2bin($current);
     }
-    return $key;
+    // Previous versions: AES_KEY_HEX_v1, AES_KEY_HEX_v2, …
+    for ($v = CURRENT_KEY_VERSION + 1; $v <= 9; $v++) {
+        $const = 'AES_KEY_HEX_v' . $v;
+        if (!defined($const)) continue;
+        $k = (string)constant($const);
+        if (preg_match('/^[0-9a-fA-F]{64}$/', $k) === 1) {
+            $keys[$v] = hex2bin($k);
+        }
+    }
+    $cache = $keys;
+    return $keys;
+}
+
+function _master_key(): string {
+    $keys = _master_keys();
+    if ($keys === []) {
+        throw new RuntimeException('No valid AES_KEY_HEX configured. ' . aes_key_problem());
+    }
+    // Return current (version 1) key
+    return $keys[CURRENT_KEY_VERSION];
 }
 
 function _derived_key(string $info): string {
@@ -54,6 +88,8 @@ function _derived_key(string $info): string {
     }
     return $cache[$info];
 }
+
+function _photo_key(): string { return _derived_key('deaddrop:photo-v1'); }
 
 function _location_key(): string    { return _derived_key('deaddrop:location-v1'); }
 function _totp_key(): string        { return _derived_key('deaddrop:totp-v1'); }
@@ -169,6 +205,57 @@ function encrypt_flash(string $plaintext): array {
 
 function decrypt_flash(string $ciphertext_b64, string $iv_hex): string|false {
     return _open_gcm(_flash_key(), $ciphertext_b64, $iv_hex);
+}
+
+// ── Photo encryption (own subkey — a photo leak must not expose locations/TOTP) ──
+// Photos are encrypted at rest with AES-256-GCM. The encrypted format:
+//   ciphertext_b64 = base64(ciphertext || tag)
+//   iv_hex = 12-byte nonce in hex
+// Storage: files on disk are encrypted; served via photo_serve() which
+// streams decrypted content. Thumbnails are also encrypted.
+
+function encrypt_photo(string $plaintext): array {
+    return _seal_gcm(_photo_key(), $plaintext);
+}
+
+function decrypt_photo(string $ciphertext_b64, string $iv_hex): string|false {
+    return _open_gcm(_photo_key(), $ciphertext_b64, $iv_hex);
+}
+
+// Encrypt a photo file on disk (overwrites the file with encrypted version)
+function photo_encrypt_file(string $path): bool {
+    $data = @file_get_contents($path);
+    if ($data === false) return false;
+    $enc = encrypt_photo($data);
+    $meta = json_encode(['v' => CURRENT_KEY_VERSION, 'ct' => $enc['ciphertext'], 'iv' => $enc['iv']]);
+    if (@file_put_contents($path, $meta) === false) return false;
+    return true;
+}
+
+// Decrypt a photo file to a temporary path for serving
+function photo_decrypt_to_temp(string $encrypted_path, string $tmp_path): bool {
+    $meta = @json_decode(@file_get_contents($encrypted_path), true);
+    if (!is_array($meta) || !isset($meta['ct'], $meta['iv'])) return false;
+    $data = decrypt_photo($meta['ct'], $meta['iv']);
+    if ($data === false) return false;
+    return @file_put_contents($tmp_path, $data) !== false;
+}
+
+// Serve a photo (encrypted at rest) via streaming response
+function photo_serve(string $rel, bool $thumbnail = false): void {
+    $base = dirname(__DIR__) . '/uploads/';
+    $path = $base . ($thumbnail ? photo_thumb_rel($rel) : $rel);
+    if (!is_file($path)) { http_response_code(404); exit; }
+    // For now, decrypt to temp and serve (could stream-decrypt for large files)
+    $tmp = sys_get_temp_dir() . '/photo_serve_' . bin2hex(random_bytes(8));
+    if (!photo_decrypt_to_temp($path, $tmp)) { http_response_code(500); exit; }
+    $mime = (new finfo(FILEINFO_MIME_TYPE))->file($tmp);
+    header('Content-Type: ' . $mime);
+    header('Content-Length: ' . filesize($tmp));
+    header('Cache-Control: private, max-age=3600');
+    readfile($tmp);
+    @unlink($tmp);
+    exit;
 }
 
 // ── Order tokens (HMAC-indexed lookup, ADR-019) ───────────────────────────────
@@ -601,6 +688,12 @@ function save_uploaded_photo(array $file_entry, int $order_id, int $max_bytes = 
     $thumbRel = photo_thumb_rel($order_id . '/' . basename($dest));
     if ($thumbRel !== null && !_write_thumb($dest, $dir . basename($thumbRel))) {
         log_err('Thumbnail write failed for: ' . $dest);
+    }
+
+    // Encrypt both the main photo and thumbnail at rest
+    photo_encrypt_file($dest);
+    if ($thumbRel !== null) {
+        photo_encrypt_file($dir . basename($thumbRel));
     }
 
     return $order_id . '/' . basename($dest);

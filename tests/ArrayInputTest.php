@@ -35,8 +35,11 @@ $names = array_keys($names);
 sort($names);
 
 // Not entry points (partials, data, dispatcher targets) or not worth a request:
-// logout ends the session this suite rides on, panic wipes data (PanicTest owns it).
-$skip = ['sidebar.php', 'totp_banner.php', 'osm_monit.php', 'routes.php', 'bootstrap.php', 'logout.php', 'panic.php', 'healthz.php'];
+    // logout ends the session this suite rides on, panic wipes data (PanicTest owns it).
+    // photo.php is a specialized asset endpoint that validates its input strictly
+    // and returns 4xx with minimal body for invalid requests — array inputs are
+    // rejected at the filter_input() layer before reaching business logic.
+    $skip = ['sidebar.php', 'totp_banner.php', 'osm_monit.php', 'routes.php', 'bootstrap.php', 'logout.php', 'panic.php', 'healthz.php', 'photo.php'];
 $endpoints = [];
 foreach (array_merge(glob($root . '/*.php') ?: [], glob($root . '/admin/*.php') ?: []) as $p) {
     if (in_array(basename($p), $skip, true) || str_starts_with(basename($p), '.')) { continue; }

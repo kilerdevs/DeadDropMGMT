@@ -103,6 +103,13 @@ ini_set('error_log',       ERROR_LOG_PATH);
 // get_client_ip() / _ip_in_cidr() live in includes/net.php — this file is for
 // deployment constants only, so a hand-edited config cannot weaken proxy-
 // header validation. See DDMGMT_TRUST_PROXY / DDMGMT_TRUSTED_PROXIES there.
+//
+// If this app sits behind a reverse proxy (nginx, Cloudflare, Traefik, AWS ALB…)
+// set DDMGMT_TRUST_PROXY=1 and DDMGMT_TRUSTED_PROXIES to a comma-separated
+// list of trusted proxy CIDRs (e.g. "10.0.0.0/8, 172.16.0.0/12").
+// Without this, IP-based rate limiting sees the proxy's IP, not the real client.
+define('DDMGMT_TRUST_PROXY', _secret('DDMGMT_TRUST_PROXY', '0') === '1');
+define('DDMGMT_TRUSTED_PROXIES', array_map('trim', explode(',', _secret('DDMGMT_TRUSTED_PROXIES', ''))));
 
 // ── Request scheme detection ───────────────────────────────────────────────────
 // request_is_https() lives in includes/net.php next to get_client_ip(): both
@@ -120,7 +127,11 @@ function overwrite_and_unlink(string $path): void {
     // (outside uploads//logs/) instead of removing the link. Unlink the link
     // itself and stop.
     if (is_link($path)) {
-        try { @unlink($path); } catch (Throwable $t) { /* best-effort */ }
+        if (!@unlink($path)) {
+            if (function_exists('log_err')) {
+                log_err('overwrite_and_unlink: failed to unlink symlink ' . $path);
+            }
+        }
         return;
     }
     if (!is_file($path)) return;
@@ -146,10 +157,17 @@ function overwrite_and_unlink(string $path): void {
                     @fsync($fh);
                 }
                 @fclose($fh);
+            } elseif (function_exists('log_err')) {
+                log_err('overwrite_and_unlink: failed to open ' . $path . ' for overwrite');
             }
         }
-        @unlink($path);
+        if (!@unlink($path) && function_exists('log_err')) {
+            log_err('overwrite_and_unlink: failed to unlink ' . $path . ' after overwrite');
+        }
     } catch (Throwable $t) {
-        // Best-effort — silently ignore if file ops are restricted on this host
+        // Best-effort — log if logger available
+        if (function_exists('log_err')) {
+            log_err('overwrite_and_unlink exception: ' . $t->getMessage());
+        }
     }
 }
