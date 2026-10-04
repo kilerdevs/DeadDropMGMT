@@ -244,7 +244,7 @@ jobs:
           # tee (the last pipeline command) exits 0 — this exact masking hid a
           # coverage crash once while the job stayed green.
           set -o pipefail
-# Floors: criticals at 85% (auth 93%, crypto 93%, order_state 92%,
+          # Floors: criticals at 85% (auth 93%, crypto 93%, order_state 92%,
             # totp 98%, wipe 91%, logger 91% as measured 2026-09-16) and 85%
             # overall across includes/ — the FailClosed/I18n/Logger/Settings/
             # ProxyClient suites closed the pcov blind spots that HTTP-driven
