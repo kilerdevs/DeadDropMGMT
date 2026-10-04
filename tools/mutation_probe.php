@@ -169,8 +169,8 @@ $mutants = [
     [
         'id'    => 'log-seq-dropped',
         'file'  => 'includes/logger.php',
-        'old'   => "    \$rec['seq'] = _log_compute_seq(\n        \$prev,\n        \$tipSeq,\n        \$tipSeq > 0 ? 0 : _log_count_entries(\$fh),\n        \$rot[1]\n    );",
-        'new'   => "    \$rec['seq'] = 0; // MUTANT: sequence numbers dropped",
+        'old'   => "            \$rec['seq'] = _log_compute_seq(\n                \$prev,\n                \$tipSeq,\n                \$tipSeq > 0 ? 0 : _log_count_entries(\$fh),\n                \$rot[1]\n            );",
+        'new'   => "            \$rec['seq'] = 0; // MUTANT: sequence numbers dropped",
         'suite' => 'LoggerTest',
         'why'   => 'truncation checkpoints anchor meaningless seqs',
     ],

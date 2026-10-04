@@ -412,7 +412,11 @@ jobs:
           only-fixed: true
           fail-build: true
           output-format: table
-          cache-db: true
+          # No second save: the Apache scan above already saved this run's DB
+          # cache key (keys are immutable — re-saving warns "unable to
+          # reserve"). The DB sits on the runner's disk from minutes ago,
+          # so this scan reuses it without another download.
+          cache-db: false
 
       # SBOM (CycloneDX) for both images — the inventory that makes the CVE
       # scans auditable and gives downstream deployers something to diff.
