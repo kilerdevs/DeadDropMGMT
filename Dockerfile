@@ -9,10 +9,12 @@ FROM php:8.5-apache@sha256:70d80539dcacae817d9a1320518b95c86bb9568835ef3a7a024d5
 # gd needs freetype/jpeg/png/webp system libs, zip needs libzip; everything
 # else (openssl, fileinfo, session, json) ships enabled in the base image
 # already. ZipArchive is required by the web installer to unpack releases.
-# APT_BUST (CI: ISO week) re-dates this layer weekly so apt-get upgrade
-# tracks fresh Debian packages instead of serving stale cached layers.
+# APT_BUST (CI: day, e.g. 2026-W40-7) re-dates this layer daily so apt-get
+# upgrade tracks fresh Debian packages instead of serving stale cached
+# layers (a mid-week DSA failed the Grype gate with a layer no code change
+# could refresh).
 ARG APT_BUST=none
-RUN echo "apt cache week: $APT_BUST" \
+RUN echo "apt cache day: $APT_BUST" \
  && apt-get update \
  && apt-get upgrade -y \
  && apt-get install -y --no-install-recommends \

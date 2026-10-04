@@ -7,9 +7,9 @@
 # Pinned by digest (Dependabot bumps it), like the Apache image.
 FROM php:8.5-fpm@sha256:584e584083bada479f0ee733a3025722a68e366eb721e618d1b6a252e4ff45c5
 
-# APT_BUST (CI: ISO week) re-dates the apt layer weekly — see Dockerfile.
+# APT_BUST (CI: day) re-dates the apt layer daily — see Dockerfile.
 ARG APT_BUST=none
-RUN echo "apt cache week: $APT_BUST" \
+RUN echo "apt cache day: $APT_BUST" \
  && apt-get update \
  && apt-get upgrade -y \
  && apt-get install -y --no-install-recommends \
