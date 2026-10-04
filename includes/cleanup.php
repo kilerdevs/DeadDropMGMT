@@ -1,9 +1,9 @@
 <?php
 declare(strict_types=1);
-require_once dirname(__DIR__) . "/includes/db.php";
-require_once dirname(__DIR__) . "/includes/order_state.php";
-require_once dirname(__DIR__) . "/includes/proxy.php";
-require_once dirname(__DIR__) . "/includes/settings.php";
+require_once dirname(__DIR__) . '/includes/db.php';
+require_once dirname(__DIR__) . '/includes/order_state.php';
+require_once dirname(__DIR__) . '/includes/proxy.php';
+require_once dirname(__DIR__) . '/includes/settings.php';
 
 // Core deletion logic — single source of truth used by both pseudo-cron and CLI cron.
 // The actual work lives in order_state.php: per-order transactions with row
@@ -36,19 +36,19 @@ const AUDIT_RETENTION_DAYS = 365;
 // Never throws.
 function _sweep_staging_uploads(): void {
     try {
-        $dir = dirname(__DIR__) . "/uploads/0/";
+        $dir = dirname(__DIR__) . '/uploads/0/';
         if (!is_dir($dir)) {
             return;
         }
         $now = time();
-        foreach (glob_list($dir . "*") as $f) {
+        foreach (glob_list($dir . '*') as $f) {
             if ((is_file($f) || is_link($f)) && ($now - (int)@filemtime($f)) > 3600) {
                 overwrite_and_unlink($f);
             }
         }
         @rmdir($dir);
     } catch (Throwable $e) {
-        log_err("Staging sweep failed: " . $e->getMessage());
+        log_err('Staging sweep failed: ' . $e->getMessage());
     }
 }
 
@@ -59,23 +59,23 @@ function _purge_stale_records(): void {
         // small batches: the old LEFT JOIN ... OR ... matched every old
         // event against the whole orders table with no index, and one
         // unbounded statement locked every matching row at once.
-        $cutoff = "NOW() - INTERVAL " . ORPHAN_EVENT_RETENTION_DAYS . " DAY";
+        $cutoff = 'NOW() - INTERVAL ' . ORPHAN_EVENT_RETENTION_DAYS . ' DAY';
         do {
             $st = $db->prepare(
-                "DELETE FROM order_events
-                 WHERE created_at < (" . $cutoff . ")
+                'DELETE FROM order_events
+                 WHERE created_at < (' . $cutoff . ')
                    AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.id = order_events.order_id)
                    AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.token_hmac = order_events.token_hmac)
-                 LIMIT 5000"
+                 LIMIT 5000'
             );
             $st->execute();
             $n = $st->rowCount();
         } while ($n === 5000);
         $db->prepare(
-            "DELETE FROM audit_log WHERE created_at < (NOW() - INTERVAL " . AUDIT_RETENTION_DAYS . " DAY)"
+            'DELETE FROM audit_log WHERE created_at < (NOW() - INTERVAL ' . AUDIT_RETENTION_DAYS . ' DAY)'
         )->execute();
     } catch (Throwable $e) {
-        log_err("Record purge failed: " . $e->getMessage());
+        log_err('Record purge failed: ' . $e->getMessage());
     }
 }
 
@@ -92,12 +92,12 @@ function _warn_legacy_tokens(): void {
         if ($has === 0) {
             return;
         }
-        $n = (int)$db->query("SELECT COUNT(*) FROM orders WHERE order_token IS NOT NULL AND token_hmac IS NULL")->fetchColumn();
+        $n = (int)$db->query('SELECT COUNT(*) FROM orders WHERE order_token IS NOT NULL AND token_hmac IS NULL')->fetchColumn();
         if ($n > 0) {
-            log_warn("legacy_order_tokens", ["msg" => $n . " order(s) still carry a plaintext token and cannot be looked up — run: php tools/migrate_order_tokens.php"]);
+            log_warn('legacy_order_tokens', ['msg' => $n . ' order(s) still carry a plaintext token and cannot be looked up — run: php tools/migrate_order_tokens.php']);
         }
     } catch (Throwable $e) {
-        log_err("Legacy token check failed: " . $e->getMessage());
+        log_err('Legacy token check failed: ' . $e->getMessage());
     }
 }
 
@@ -108,11 +108,11 @@ function _warn_legacy_tokens(): void {
 // grants that IP a fresh budget, which fails open by at most one window.
 function _purge_stale_rate_limits(): void {
     try {
-        $cutoff = gmdate("Y-m-d H:i:s", time() - 2 * rl_window_seconds());
-        get_db()->prepare("DELETE FROM rate_limits WHERE window_start < ?")
+        $cutoff = gmdate('Y-m-d H:i:s', time() - 2 * rl_window_seconds());
+        get_db()->prepare('DELETE FROM rate_limits WHERE window_start < ?')
             ->execute([$cutoff]);
     } catch (Throwable $e) {
-        log_err("Rate limit purge failed: " . $e->getMessage());
+        log_err('Rate limit purge failed: ' . $e->getMessage());
     }
 }
 
@@ -155,13 +155,13 @@ function _cleanup_roll(float $chance, ?callable $rand = null): bool {
 // the pass itself is directly testable (stale stamp, broken store).
 function _run_cleanup_pass(): void {
     try {
-        $last = (int)get_setting("last_cleanup", "0");
+        $last = (int)get_setting('last_cleanup', '0');
         if ((time() - $last) < 3600) return;
 
         // Stamp before work to block concurrent duplicate runs. A crashed run
         // merely delays the next one by an hour; nothing is lost because the
         // expiry sweep itself is idempotent.
-        set_setting("last_cleanup", (string)time());
+        set_setting('last_cleanup', (string)time());
         do_cleanup();
         // Same hourly slot re-probes the stalest pool entries (bounded,
         // never throws): proxies nobody exercised must not keep a fresh
@@ -171,7 +171,7 @@ function _run_cleanup_pass(): void {
         // job: discovery takes far too long to run inside a page visit.
         osm_proxy_heal_kick();
     } catch (Throwable $e) {
-        log_err("Cleanup error: " . $e->getMessage());
+        log_err('Cleanup error: ' . $e->getMessage());
     }
 }
 
@@ -201,7 +201,7 @@ function run_cleanup_if_due(float $chance = 1.0): void {
 // that run real cron (cron/cleanup.php). CLI never runs it: cron and tools
 // call the passes they need themselves.
 function pseudo_cron_enabled(): bool {
-    return PHP_SAPI !== "cli" && host_flag("DDMGMT_PSEUDO_CRON", true);
+    return PHP_SAPI !== 'cli' && host_flag('DDMGMT_PSEUDO_CRON', true);
 }
 
 // Hand the response to the client before any maintenance starts. Under FPM
@@ -210,7 +210,7 @@ function pseudo_cron_enabled(): bool {
 // seams: a suite that owns an outer buffer (the coverage runner) must not have
 // it flushed, and a CLI has no fastcgi_finish_request.
 function pseudo_cron_finish_response(int $keepLevels = 0, ?callable $fcgi = null): void {
-    $fcgi ??= function_exists("fastcgi_finish_request") ? "fastcgi_finish_request" : null;
+    $fcgi ??= function_exists('fastcgi_finish_request') ? 'fastcgi_finish_request' : null;
     if ($fcgi !== null) {
         @$fcgi();
         return;
@@ -227,12 +227,12 @@ function pseudo_cron_finish_response(int $keepLevels = 0, ?callable $fcgi = null
 // allows one, a time-budgeted inline pass where it does not (no exec, no CLI).
 /** @param list<callable>|null $slots */
 function pseudo_cron_work(?array $slots = null): void {
-    $slots ??= ["run_cleanup_if_due", "maps_steward_if_due", "osm_proxy_heal_pseudo_cron"];
+    $slots ??= ['run_cleanup_if_due', 'maps_steward_if_due', 'osm_proxy_heal_pseudo_cron'];
     foreach ($slots as $slot) {
         try {
             $slot();
         } catch (Throwable $e) {
-            log_err("Pseudo-cron: " . $e->getMessage());
+            log_err('Pseudo-cron: ' . $e->getMessage());
         }
     }
 }
@@ -244,11 +244,11 @@ function pseudo_cron_run(bool $force = false, ?callable $finish = null, ?array $
         return;
     }
 
-    // File-based mutex to prevent concurrent pseudo-cron executions.
+// File-based mutex to prevent concurrent pseudo-cron executions.
     // Try to acquire exclusive non-blocking lock on cache/.pseudo_cron.lock
     // If lock not acquired, another process is running - exit silently.
-    $lockFile = dirname(__DIR__) . "/cache/.pseudo_cron.lock";
-    $lockFp = @fopen($lockFile, "c+");
+    $lockFile = dirname(__DIR__) . '/cache/.pseudo_cron.lock';
+    $lockFp = @fopen($lockFile, 'c+');
     if ($lockFp === false) {
         return;
     }
@@ -262,8 +262,8 @@ function pseudo_cron_run(bool $force = false, ?callable $finish = null, ?array $
     // visitor's next request (a poll, a click) must not queue behind it.
     if (session_status() === PHP_SESSION_ACTIVE) {
         session_write_close();
-    }
-    ($finish ?? "pseudo_cron_finish_response")();
+}
+    ($finish ?? 'pseudo_cron_finish_response')();
     try {
         pseudo_cron_work($slots);
     } finally {

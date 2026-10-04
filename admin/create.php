@@ -96,12 +96,16 @@ try {
     // that belong to this request (identified by a request-specific prefix).
     $staged_prefix = '0/' . bin2hex(random_bytes(8)) . '_';
     $staged_for_cleanup = [];
-    register_shutdown_function(static function (array $staged, string $prefix) {
+    register_shutdown_function(static function (array $staged, string $prefix): void {
         if (!empty($staged)) {
             foreach ($staged as $rel) {
                 @unlink(dirname(__DIR__, 2) . '/uploads/' . $rel);
-                $thumb = dirname(__DIR__, 2) . '/uploads/' . photo_thumb_rel($rel);
-                if ($thumb) @unlink($thumb);
+                // Thumbnail path for prefixed filenames: the prefixed name
+                // already includes the prefix, so we derive the thumb name
+                // directly instead of using photo_thumb_rel() which expects
+                // the unprefixed pattern.
+                $thumb = dirname(__DIR__, 2) . '/uploads/' . $prefix . pathinfo($rel, PATHINFO_FILENAME) . '_thumb.jpg';
+                if (is_file($thumb)) @unlink($thumb);
             }
         }
         // Also clean any orphaned files in uploads/0/ with our prefix

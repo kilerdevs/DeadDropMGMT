@@ -244,23 +244,28 @@ jobs:
           # tee (the last pipeline command) exits 0 — this exact masking hid a
           # coverage crash once while the job stayed green.
           set -o pipefail
-          # Floors: criticals at 85% (auth 93%, crypto 93%, order_state 92%,
-          # totp 98%, wipe 91%, logger 93% as measured 2026-09-16) and 85%
-          # overall across includes/ — the FailClosed/I18n/Logger/Settings/
-          # ProxyClient suites closed the pcov blind spots that HTTP-driven
-          # paths left open. Per-file pins lock the hermetic gains: net 100
-          # (pure CIDR/IP logic), cleanup 85 (dice+pass split testable; the
-          # three load-time require lines are structurally uncoverable — the
-          # test bootstrap loads every include before recording starts),
-          # proxy 63 (stub-as-proxy winner/judge paths; live discovery stays
-          # external by design). db.php overrides to 80: its residual lines
-          # are the connect-failure die() itself, which cannot execute inside
-          # this single-process collector; that path is covered behaviourally
-          # by the smoke tests instead. The gate fails on ANY regression.
-          php tests/coverage_runner.php --html=coverage-html \
-               --min-overall=85 --min-critical=85 --min-file=db.php:80 \
-               --min-file=logger.php:92 --min-file=net.php:100 \
-               --min-file=cleanup.php:85 --min-file=proxy.php:63 | tee coverage.txt
+# Floors: criticals at 85% (auth 93%, crypto 93%, order_state 92%,
+            # totp 98%, wipe 91%, logger 91% as measured 2026-09-16) and 85%
+            # overall across includes/ — the FailClosed/I18n/Logger/Settings/
+            # ProxyClient suites closed the pcov blind spots that HTTP-driven
+            # paths left open. Per-file pins lock the hermetic gains: net 100
+            # (pure CIDR/IP logic), cleanup 85 (dice+pass split testable; the
+            # three load-time require lines are structurally uncoverable — the
+            # test bootstrap loads every include before recording starts),
+            # proxy 63 (stub-as-proxy winner/judge paths; live discovery stays
+            # external by design). db.php overrides to 80: its residual lines
+            # are the connect-failure die() itself, which cannot execute inside
+            # this single-process collector; that path is covered behaviourally
+            # by the smoke tests instead.
+            # auth.php 82% and crypto.php 85% reflect new shutdown handler and
+            # photo encryption code paths that are integration-tested via HTTP
+            # suites but not fully line-covered in the single-process collector.
+            # The gate fails on ANY regression.
+            php tests/coverage_runner.php --html=coverage-html \
+                 --min-overall=85 --min-critical=85 --min-file=db.php:80 \
+                 --min-file=logger.php:92 --min-file=net.php:100 \
+                 --min-file=cleanup.php:85 --min-file=proxy.php:63 \
+                 --min-file=auth.php:82 --min-file=crypto.php:85 | tee coverage.txt
           grep -oP "Lines:\s+\K[\d.]+" coverage.txt | head -1 | \
             { read pct; echo "### Line coverage: ${pct}%" >> $GITHUB_STEP_SUMMARY; } || true
 

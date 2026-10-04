@@ -1,0 +1,8 @@
+Client IP resolution ───────────────────────────────────────────────────
+// get_client_ip() / _ip_in_cidr() live in includes/net.php — this file is for
+// deployment constants only, so a hand-edited config cannot weaken proxy-
+// header validation. See DDMGMT_TRUST_PROXY / DDMGMT_TRUSTED_PROXIES there.
+
+// ── Request scheme detection ───────────────────────────────────────────────────
+// request_is_https() lives in includes/net.php next to get_client_ip(): both
+// trust proxy headers only from a
