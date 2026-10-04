@@ -257,9 +257,15 @@ jobs:
             # are the connect-failure die() itself, which cannot execute inside
             # this single-process collector; that path is covered behaviourally
             # by the smoke tests instead.
-            # auth.php 82% and crypto.php 85% reflect new shutdown handler and
-            # photo encryption code paths that are integration-tested via HTTP
-            # suites but not fully line-covered in the single-process collector.
+            # auth.php 82 and crypto.php 85 pin the hermetic measurable: the
+            # residual lines are structurally uncoverable in this collector —
+            # APCu probe/store (CI installs no ext-apcu), exit-bearing
+            # endpoints (json_out, photo_serve 404/500), the key-rotation
+            # loop (no vN keys configured), load-time requires, and the
+            # pre-schema bootstrap fail-open (needs dropped tables). Everything
+            # else new is covered in-process: window-start formats, staged
+            # claims, decrypt/notes/token rejects, upload guards, the
+            # compressor budget + long-edge cap, provenance file reads.
             # The gate fails on ANY regression.
             php tests/coverage_runner.php --html=coverage-html \
                  --min-overall=85 --min-critical=85 --min-file=db.php:80 \

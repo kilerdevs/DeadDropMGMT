@@ -662,8 +662,10 @@ function _rl_parse_window_start(string $v): int|false {
     }
 
     // Strategy 2: PostgreSQL with timezone offset (space separator)
-    // Handles: 'YYYY-MM-DD HH:MM:SS+00', 'YYYY-MM-DD HH:MM:SS-05', 'YYYY-MM-DD HH:MM:SS+00:00'
-    if (preg_match('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[+-]\d{2}:?\d{2}$/', $v)) {
+    // Handles: 'YYYY-MM-DD HH:MM:SS+00', 'YYYY-MM-DD HH:MM:SS-05',
+    // 'YYYY-MM-DD HH:MM:SS+00:00' (the short +HH form is what PostgreSQL
+    // actually emits for whole-hour offsets — the trailing group is optional).
+    if (preg_match('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[+-]\d{2}(:?\d{2})?$/', $v)) {
         try {
             $dt = new DateTime($v, new DateTimeZone('UTC'));
             return $dt->getTimestamp();

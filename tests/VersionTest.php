@@ -156,5 +156,21 @@ foreach (['/', '/healthz.php', '/admin/index.php', '/receive.php'] as $path) {
 [$st, $body] = _vr('GET', "$B/admin/settings.php", null, '');
 T::ok('settings without a session redirects, discloses nothing', $st === 302 && !str_contains($body, '610eff7'));
 
+// build_info(): a provenance file on disk is read once and interpreted.
+// No suite calls this in-process before us, so the static cache is cold and
+// the env override below decides the path deterministically on every runner.
+$prov = sys_get_temp_dir() . '/ddmgmt_cov_prov.json';
+file_put_contents($prov, $doc(['describe' => 'v1.6.2-0-gabcdef1', 'commit' => 'abcdef1', 'branch' => 'dev', 'dirty' => false]));
+putenv('DDMGMT_BUILD_INFO_FILE=' . $prov);
+$bi = build_info();
+putenv('DDMGMT_BUILD_INFO_FILE');
+@unlink($prov);
+T::ok('provenance file parsed', $bi['known'] && $bi['version'] === '1.6.2');
+T::ok('exact tag + clean tree from file is a release', $bi['release'] && !$bi['beta'] && $bi['ahead'] === 0);
+
+// asset_ver: path traversal answers 0 (URL still works, just doesn't bust).
+T::eq('asset_ver refuses traversal', 0, asset_ver('/../secret'));
+T::eq('asset_ver refuses bare traversal', 0, asset_ver('..'));
+
 $teardown();
 exit(T::done());

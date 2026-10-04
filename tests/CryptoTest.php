@@ -256,4 +256,73 @@ T::ok('undecryptable row aborts key separation', is_string($out3) && str_contain
 
 purge_orders_like($db, 'keysep');
 
+// ── Coverage: photo/staging/notes/token helpers' reject paths ───────────────
+// Staged-claim rejects junk without touching the disk.
+T::ok('claim rejects non-staged rel', photo_staged_claim('nope.jpg', 1) === null);
+T::ok('claim rejects order zero', photo_staged_claim('0/ab12cd34.jpg', 0) === null);
+T::ok('claim fails closed on missing stage', photo_staged_claim('0/ab12cd34ef56.jpg', 999991) === null);
+@rmdir(dirname(__DIR__) . '/uploads/999991');
+
+$ptd = sys_get_temp_dir() . '/ddmgmt_cov_crypto';
+if (!is_dir($ptd)) { mkdir($ptd, 0700, true); }
+
+// Photo-at-rest decrypt rejects malformed envelopes, round-trips good ones.
+file_put_contents($ptd . '/bad.json', 'not json{{{');
+T::ok('decrypt rejects non-JSON envelope', photo_decrypt_to_temp($ptd . '/bad.json', $ptd . '/o1') === false);
+file_put_contents($ptd . '/nokeys.json', json_encode(['v' => 1]));
+T::ok('decrypt rejects keyless envelope', photo_decrypt_to_temp($ptd . '/nokeys.json', $ptd . '/o2') === false);
+$good = encrypt_photo('cover-bytes');
+file_put_contents($ptd . '/badct.json', json_encode(['ct' => '!!!notbase64!!!', 'iv' => $good['iv']]));
+T::ok('decrypt rejects bad ciphertext', photo_decrypt_to_temp($ptd . '/badct.json', $ptd . '/o3') === false);
+file_put_contents($ptd . '/good.json', json_encode(['ct' => $good['ciphertext'], 'iv' => $good['iv']]));
+T::ok('decrypt round-trips sealed photo',
+    photo_decrypt_to_temp($ptd . '/good.json', $ptd . '/o4') && file_get_contents($ptd . '/o4') === 'cover-bytes');
+
+// order_notes_plain prefers the encrypted copy, falls back safely.
+T::eq('notes prefers encrypted copy', 'enc-note', order_notes_plain(['notes' => 'legacy'], ['notes' => 'enc-note']));
+T::eq('notes falls back to legacy column', 'legacy', order_notes_plain(['notes' => 'legacy'], false));
+T::eq('notes empty when neither', '', order_notes_plain([], ['notes' => '']));
+
+// Token display copy must belong to its row (swapped-in ciphertext refused).
+$tok = bin2hex(random_bytes(16));
+$te = encrypt_token($tok);
+$cols = token_columns($tok);
+T::ok('token copy opens for its own row',
+    order_token_plain(['token_enc' => $te['ciphertext'], 'token_iv' => $te['iv'], 'token_hmac' => $cols['token_hmac']]) === $tok);
+T::ok('token copy from another row is refused',
+    order_token_plain(['token_enc' => $te['ciphertext'], 'token_iv' => $te['iv'], 'token_hmac' => $cols['token_hmac'] . 'x']) === null);
+
+// Thumbnail writer refuses non-images without noise.
+file_put_contents($ptd . '/note.txt', 'just text');
+T::ok('thumb refuses non-image', _write_thumb($ptd . '/note.txt', $ptd . '/t1.jpg') === false);
+file_put_contents($ptd . '/trunc.png',
+    "\x89PNG\r\n\x1a\n\x00\x00\x00\x0DIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde");
+T::ok('thumb refuses undecodable image', _write_thumb($ptd . '/trunc.png', $ptd . '/t2.jpg') === false);
+
+// Upload pipeline rejects before GD ever decodes.
+file_put_contents($ptd . '/tiny.jpg', "\xFF\xD8\xFF\xE0" . 'short');
+$badEntry = ['name' => 'x.jpg', 'type' => 'image/jpeg', 'tmp_name' => $ptd . '/tiny.jpg',
+    'error' => UPLOAD_ERR_OK, 'size' => 20];
+T::ok('undecodable upload rejected', save_uploaded_photo($badEntry, 0) === false);
+
+if (function_exists('imagecreatetruecolor')) {
+    // Byte budget is enforced by shrinking, then giving up (never looping).
+    $img = imagecreatetruecolor(8, 8);
+    imagefill($img, 0, 0, imagecolorallocate($img, 200, 50, 50));
+    imagejpeg($img, $ptd . '/small.jpg', 85);
+    T::ok('impossible byte budget fails instead of looping forever',
+        _compress_image($ptd . '/small.jpg', $ptd . '/small.out.jpg', 'image/jpeg', 50) === false);
+
+    // Long-edge cap tames huge sources up front (2560 px).
+    $big = imagecreatetruecolor(3000, 40);
+    imagefill($big, 0, 0, imagecolorallocate($big, 10, 200, 90));
+    imagejpeg($big, $ptd . '/wide.jpg', 80);
+    T::ok('wide source is capped to 2560px',
+        _compress_image($ptd . '/wide.jpg', $ptd . '/wide.out.jpg', 'image/jpeg', 12582912)
+        && getimagesize($ptd . '/wide.out.jpg')[0] === 2560);
+}
+
+foreach (glob($ptd . '/*') ?: [] as $f) { @unlink($f); }
+@rmdir($ptd);
+
 exit(T::done());

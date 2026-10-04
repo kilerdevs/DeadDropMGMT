@@ -233,6 +233,38 @@ T::eq('subject refund works', 1, rl_status($rfs, $subj)['count']);
 rl_reset($rfs, $subj);
 T::eq('subject reset clears only that subject', 0, rl_status($rfs, $subj)['count']);
 
+// ── _rl_parse_window_start: every engine's datetime shape parses ────────────
+// The limiter reads window_start back from MySQL/MariaDB (bare UTC), but the
+// parser also accepts PostgreSQL offsets, ISO-8601 and bare dates so a
+// migrated or hand-touched row cannot silently reset a budget: unparseable
+// input answers false (blocked), never "long ago" (reset).
+$noonUtc = gmmktime(12, 0, 0, 10, 4, 2026);
+T::eq('bare UTC datetime parses as UTC', $noonUtc, _rl_parse_window_start('2026-10-04 12:00:00'));
+T::eq('ISO-8601 Z parses as UTC', $noonUtc, _rl_parse_window_start('2026-10-04T12:00:00Z'));
+T::eq('ISO-8601 offset parses', $noonUtc, _rl_parse_window_start('2026-10-04T12:00:00+00:00'));
+T::eq('ISO-8601 negative offset shifts', $noonUtc + 5 * 3600, _rl_parse_window_start('2026-10-04T12:00:00-05:00'));
+T::eq('postgres offset parses', $noonUtc, _rl_parse_window_start('2026-10-04 12:00:00+00'));
+T::eq('bare date parses as midnight UTC', gmmktime(0, 0, 0, 10, 4, 2026), _rl_parse_window_start('2026-10-04'));
+T::eq('unanchored text falls back to strtotime UTC', $noonUtc, _rl_parse_window_start('04 Oct 2026 12:00:00'));
+T::eq('garbage fails closed', false, _rl_parse_window_start('not-a-date'));
+// Impossible values match a strategy regex but never parse: each strategy's
+// catch falls through and the input still ends closed, never reset.
+T::eq('impossible ISO falls through to closed', false, _rl_parse_window_start('2026-10-04T25:00:00Z'));
+T::eq('impossible datetime fails closed', false, _rl_parse_window_start('2026-13-04 12:00:00'));
+T::eq('impossible date fails closed', false, _rl_parse_window_start('2026-13-40'));
+
+// Legacy spend-only shim still spends exactly once.
+rl_reset('cov_legacy_spend');
+rl_increment('cov_legacy_spend');
+T::eq('rl_increment spends one attempt', 1, rl_status('cov_legacy_spend')['count']);
+rl_reset('cov_legacy_spend');
+
+// Self-reauth refuses when its own budget is exhausted (guessing capped).
+$me = current_user_id();
+for ($i = 0; $i < 11; $i++) { rl_hit('admin_reauth', 10, 900, 'u:' . $me); }
+T::ok('self-reauth blocked on exhausted budget', admin_self_reauth_ok($me, 'anything') === false);
+rl_reset('admin_reauth', 'u:' . $me);
+
 // Cleanup
 $db->prepare('DELETE FROM rate_limits WHERE ip_address = ?')->execute([$ip]);
 
