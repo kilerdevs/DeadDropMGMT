@@ -89,6 +89,32 @@ try {
     // under uploads/0/ (no order 0 ever exists) and move into place after
     // the INSERT; a failed insert discards them, crash leftovers are swept
     // hourly — the transaction below stays a short row write.
+    //
+    // Register shutdown handler to clean staged uploads on fatal errors
+    // (OOM, timeout, etc.) that bypass the catch block. The handler runs
+    // after the script dies and removes any files still in uploads/0/
+    // that belong to this request (identified by a request-specific prefix).
+    $staged_prefix = '0/' . bin2hex(random_bytes(8)) . '_';
+    $staged_for_cleanup = [];
+    register_shutdown_function(static function (array $staged, string $prefix) {
+        if (!empty($staged)) {
+            foreach ($staged as $rel) {
+                @unlink(dirname(__DIR__, 2) . '/uploads/' . $rel);
+                $thumb = dirname(__DIR__, 2) . '/uploads/' . photo_thumb_rel($rel);
+                if ($thumb) @unlink($thumb);
+            }
+        }
+        // Also clean any orphaned files in uploads/0/ with our prefix
+        $base = dirname(__DIR__, 2) . '/uploads/0/';
+        if (is_dir($base)) {
+            foreach (glob($base . $prefix . '*') as $f) {
+                @unlink($f);
+                $t = $base . pathinfo($f, PATHINFO_FILENAME) . '_thumb.jpg';
+                if (is_file($t)) @unlink($t);
+            }
+        }
+    }, [$staged_for_cleanup, $staged_prefix]);
+
     $photo_errors = [];
     $count = 0;
     $limit = max_photos_per_order();
@@ -111,7 +137,22 @@ try {
                 // pre-escaping here would double-escape it in the flash.
                 $photo_errors[] = (string)$files['name'][$i];
             } else {
-                $staged[] = $rel;
+                // Rename staged file to include our request-specific prefix
+                $base = dirname(__DIR__, 2) . '/uploads/';
+                $prefixed = $staged_prefix . basename($rel);
+                if (@rename($base . $rel, $base . $prefixed)) {
+                    // Also rename thumbnail if it exists
+                    $thumb = photo_thumb_rel($rel);
+                    if ($thumb !== null && is_file($base . $thumb)) {
+                        $thumbPrefixed = $staged_prefix . basename($thumb);
+                        @rename($base . $thumb, $base . $thumbPrefixed);
+                    }
+                    $staged_for_cleanup[] = $prefixed;
+                    $staged[] = $prefixed; // Use prefixed name for claim
+                } else {
+                    $staged_for_cleanup[] = $rel;
+                    $staged[] = $rel;
+                }
             }
         }
     }
@@ -146,7 +187,12 @@ try {
     // upload — the file stays staged for the hourly sweep.
     $saved = [];
     foreach ($staged as $stagedRel) {
-        $final = photo_staged_claim($stagedRel, $order_id);
+        // Strip our request-specific prefix before claiming
+        $claimRel = $stagedRel;
+        if (str_starts_with($stagedRel, $staged_prefix)) {
+            $claimRel = substr($stagedRel, strlen($staged_prefix));
+        }
+        $final = photo_staged_claim($claimRel, $order_id);
         if ($final === null) {
             $photo_errors[] = basename($stagedRel);
             continue;
@@ -177,7 +223,7 @@ try {
     }
     // Both claimed files and files still staged under uploads/0/ die with
     // the failed create (anything missed is swept hourly, never referenced).
-    foreach (array_merge($saved ?? [], $staged ?? []) as $rel) {
+    foreach (array_merge($saved ?? [], $staged ?? [], $staged_for_cleanup ?? []) as $rel) {
         discard_order_photo_file($rel);
     }
     log_err('Create order error: ' . $e->getMessage());

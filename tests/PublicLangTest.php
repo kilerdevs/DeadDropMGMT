@@ -169,8 +169,18 @@ file_put_contents($router, '<?php declare(strict_types=1); require '
     . var_export(str_replace('\\', '/', $root) . '/includes/kernel.php', true)
     . '; throw new RuntimeException("boundary-probe");');
 $port2 = 8360 + (int)(getmypid() % 400);
-$cmd2  = escapeshellarg(PHP_BINARY) . " -S 127.0.0.1:$port2 -t " . escapeshellarg($webDir);
-$proc2 = proc_open(t_exec_cmd($cmd2), [['pipe', 'r'], ['file', $null, 'w'], ['file', $null, 'w']], $pipes2);
+$null = DIRECTORY_SEPARATOR === '\\' ? 'NUL' : '/dev/null';
+$cmd2 = [
+    PHP_BINARY,
+    '-d', 'session.save_path=' . ini_get('session.save_path'),
+    '-S', "127.0.0.1:$port2",
+    '-t', $webDir,
+];
+$proc2 = proc_open($cmd2, [
+    ['pipe', 'r'],
+    ['file', $null, 'w'],
+    ['file', $null, 'w'],
+], $pipes2);
 if (is_resource($proc2)) {
     $up2 = false;
     for ($i = 0; $i < 30; $i++) {
