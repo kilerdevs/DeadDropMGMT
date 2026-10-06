@@ -33,7 +33,7 @@ foreach (glob($root . '/includes/*.php') as $f) {
     }
     $services[] = strtolower(str_replace('\\', '/', (string)realpath($f)));
 }
-T::ok('service files found', count($services) === 20);
+T::ok('service files found', count($services) === 21);
 foreach ($services as $s) {
     T::ok('kernel loads ' . basename($s), isset($loaded[$s]));
 }
@@ -56,6 +56,7 @@ foreach ([
     'proxy'       => 'osm_proxy_pool',
     'pmtiles'     => 'pmtiles_tile_id',
     'maps'        => 'map_provider',
+    'backup'      => 'backup_create',
     'cleanup'     => 'run_cleanup_if_due',
     'wipe'        => 'do_panic_wipe',
     'setup_check' => 'setup_runtime_checks',
@@ -85,7 +86,7 @@ foreach (glob($root . '/admin/*.php') as $f) {
     }
     $checked += _kernel_guarded($name, $src);
 }
-T::ok('admin entry pages scanned', $checked === 36);
+T::ok('admin entry pages scanned', $checked === 38);
 
 // ── Same rule for every other entry point: public pages, cron, CLI tools,
 // and the docker journey script. Deliberate exceptions (not scanned):

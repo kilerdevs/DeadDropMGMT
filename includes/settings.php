@@ -52,8 +52,7 @@ function delete_setting(string ...$keys): void {
     }
 }
 
-function set_setting(string $key, string $value): void {
-    get_db()->prepare(
+function set_setting(string $key, string $value): void {    get_db()->prepare(
         'INSERT INTO settings (key_name, value, label)
          VALUES (?, ?, "")
          ON DUPLICATE KEY UPDATE value = VALUES(value)'
@@ -64,6 +63,15 @@ function set_setting(string $key, string $value): void {
     if ($cache !== null) {
         $cache[$key] = $value;
     }
+}
+
+// Drop the whole per-process cache: the next read reloads from the
+// database. For bulk replacers (backup restore) that rewrite rows behind
+// the write-through paths above — without this, the process keeps reading
+// pre-restore values.
+function settings_invalidate(): void {
+    $cache = &_settings_store();
+    $cache = null;
 }
 
 // Helpers used throughout the application

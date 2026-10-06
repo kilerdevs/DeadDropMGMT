@@ -28,6 +28,7 @@ Symptom → cause → fix. For setup, see the [README](../README.md); for design
 | Recipients get "not found" for orders created before an upgrade | [Legacy tokens](#orders-from-before-an-upgrade-are-not-found) |
 | Sensitive paths reachable on nginx/Caddy | [Web server denies](#manual-nginxcaddy-install-serves-sensitive-paths) |
 | Self-hosted map: zones missing, stuck or failing | [Zones missing](#map-zones-vanished-after-a-rebuild) · [Zone download stuck](#a-zone-download-is-stuck-or-failed) · [CLI hash mismatch](#pmtiles-cli-hash-mismatch) |
+| Backups and restore | [Backups](#backups-and-restore) |
 | Developing locally | [Local quirks](#local-development-quirks) |
 | Forwarding logs | [Shipping logs](#shipping-logs-to-a-central-system) |
 
@@ -335,6 +336,36 @@ the download was corrupted or tampered with — the fetch is refused; retry, and
 `DDMGMT_PMTILES_URL` or `DDMGMT_PMTILES_BIN`, or run an architecture without a pin, the app records the first hash it sees in
 the `maps_cli_sha256` setting and compares against it afterwards; after deliberately replacing the binary, verify it yourself,
 then clear that setting so the new hash is recorded.
+
+## Backups and restore
+
+**What a backup holds:** every database row (orders, users, photos metadata, proxies, zones, settings, audit trail) plus the
+encrypted photo files from `uploads/`. It does NOT hold zone map files (`tiles/`, `data/` — redraw or re-upload them after a
+restore), logs, cache, or `config.php` — and, critically, NOT the AES key. A backup without its key restores the database fine
+but the photos stay unreadable until the original `DDMGMT_AES_KEY_HEX` is back (the page warns you). Keep the key in a password
+manager, separately from the bundles.
+
+On hosts with ZipArchive the bundle is `backup-<UTC>.zip` (photos as files); without it — common on shared hosting — the same
+content ships as a pure-PHP `backup-<UTC>.json.gz` (photos base64'd inside). Both verify identically.
+
+**Keeping a copy off the host (WinSCP / FTPS):** shared hosts rarely have SSH, so the Backups page download is the main road out —
+click **Download** and store the bundle on your PC. With WinSCP (or FileZilla): connect with the FTP credentials from your hosting
+panel (choose FTPS / explicit TLS when offered — plain FTP sends your password in cleartext), browse to the app directory, and copy
+`backups/backup-*.zip` down. To seed another host, either upload the bundle through that host's Backups → Restore form, or copy it
+into its `backups/` over FTP and use "restore one already on the server".
+
+**Restore replaces everything** with the backup — orders, users, photos, settings — after verifying every checksum. A tampered,
+truncated or foreign file is refused with "Not a valid backup" and **nothing changes** (the detail goes to `logs/error.log`, never
+to the browser). Restore additionally asks for your password: a stolen session alone cannot wipe the shop.
+
+Three gotchas:
+
+- **You may land on the login screen after a restore.** The restore rolls session records back to backup time, so your current
+  session can die with it. Log back in — the data is there.
+- **Restoring onto a different host:** `config.php` is untouched, so point that host's `config.php` at its own database first and
+  set the SAME AES key; otherwise photos (and the DB connection itself) break.
+- **Large bundles over the Restore upload** must fit `upload_max_filesize` / `post_max_size` (Docker images allow 512 MB). If the
+  host refuses, FTP the bundle into `backups/` and restore it from the server list instead — no upload involved.
 
 ## Local development quirks
 

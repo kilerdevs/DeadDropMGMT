@@ -355,6 +355,63 @@ T::ok('interleaved valid logins did not reset the guess budget', $stAfter === 30
 set_setting('rate_limit_max', $prevMax);
 $db->exec("DELETE FROM rate_limits WHERE scope LIKE 'admin_login%'");
 
+// ── Owner backups: gates + round-trip through HTTP ──────────────────────────
+// backups.php is owner-only (courier bounces like settings/users/panic),
+// the download streams only strict-named bundles, create/delete/restore
+// demand CSRF, and restore additionally demands the owner's password.
+$liveCsrf = static function () use ($B, $ckS2): string {
+    [, $b] = _az('GET', "$B/admin/csrf_token.php", null, $ckS2);
+    return (string)(json_decode($b, true)['csrf'] ?? '');
+};
+[$stBk] = _az('GET', "$B/admin/backups.php", null, $ck);
+T::eq('courier bounced from backups.php', 302, $stBk);
+[$stBkAnon,,, $locBkAnon] = _az('GET', "$B/admin/backups.php", null, '');
+T::ok('anonymous bounced from backups.php', $stBkAnon === 302 && str_contains($locBkAnon, 'index.php'));
+[$stBkOwner, $bBkOwner] = _az('GET', "$B/admin/backups.php", null, $ckS2);
+T::ok('owner renders backups.php', $stBkOwner === 200 && str_contains($bBkOwner, 'backupfile'));
+$nBkBefore = count(glob(dirname(__DIR__) . '/backups/backup-*') ?: []);
+_az('POST', "$B/admin/backups.php", ['action' => 'create'], $ckS2);
+T::eq('create without CSRF creates nothing', $nBkBefore, count(glob(dirname(__DIR__) . '/backups/backup-*') ?: []));
+set_setting('backup_http_marker', 'http-before');
+[, $bBkCreate] = _az('POST', "$B/admin/backups.php",
+    ['csrf_token' => $liveCsrf(), 'action' => 'create'], $ckS2);
+preg_match('/Backup (backup-[0-9\-.]+\.(?:zip|json\.gz|json)) created/', $bBkCreate, $mBk);
+$bkName = $mBk[1] ?? '';
+T::ok('owner creates a backup over HTTP', $bkName !== '' && is_file(dirname(__DIR__) . '/backups/' . $bkName));
+[$stDl, $bDl] = _az('GET', "$B/admin/download_backup.php?file=" . rawurlencode($bkName), null, $ckS2);
+T::ok('owner downloads the bundle', $stDl === 200 && ($bDl !== '' && (str_starts_with($bDl, "PK\x03\x04") || $bDl[0] === '{' || $bDl[0] === "\x1f")));
+[, $bDlCourier] = _az('GET', "$B/admin/download_backup.php?file=" . rawurlencode($bkName), null, $ck);
+T::ok('courier gets no backup bytes', $bDlCourier === '' || (!str_starts_with($bDlCourier, "PK\x03\x04") && ($bDlCourier === '' || ($bDlCourier[0] !== '{' && $bDlCourier[0] !== "\x1f"))));
+[$stDlTrav] = _az('GET', "$B/admin/download_backup.php?file=..%2Fconfig.php", null, $ckS2);
+T::eq('traversal download is a 404', 404, $stDlTrav);
+set_setting('backup_http_marker', 'http-after');
+_az('POST', "$B/admin/backups.php",
+    ['csrf_token' => $liveCsrf(), 'action' => 'restore', 'source' => 'stored', 'file' => $bkName, 'password' => 'WrongPass1!'], $ckS2);
+T::eq('wrong password restores nothing', 'http-after', get_setting('backup_http_marker', ''));
+T::ok('wrong password audited as nothing (no restore row)',
+    !$db->query("SELECT 1 FROM audit_log WHERE action = 'backup_restore'")->fetch());
+[, $bBkRestore] = _az('POST', "$B/admin/backups.php",
+    ['csrf_token' => $liveCsrf(), 'action' => 'restore', 'source' => 'stored', 'file' => $bkName, 'password' => 'AzPass123!'], $ckS2);
+settings_invalidate(); // the restore happened in the server process; this
+// process still caches the pre-restore settings snapshot.
+T::eq('password re-auth restores over HTTP', 'http-before', get_setting('backup_http_marker', ''));
+T::ok('restore audited', (bool)$db->query("SELECT 1 FROM audit_log WHERE action = 'backup_restore'")->fetch());
+// The restore rolled the users table (and its session bindings) back to
+// backup time, so this session is dead — the owner logs back in. Same for a
+// real admin: a restore may bounce you to the login screen.
+$ckS2 = $login('t_ah_owner', 'AzPass123!')[0];
+$liveCsrf = static function () use ($B, $ckS2): string {
+    [, $b] = _az('GET', "$B/admin/csrf_token.php", null, $ckS2);
+    return (string)(json_decode($b, true)['csrf'] ?? '');
+};
+_az('POST', "$B/admin/backups.php",
+    ['csrf_token' => $liveCsrf(), 'action' => 'delete', 'file' => $bkName], $ckS2);
+clearstatcache(true, dirname(__DIR__) . '/backups/' . $bkName); // is_file() is
+// stat-cached in this process (primed true by the create assertion above).
+T::ok('owner deletes the backup over HTTP', !is_file(dirname(__DIR__) . '/backups/' . $bkName));
+delete_setting('backup_http_marker');
+$db->exec("DELETE FROM audit_log WHERE action IN ('backup_create', 'backup_restore', 'backup_delete')");
+
 // ── Cleanup ──────────────────────────────────────────────────────────────────
 purge_orders_like($db, 'ahtoken');
 $db->prepare('DELETE FROM users WHERE id IN (?, ?, ?)')->execute([$ownerId, $courierA, $courierB]);

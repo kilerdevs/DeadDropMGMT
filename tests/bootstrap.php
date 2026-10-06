@@ -118,6 +118,7 @@ require_once dirname(__DIR__) . '/includes/wipe.php';
 require_once dirname(__DIR__) . '/includes/proxy.php';
 require_once dirname(__DIR__) . '/includes/pmtiles.php';
 require_once dirname(__DIR__) . '/includes/maps.php';
+require_once dirname(__DIR__) . '/includes/backup.php';
 require_once dirname(__DIR__) . '/includes/cleanup.php';
 require_once dirname(__DIR__) . '/includes/version.php';
 require_once dirname(__DIR__) . '/includes/capabilities.php';

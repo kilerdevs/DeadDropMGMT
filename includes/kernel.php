@@ -43,6 +43,7 @@ foreach ([
     'proxy',
     'pmtiles',
     'maps',
+    'backup',
     'cleanup',
     'wipe',
     'version',

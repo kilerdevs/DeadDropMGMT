@@ -48,6 +48,20 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   Engine sidecars (`.plan.leaves` included — it carries the proxy URL) and
   PHP execution under `tiles/` are now denied on all four server profiles,
   and the Docker body-limit chain (PHP, nginx, Caddy) accepts 512 MB uploads.
+- Owner backups (`admin/backups.php`, linked in the sidebar): one file with
+  every database row plus the encrypted photo files — `backup-<UTC>.zip`
+  where ZipArchive exists, a pure-PHP `.json.gz` bundle otherwise, so even
+  exec-less shared hosts get full snapshots with nothing but PDO. Restore is
+  verify-then-apply and fail-closed (every sha256 recomputed, exact table
+  set and row counts, or nothing changes and the reason stays in the log),
+  the database half lands in a single transaction (DELETE + INSERT, never
+  TRUNCATE), photos stage aside and publish after, and the destructive half
+  additionally demands the owner's password. The manifest fingerprints the
+  AES key set (a rotated key restores with a warning that photos stay
+  unreadable until the original key is back) and crc32s `config.php` for
+  host-move diagnosis — neither leaks key material. `backups/` stays
+  web-denied; bundles leave the host through the owner download or plain
+  FTP (WinSCP/FTPS walkthrough in `docs/TROUBLESHOOTING.md`).
 
 ### Changed
 - Web installer (`tools/install.php`) needs less from the host: the

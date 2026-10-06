@@ -165,6 +165,7 @@ Prefer nginx or Caddy? Bare-metal? See [Docker](#docker) and [Setup](#setup).
 - Retention: order events for tokens that never matched an order are dropped after 30 days; the audit log after 365 days
 - Secure file wipe: overwrites with null bytes before `unlink()` (best-effort — see [Residual risk](#5-residual-risk))
 - Health probe at `/healthz.php` for containers and monitors
+- Owner backups (**Backups** page): one file with every database row plus the encrypted photos — zip where ZipArchive exists, pure-PHP JSON bundle otherwise. Restore verifies checksums before replacing anything and asks for your password too. Zone map files are excluded (redraw/re-upload them); the encryption key is NOT in the backup, so keep `DDMGMT_AES_KEY_HEX` separately — without it the photos are unreadable. Details in [TROUBLESHOOTING](docs/TROUBLESHOOTING.md)
 
 ### Maps
 
