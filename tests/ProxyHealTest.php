@@ -31,8 +31,7 @@ $reset = static function () use ($db): void {
     $db->exec("DELETE FROM settings WHERE key_name IN ('proxy_heal_lock', 'proxy_heal_last', 'proxy_heal_urgent')");
     $db->exec("DELETE FROM audit_log WHERE action IN ('proxy_replace', 'proxy_seed')");
     // Settings are cached per process: drop what was just deleted.
-    $c = &_settings_store();
-    $c = null;
+    settings_invalidate();
     set_setting('osm_proxy_enabled', '1');
 };
 $add = static function (string $url, string $source, string $status) use ($db): void {
@@ -231,7 +230,7 @@ T::eq('empty pool: fetch kicked the seeding job', 1, $started);
 T::ok('routing defaults to ON when no setting exists',
       (function () use ($db): bool {
           $db->exec("DELETE FROM settings WHERE key_name = 'osm_proxy_enabled'");
-          $c = &_settings_store(); $c = null;
+          settings_invalidate();
           return osm_proxy_enabled() === true;
       })());
 // A list line is attacker-controlled: only globally routable literal IPs

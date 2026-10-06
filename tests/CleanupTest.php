@@ -93,8 +93,7 @@ T::eq('skipped roll leaves a stale stamp alone', $before, $stampOf());
 
 // A broken store cannot turn a pass into a crash (cold settings cache +
 // hidden table forces the real DB read to throw into the catch).
-$cache = &_settings_store();
-$cache = null;
+settings_invalidate();
 $db->exec('RENAME TABLE settings TO settings_cl_bak');
 try {
     _run_cleanup_pass();

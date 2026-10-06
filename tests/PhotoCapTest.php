@@ -222,7 +222,6 @@ if ($prevCap === '') {
 } else {
     set_setting('max_photos_per_order', $prevCap);
 }
-$cache = &_settings_store();
-$cache = null;
+settings_invalidate();
 
 exit(T::done());

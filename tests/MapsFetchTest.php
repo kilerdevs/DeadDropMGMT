@@ -188,8 +188,7 @@ if ($prevHash === '') {
 } else {
     set_setting('maps_cli_sha256', $prevHash);
 }
-$cache = &_settings_store();
-$cache = null;
+settings_invalidate();
 
 // A present binary under a stubbed runner walks the trust-on-first-use pin
 // instead of re-downloading: hash recorded once, verified thereafter.
@@ -203,8 +202,7 @@ putenv('DDMGMT_PMTILES_BIN');
 T::ok('present stub binary verifies: ' . $err, $ok);
 T::eq('TOFU hash pinned', hash('sha256', 'P2FAKEBIN'), get_setting('maps_cli_sha256', ''));
 $db->prepare("DELETE FROM settings WHERE key_name = 'maps_cli_sha256'")->execute();
-$cache = &_settings_store();
-$cache = null;
+settings_invalidate();
 @unlink(maps_data_dir() . '/pmtiles');
 
 // ── Release pin: no trust-on-first-use where a pin exists ───────────────────
@@ -227,8 +225,7 @@ if (maps_arch() !== null) {
     maps_cli_runner(null, true);
     T::ok('binary off the pin is deleted, not run', !is_file(maps_data_dir() . '/pmtiles'));
     @unlink(maps_data_dir() . '/pmtiles');
-    $cache = &_settings_store();
-    $cache = null;
+    settings_invalidate();
 }
 
 // ── Worker lock / retry / kick ──────────────────────────────────────────────
@@ -486,7 +483,6 @@ foreach (glob(maps_data_dir() . '/*') ?: [] as $f) {
 }
 @rmdir(maps_data_dir());
 $db->prepare("DELETE FROM settings WHERE key_name IN ('maps_build_key', 'maps_build_at')")->execute();
-$cache = &_settings_store();
-$cache = null;
+settings_invalidate();
 
 exit(T::done());

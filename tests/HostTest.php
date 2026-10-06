@@ -24,7 +24,7 @@ $reset = static function () use ($db): void {
     $db->exec('DELETE FROM osm_proxies');
     $db->exec("DELETE FROM settings WHERE key_name IN ('proxy_heal_lock', 'proxy_heal_last', 'proxy_heal_checked', 'proxy_heal_urgent', 'proxy_seed_failures', 'osm_proxy_auto_off')");
     $db->exec("DELETE FROM audit_log WHERE action IN ('proxy_seed', 'proxy_replace', 'proxy_auto_off')");
-    $c = &_settings_store(); $c = null;
+    settings_invalidate();
     set_setting('osm_proxy_enabled', '1');
     host_override(null, true);
 };
@@ -110,7 +110,7 @@ T::eq('inside the cooldown nothing runs again', 0, $again);
 // seen by one request heals on the next, not one cooldown later.
 $db->exec('DELETE FROM osm_proxies'); // empty pool: seeding work is due
 $db->exec("DELETE FROM settings WHERE key_name IN ('proxy_heal_lock', 'proxy_heal_last', 'proxy_heal_checked', 'proxy_heal_urgent', 'proxy_seed_failures')");
-$c = &_settings_store(); $c = null;
+settings_invalidate();
 set_setting('osm_proxy_enabled', '1');
 T::ok('no exec/CLI: urgent kick leaves a flag instead of spawning', osm_proxy_heal_kick(true) === false);
 T::ok('...and the flag is fresh', (int)get_setting('proxy_heal_urgent', '0') > time() - 5);

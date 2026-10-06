@@ -1502,11 +1502,10 @@ function maps_worker_lock(): array {
         log_err('Maps worker lock: ' . $e->getMessage());
         return [false, 'lock store unavailable'];
     }
-    // Keep this process's settings cache coherent with what it just wrote.
-    $cache = &_settings_store();
-    if ($cache !== null) {
-        $cache['maps_worker_lock'] = (string)$mine;
-    }
+    // Keep this process's settings cache coherent with what it just wrote
+    // (drop it; the next read reloads one row — never bind the store here,
+    // a leaked alias corrupts every later reader, see settings.php).
+    settings_invalidate();
     maps_worker_lock_guard();
     return [true, ''];
 }
@@ -1521,8 +1520,7 @@ function maps_worker_unlock(): void {
         $db->prepare("DELETE FROM settings WHERE key_name = 'maps_worker_lock'")->execute();
     } catch (Throwable) {
     }
-    $cache = &_settings_store();
-    $cache = null;
+    settings_invalidate();
 }
 
 // Hourly steward (called from the pseudo-cron slot): fail jobs whose CLI

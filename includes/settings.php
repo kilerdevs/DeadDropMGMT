@@ -8,6 +8,14 @@ require_once __DIR__ . '/host.php';
 // keep an already-built cache coherent. Matters for any long-lived process
 // (the coverage runner runs all suites in one) — a stale cache made a suite
 // read the previous suite's values.
+//
+// FILE-PRIVATE: never bind this outside settings.php. A top-level
+// `$x = &_settings_store()` in an included file leaves $x aliased to the
+// static for the rest of the process, and any later innocent write through
+// $x (a foreach loop variable, a plain assignment) silently replaces the
+// whole settings cache with a scalar — the next store read then throws a
+// TypeError that kills the entire coverage run. Outside this file the only
+// cache operation is settings_invalidate().
 function &_settings_store(): ?array {
     static $cache = null;
     return $cache;

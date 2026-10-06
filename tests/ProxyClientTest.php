@@ -330,7 +330,7 @@ T::eq('empty pool revalidates to nothing', [], osm_proxy_revalidate_stale(10, 7,
 // Cleanup
 $db->exec("DELETE FROM osm_proxies WHERE url LIKE 'http://127.0.0.1:%'");
 $db->exec("DELETE FROM settings WHERE key_name IN ('pool_down_until', 'pool_down_fp')");
-$c = &_settings_store(); $c = null;
+settings_invalidate();
 set_setting('osm_proxy_enabled', '0');
 
 exit(T::done());

@@ -28,14 +28,12 @@ T::eq('missing key without default is empty', '', get_setting('no_such_key_zzz')
 // Unreadable store fails soft: empty cache + error log, never an exception
 with_table_hidden_st('settings', function (): void {
     // force a reload from the (missing) table
-    $cache = &_settings_store();
-    $cache = null;
+    settings_invalidate();
     T::eq('unreadable settings yield empty cache', [], get_settings());
     T::ok('site_name falls back without settings table', site_name() !== '');
 });
 // Restore a clean cache now that the table is back
-$cache = &_settings_store();
-$cache = null;
+settings_invalidate();
 
 // Clamping helpers — hostile values must not produce hostile behaviour
 set_setting('order_ttl_hours', '-5');
@@ -53,8 +51,7 @@ T::eq('photo count clamps to at least 1', 1, max_photos_per_order());
 set_setting('max_photos_per_order', '500');
 T::eq('photo count clamps to at most 100', 100, max_photos_per_order());
 $db->prepare("DELETE FROM settings WHERE key_name = 'max_photos_per_order'")->execute();
-$cache = &_settings_store();
-$cache = null;
+settings_invalidate();
 T::eq('photo count defaults to 10', 10, max_photos_per_order());
 
 // Boolean-ish getters
@@ -71,8 +68,7 @@ T::ok('osm proxy routing off', !osm_proxy_enabled());
 // on, public site in English. The snapshot at the top restores every row
 // below, so later suites inherit a sane database.
 $db->exec("DELETE FROM settings WHERE key_name IN ('analytics_enabled', 'osm_proxy_enabled', 'default_lang')");
-$cache = &_settings_store();
-$cache = null;
+settings_invalidate();
 T::ok('analytics off by default', !analytics_enabled());
 T::ok('OSM proxy routing on by default', osm_proxy_enabled());
 T::eq('public language defaults to English', 'en', default_lang());
@@ -124,8 +120,7 @@ foreach ($prevSettings as $k => $v) {
     set_setting($k, $v);
 }
 $db->prepare("DELETE FROM settings WHERE key_name IN ('t_cov_key', 'max_photos_per_order')")->execute();
-$cache = &_settings_store();
-$cache = null;
+settings_invalidate();
 
 exit(T::done());
 

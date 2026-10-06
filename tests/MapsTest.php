@@ -17,8 +17,7 @@ $prevProxies = $db->query('SELECT url, source, last_status, latency_ms, last_che
 
 // Missing row answers the historic default (OSM path, untouched behaviour).
 $db->prepare("DELETE FROM settings WHERE key_name = 'map_provider'")->execute();
-$cache = &_settings_store();
-$cache = null;
+settings_invalidate();
 T::eq('missing provider defaults to osm', MAP_PROVIDER_OSM, map_provider());
 
 set_setting('map_provider', MAP_PROVIDER_SELFHOSTED);
@@ -170,12 +169,12 @@ $legs = [
 ];
 $legged = 0;
 foreach ($legs as $leg => $codes) {
-    foreach ($codes as $c) {
-        T::eq("code $c belongs to leg $leg", $leg, maps_zone_error_group('code:' . $c));
-        T::eq("code $c with detail keeps leg $leg", $leg, maps_zone_error_group('code:' . $c . '|tail'));
+    foreach ($codes as $code) {
+        T::eq("code $code belongs to leg $leg", $leg, maps_zone_error_group('code:' . $code));
+        T::eq("code $code with detail keeps leg $leg", $leg, maps_zone_error_group('code:' . $code . '|tail'));
         // Every legged failure ships an exact next step, never a bare code.
-        $fix = maps_zone_error_fix('code:' . $c);
-        T::ok("code $c ships a next step", $fix !== '' && !str_contains($fix, 'code:'));
+        $fix = maps_zone_error_fix('code:' . $code);
+        T::ok("code $code ships a next step", $fix !== '' && !str_contains($fix, 'code:'));
         $legged++;
     }
 }
@@ -413,8 +412,7 @@ foreach ($prevSettings as $k => $v) {
 if (!array_key_exists('map_provider', $prevSettings)) {
     $db->prepare("DELETE FROM settings WHERE key_name = 'map_provider'")->execute();
 }
-$cache = &_settings_store();
-$cache = null;
+settings_invalidate();
 
 // ── Zone colours: one palette for the map layers and the list swatches ────────
 $palette = MAPS_ZONE_COLORS;
