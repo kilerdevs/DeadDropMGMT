@@ -34,6 +34,18 @@ $withoutSessionLock = static function (callable $fn): void {
     }
 };
 
+// Value-returning twin of the above: long verify passes (hundreds of MiB)
+// must not hold the session lock either — every other owner request,
+// tiles included, would queue behind the upload.
+$withoutSessionLockResult = static function (callable $fn): mixed {
+    session_write_close();
+    try {
+        return $fn();
+    } finally {
+        start_secure_session();
+    }
+};
+
 switch ($action) {
 
     // ── Queue one zone ──────────────────────────────────────────────────────
@@ -113,6 +125,62 @@ switch ($action) {
         json_out(['ok' => true, 'kicked' => $kicked]);
     }
 
+    // ── Publish a manually uploaded zone file ───────────────────────────────
+    // The offline bootstrap for hosts that cannot download at all (no exec,
+    // no outbound, tool-less): the owner fetches the .pmtiles elsewhere and
+    // uploads it. Deliberately NOT behind the download gate — the engine gate
+    // is about fetching, and this path never fetches. The request
+    // file is moved into the zone's secret-token .part path (client names
+    // never reach the filesystem) and maps_zone_import_file() verifies
+    // before anything publishes; the old file serves until the rename.
+    case 'upload': {
+        if (!maps_upload_supported()) {
+            json_out(['error' => t('admin.maps.flash.unsupported')], 422);
+        }
+        $id = (int)($_POST['id'] ?? 0);
+        $row = $id > 0 ? maps_zone_get($id) : null;
+        if ($row === null) {
+            json_out(['error' => t('admin.common.invalid_request')], 422);
+        }
+        if (!in_array($row['status'], ['failed', 'ready'], true)) {
+            json_out(['error' => t('admin.maps.flash.upload_active')], 422);
+        }
+        $file = $_FILES['zonefile'] ?? null;
+        if (!is_array($file)) {
+            // post_max_size overflow voids the whole body: no POST fields, no
+            // file — indistinguishable from "nothing chosen" down here, and in
+            // both cases the host limits are the answer.
+            json_out(['error' => t('admin.maps.flash.upload_ini')], 422);
+        }
+        $err = (int)($file['error'] ?? UPLOAD_ERR_NO_FILE);
+        if ($err === UPLOAD_ERR_INI_SIZE || $err === UPLOAD_ERR_FORM_SIZE) {
+            json_out(['error' => t('admin.maps.flash.upload_ini')], 422);
+        }
+        if ($err !== UPLOAD_ERR_OK
+            || !is_string($file['tmp_name'] ?? null)
+            || !is_uploaded_file($file['tmp_name'])
+        ) {
+            json_out(['error' => t('admin.maps.flash.upload_invalid')], 422);
+        }
+        $tilesDir = maps_tiles_dir();
+        if (!is_dir($tilesDir) && !@mkdir($tilesDir, 0775, true)) {
+            json_out(['error' => t('admin.maps.err.publish_failed')], 422);
+        }
+        [, , $part] = maps_zone_workspace($id);
+        // move_uploaded_file refuses non-uploaded sources itself; the extra
+        // is_uploaded_file above keeps hand-built $_FILES arrays (tests,
+        // confused callers) from ever reaching the zone directory.
+        if (!@move_uploaded_file($file['tmp_name'], $part)) {
+            json_out(['error' => t('admin.maps.err.publish_failed')], 422);
+        }
+        $refused = $withoutSessionLockResult(static fn(): ?string => maps_zone_import_file($id));
+        if ($refused !== null) {
+            json_out(['error' => $refused], 422);
+        }
+        audit('maps_zone_upload', null, null, "id={$id}");
+        json_out(['ok' => true]);
+    }
+
     // ── Live queue state for the progress poll ──────────────────────────────
     case 'status': {
         // PHP-engine hosts donate a short slice per poll so the queue moves
@@ -120,6 +188,8 @@ switch ($action) {
         $withoutSessionLock(static function (): void { maps_php_poll_slice(); });
         $zones = [];
         foreach (maps_zone_list() as $z) {
+            $errRaw = $z['error'] !== null ? (string)$z['error'] : null;
+            $errGroup = maps_zone_error_group($errRaw);
             $zones[] = [
                 'id'             => (int)$z['id'],
                 'name'           => (string)$z['name'],
@@ -135,7 +205,12 @@ switch ($action) {
                 'bytes_done'     => (int)$z['bytes_done'],
                 'speed_bps'      => $z['speed_bps'] !== null ? (int)$z['speed_bps'] : null,
                 'eta_secs'       => $z['eta_secs'] !== null ? (int)$z['eta_secs'] : null,
-                'error'          => maps_zone_error_text($z['error'] !== null ? (string)$z['error'] : null),
+                'error'          => maps_zone_error_text($errRaw),
+                // Which pipeline leg failed + the exact next step. Translated
+                // server-side (the poll has the admin's language); null/empty
+                // means "no cause to show" and the row renders as before.
+                'error_group'    => $errGroup !== null ? t('admin.maps.group.' . $errGroup) : null,
+                'error_fix'      => maps_zone_error_fix($errRaw),
             ];
         }
         json_out([

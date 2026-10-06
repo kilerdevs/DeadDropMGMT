@@ -33,8 +33,21 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   (idempotent `setup.sql` re-apply) replaces the old setup refusal on
   installed apps and re-locks the run; interrupted runs resume from the
   tree probe (waiting package, newest snapshot, arm state). `INSTALL_UNLOCK`
-  is now denied on all four server profiles (Apache, both nginx snippets,
-  Caddy). Full pass in `docs/TROUBLESHOOTING.md`.
+   is now denied on all four server profiles (Apache, both nginx snippets,
+   Caddy). Full pass in `docs/TROUBLESHOOTING.md`.
+- Restricted-host maps: a failed zone now names the pipeline leg that failed
+  (input / network / file data / host / disk / worker) plus the exact next
+  step for that cause, shipped with the status poll and rendered in the queue
+  table — proxy-mode failures say to add a proxy or re-queue direct,
+  tool-less hosts say to upload a file, stalls say to schedule the cron.
+  And hosts that cannot download at all are no longer locked out: failed or
+  ready zones take a manually uploaded `.pmtiles` (**Upload file**), verified
+  before it replaces anything (PMTiles v3 structure plus header-bbox coverage
+  of the zone; the old file serves until the rename) and working even with
+  the download engine `off` — it needs only zlib and a writable `tiles/`.
+  Engine sidecars (`.plan.leaves` included — it carries the proxy URL) and
+  PHP execution under `tiles/` are now denied on all four server profiles,
+  and the Docker body-limit chain (PHP, nginx, Caddy) accepts 512 MB uploads.
 
 ### Changed
 - Web installer (`tools/install.php`) needs less from the host: the

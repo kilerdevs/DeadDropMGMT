@@ -13,6 +13,12 @@
 	@zonepart path_regexp ^/tiles/.*\.(part|plan|tiles|tmp|leaves)$
 	respond @zonepart 403
 
+	# Zone uploads land under server-generated .pmtiles names only, but the
+	# directory is app-writable: nothing PHP-ish under /tiles/ ever reaches
+	# FPM, whatever its name.
+	@zonephp path_regexp ^/tiles/.*\.(php[0-9]?|phtml|phar)$
+	respond @zonephp 403
+
 	# INSTALL_UNLOCK holds the installer's rotating upgrade token: never serve.
 	@blocked path /includes/* /logs/* /cron/* /tools/* /cache/* /data/* /docker/* /e2e/* /tests/* /backups/* /config.php /config.php.example /setup.sql /INSTALL_UNLOCK /build-info.json /composer.* /package*.json /playwright.config.js /phpstan.neon /auto-update.* /Dockerfile* /docker-compose* /.htaccess /.ht*
 	respond @blocked 403
@@ -59,7 +65,7 @@
 	header @uploads Referrer-Policy "no-referrer"
 
 	request_body {
-		max_size 64MB
+		max_size 512MB
 	}
 
 	php_fastcgi fpm:9000 {

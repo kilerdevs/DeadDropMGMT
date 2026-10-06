@@ -157,6 +157,42 @@ T::eq('free text passes through', 'boom', maps_zone_error_text('boom'));
 T::eq('empty error is empty', '', maps_zone_error_text(null));
 T::ok('sizing detail appends', str_ends_with((string)maps_zone_error_text('code:sizing_failed|exit 1'), 'exit 1'));
 
+// Every code the pipeline can write maps to exactly one failure leg; legacy
+// free text, empty and unknown codes have none (the row renders as before).
+$legs = [
+    'input'   => ['bad_name', 'bad_zoom', 'lon_range', 'lat_range', 'unordered', 'tiny', 'too_big'],
+    'network' => ['proxy_empty', 'build_list_unreachable', 'build_list_invalid', 'build_list_empty',
+                  'fetch_failed', 'sizing_failed', 'download_failed'],
+    'data'    => ['bad_archive', 'hash_mismatch', 'version_mismatch', 'sizing_empty', 'verify_failed'],
+    'host'    => ['no_build', 'mkdir', 'plan_failed', 'save_failed', 'publish_failed'],
+    'disk'    => ['disk_full_queue', 'disk_short'],
+    'worker'  => ['stalled', 'deleted'],
+];
+$legged = 0;
+foreach ($legs as $leg => $codes) {
+    foreach ($codes as $c) {
+        T::eq("code $c belongs to leg $leg", $leg, maps_zone_error_group('code:' . $c));
+        T::eq("code $c with detail keeps leg $leg", $leg, maps_zone_error_group('code:' . $c . '|tail'));
+        // Every legged failure ships an exact next step, never a bare code.
+        $fix = maps_zone_error_fix('code:' . $c);
+        T::ok("code $c ships a next step", $fix !== '' && !str_contains($fix, 'code:'));
+        $legged++;
+    }
+}
+T::eq('all pipeline codes legged', 28, $legged);
+T::eq('legacy text has no leg', null, maps_zone_error_group('boom'));
+T::eq('empty error has no leg', null, maps_zone_error_group(null));
+T::eq('unknown code has no leg', null, maps_zone_error_group('code:nope_xyz'));
+T::eq('unknown code has no next step', '', maps_zone_error_fix('code:nope_xyz'));
+T::eq('empty error has no next step', '', maps_zone_error_fix(null));
+// Code-specific overrides beat the leg hint where the fix differs.
+T::ok('proxy_empty overrides the network hint', maps_zone_error_fix('code:proxy_empty') !== t('admin.maps.fixgroup.network'));
+T::ok('no_build overrides the host hint', maps_zone_error_fix('code:no_build') !== t('admin.maps.fixgroup.host'));
+T::ok('stalled overrides the worker hint', maps_zone_error_fix('code:stalled') !== t('admin.maps.fixgroup.worker'));
+T::ok('too_big overrides the input hint', maps_zone_error_fix('code:too_big') !== t('admin.maps.fixgroup.input'));
+T::ok('stalled names the cron schedule', str_contains(maps_zone_error_fix('code:stalled'), 'cron/maps_sync.php'));
+T::ok('no_build names the upload fallback', str_contains(maps_zone_error_fix('code:no_build'), '.pmtiles'));
+
 // Zone round trip (rows cleaned below; files never created for queued rows).
 [$zid, $zerr] = maps_zone_add('P2 Test Zone', 20.85, 52.05, 21.30, 52.40, 14, false);
 T::ok('zone add queues', $zid !== null && $zid > 0);

@@ -1249,6 +1249,101 @@ function maps_zone_refresh(int $id): bool {
     return true;
 }
 
+// Whether this host can take a manual zone-file upload. Unlike downloads it
+// needs neither outbound HTTPS nor the tile tool: the file arrives in the
+// request and is verified by the pure-PHP reader — which needs zlib to
+// inflate gzip-compressed directories, and a writable tiles/ to stage into.
+function maps_upload_supported(): bool {
+    return extension_loaded('zlib') && host_dir_writable(maps_tiles_dir());
+}
+
+// Publish an already-staged upload for a zone: the caller (admin/maps_action)
+// moved the request file to the zone's .part path with move_uploaded_file,
+// so this never touches client-controlled names — every path below derives
+// from the zone id + its secret token. Verify-before-publish, in order:
+// non-empty + fits disk (with headroom) → PMTiles v3 magic → full structural
+// verify → header bbox covers the zone's bbox → atomic rename over the old
+// file (which keeps serving until then) → sidecars dropped → row ready.
+// Any refusal unlinks the staging file and answers a translated reason; the
+// zone row is untouched, so retrying the upload is always safe.
+// @return ?string null on success, translated refusal reason otherwise.
+function maps_zone_import_file(int $id): ?string {
+    if ($id <= 0) {
+        return t('admin.common.invalid_request');
+    }
+    $row = maps_zone_get($id);
+    if ($row === null) {
+        return t('admin.common.invalid_request');
+    }
+    // Only rows no worker can own: an in-flight zone's .part/sidecars belong
+    // to its download, and this would clobber them mid-write.
+    if (!in_array($row['status'], ['failed', 'ready'], true)) {
+        return t('admin.maps.flash.upload_active');
+    }
+    [$plan, $tiles, $part, $final] = maps_zone_workspace($id);
+    $fail = static function (string $reason) use ($part): string {
+        @unlink($part);
+        return $reason;
+    };
+    // Ground truth is the on-disk size, not any client-supplied number.
+    $size = @filesize($part);
+    if (!is_int($size) || $size <= 0) {
+        return $fail(t('admin.maps.flash.upload_invalid'));
+    }
+    if (!maps_disk_ok($size)) {
+        return $fail(t('admin.maps.flash.upload_no_space', ['x' => maps_fmt_bytes($size)]));
+    }
+    // Fast reject on magic+version before paying for the full structural pass.
+    $head = @file_get_contents($part, false, null, 0, PMTILES_HEADER_LEN);
+    $hdr = is_string($head) ? pmtiles_parse_header($head) : null;
+    if ($hdr === null) {
+        return $fail(t('admin.maps.flash.upload_invalid'));
+    }
+    if (!pmtiles_verify_path($part)) {
+        return $fail(t('admin.maps.flash.upload_invalid'));
+    }
+    // The file must cover the zone it is published under: a header bbox that
+    // does not contain the zone's rectangle is the wrong extract (or worse),
+    // and the row name would lie about what the map shows. Epsilon 1e-6
+    // absorbs the header's 1e-7 quantization.
+    $eps = 1e-6;
+    if ($hdr['minLon'] - $eps > (float)$row['min_lon']
+        || $hdr['minLat'] - $eps > (float)$row['min_lat']
+        || $hdr['maxLon'] + $eps < (float)$row['max_lon']
+        || $hdr['maxLat'] + $eps < (float)$row['max_lat']
+    ) {
+        return $fail(t('admin.maps.flash.upload_mismatch'));
+    }
+    // Deleted while it uploaded: nothing may publish for a row that is gone.
+    if (!maps_zone_exists($id)) {
+        return $fail(t('admin.common.invalid_request'));
+    }
+    if (!@rename($part, $final)) {
+        return $fail(t('admin.maps.err.publish_failed'));
+    }
+    if (!maps_zone_exists($id)) { // deleted during verify/publish
+        @unlink($final);
+        return t('admin.common.invalid_request');
+    }
+    maps_zone_drop_sidecars($id); // an upload supersedes any worker resume state
+    $bytes = @filesize($final);
+    try {
+        get_db()->prepare(
+            "UPDATE map_zones SET status = 'ready', error = NULL, build_key = NULL,
+             bytes_expected = ?, bytes_done = ?, speed_bps = NULL, eta_secs = NULL
+             WHERE id = ?"
+        )->execute([$bytes === false ? $size : (int)$bytes, $bytes === false ? $size : (int)$bytes, $id]);
+    } catch (Throwable $e) {
+        log_err('Zone import: ' . $e->getMessage());
+        return t('admin.maps.err.save_failed');
+    }
+    // Unknown provenance (arbitrary planet build, hand-cut extract): freshness
+    // against the cached build key is unknowable, so NULL reads stale once the
+    // key is known — the safe direction (offer refresh, never claim fresh).
+    audit('maps_zone_import', null, null, "id={$id} bytes=" . ($bytes === false ? $size : (int)$bytes));
+    return null;
+}
+
 // Best pool proxy URL for a long download (same ok → new → dead ordering as
 // osm_fetch), or null when none is usable. Never falls back to direct here.
 // $forCli: the Go pmtiles CLI takes the proxy via HTTP(S)_PROXY, which has no
@@ -1978,6 +2073,55 @@ function maps_fmt_bytes(int $n): string {
     $e = (int)floor(log($n, 1024));
     $e = min($e, 4);
     return round($n / (1024 ** $e), 1) . ' ' . $units[$e - 1];
+}
+
+// Which pipeline leg a zone error code belongs to. The status poll ships the
+// leg alongside the message so the queue table can say WHICH part failed
+// (input / network / file data / host / disk / worker) instead of one flat
+// "Failed". Legacy free-text errors and unknown codes have no leg (null).
+function maps_zone_error_group(?string $raw): ?string {
+    if ($raw === null || $raw === '' || !str_starts_with($raw, 'code:')) {
+        return null;
+    }
+    $code = explode('|', substr($raw, 5), 2)[0];
+    static $map = [
+        'bad_name' => 'input', 'bad_zoom' => 'input',
+        'lon_range' => 'input', 'lat_range' => 'input',
+        'unordered' => 'input', 'tiny' => 'input', 'too_big' => 'input',
+        'proxy_empty' => 'network', 'build_list_unreachable' => 'network',
+        'build_list_invalid' => 'network', 'build_list_empty' => 'network',
+        'fetch_failed' => 'network', 'sizing_failed' => 'network',
+        'download_failed' => 'network',
+        'bad_archive' => 'data', 'hash_mismatch' => 'data',
+        'version_mismatch' => 'data', 'sizing_empty' => 'data',
+        'verify_failed' => 'data',
+        'no_build' => 'host', 'mkdir' => 'host', 'plan_failed' => 'host',
+        'save_failed' => 'host', 'publish_failed' => 'host',
+        'disk_full_queue' => 'disk', 'disk_short' => 'disk',
+        'stalled' => 'worker', 'deleted' => 'worker',
+    ];
+    return $map[$code] ?? null;
+}
+
+// The exact next step for a failed zone: a code-specific override first
+// (admin.maps.fix.<code>), else the leg-level hint (admin.maps.fixgroup.<leg>),
+// else '' — the caller renders nothing rather than a generic platitude.
+// Deliberately separate from maps_zone_error_text(), whose exact output the
+// suites pin: the status endpoint ships this as its own JSON field.
+function maps_zone_error_fix(?string $raw): string {
+    $group = maps_zone_error_group($raw);
+    if ($group === null || $raw === null) {
+        return '';
+    }
+    $code = explode('|', substr($raw, 5), 2)[0];
+    $key = 'admin.maps.fix.' . $code;
+    $msg = t($key);
+    if ($msg !== $key) {
+        return $msg;
+    }
+    $gkey = 'admin.maps.fixgroup.' . $group;
+    $gmsg = t($gkey);
+    return $gmsg !== $gkey ? $gmsg : '';
 }
 
 // Zone error column holds either a code ('code:disk_short|12345') or legacy

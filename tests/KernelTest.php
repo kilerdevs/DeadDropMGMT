@@ -136,6 +136,20 @@ T::ok('Apache blocks setup.sql and config.php.example', str_contains($htaccess, 
 foreach (['htaccess' => $htaccess, 'docker nginx' => $nginx, 'docs nginx' => $nginxDoc, 'Caddy' => $caddy] as $profile => $conf) {
     T::ok("$profile never serves INSTALL_UNLOCK", str_contains($conf, 'INSTALL_UNLOCK'));
 }
+// Map-engine sidecars (.plan/.tiles/.part/.tmp/.leaves) carry the proxy URL
+// and exact byte layout: no profile serves them. The .leaves extension is
+// the trap — it trails .plan, so a naive (part|plan|tiles|tmp) match misses
+// it while the file still leaks the proxy pool.
+$tilesHtaccess = (string)file_get_contents($root . '/tiles/.htaccess');
+foreach (['htaccess' => $htaccess, 'tiles htaccess' => $tilesHtaccess, 'docker nginx' => $nginx, 'docs nginx' => $nginxDoc, 'Caddy' => $caddy] as $profile => $conf) {
+    T::ok("$profile never serves engine sidecars", str_contains($conf, 'leaves'));
+}
+// Zone uploads land under server-generated .pmtiles names only, but tiles/
+// is app-writable: nothing PHP-ish under it may ever execute on any profile.
+T::ok('tiles htaccess never executes PHP', str_contains($tilesHtaccess, '(php[0-9]?|phtml|phar)'));
+T::ok('docker nginx never executes PHP under /tiles/', str_contains($nginx, '^/tiles/.+\\.(php|phtml|phar)$'));
+T::ok('docs nginx never executes PHP under /tiles/', str_contains($nginxDoc, '^/tiles/.+\\.(php[0-9]?|phtml|phar)$'));
+T::ok('Caddy never executes PHP under /tiles/', str_contains($caddy, '^/tiles/.*\\.(php[0-9]?|phtml|phar)$'));
 
 // ── Compression parity: text assets gzip/deflate on all three servers,
 // while already-compressed bytes (uploads, .pmtiles, tile PNGs) and Range

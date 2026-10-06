@@ -199,7 +199,7 @@ runtime view afterwards.
 Check in order: file must decode as JPEG/PNG/WebP/GIF (SVG, BMP, and MIME lies are rejected) and stay under 16 megapixels;
 per-file size against `max_photo_mb` (Settings); at most `max_photos_per_order` files (default 10) per request — extras are
 listed in the flash message, not silently dropped; and PHP's own limits (`upload_max_filesize`, `post_max_size`,
-`max_file_uploads` — the Docker image raises them to 20M / 64M / 100). A bare `imagecreatetruecolor()` fatal means the PHP GD
+`max_file_uploads` — the Docker image raises them to 512M / 512M / 100). A bare `imagecreatetruecolor()` fatal means the PHP GD
 extension is missing.
 
 ## Courier bounced to `2fa.php?required=1`
@@ -304,10 +304,15 @@ on purpose); **Setup check** warns when it detects a non-Apache server.
 
 `data/` and `tiles/` are not Docker volumes, so rebuilding or recreating the container removes the downloaded zone files
 (and the cached `pmtiles` CLI). The zone list survives in the database, so nothing is lost but the download: open
-**Settings → Maps**, delete the affected zone and draw it again — the worker downloads it afresh. Mount volumes over those two
-directories if you rebuild often.
+**Settings → Maps**, delete the affected zone and draw it again — the worker downloads it afresh — or keep a copy of
+each zone's `.pmtiles` and **Upload file** it back onto the (failed or ready) zone after the rebuild; the upload is
+verified before it publishes. Mount volumes over those two directories if you rebuild often.
 
 ## A zone download is stuck or failed
+
+Failed zones say which pipeline leg failed — input, network, file data, host, disk or worker — and the exact next step
+for that cause (proxy-mode failures: add a proxy or re-queue direct; tool-less hosts: upload a file; stalls: schedule
+the cron). Beyond that:
 
 - **Nothing is moving:** on the `php` engine (no `proc_open`/CLI) downloads advance from page visits — the queue POST works
   within its budget and every progress poll donates a slice, so keep the zone's status page open or revisit it. The `cli`
@@ -318,6 +323,10 @@ directories if you rebuild often.
   silently going direct. Add proxies, or choose the direct route for that download.
 - **Refused for size:** the worker dry-runs each zone and refuses it when it would not fit the free disk (512 MiB headroom is
   always kept). Free space or draw a smaller zone.
+- **Giving up on downloading:** fetch the `.pmtiles` extract on any machine that can (a desktop with the `pmtiles` CLI,
+  or an older copy you kept) and **Upload file** it onto the failed zone — it is verified before it replaces anything.
+  The upload itself must fit PHP's body limits: if the app answers that the host refused it, raise `upload_max_filesize`
+  and `post_max_size` (the Docker images allow 512 MB); a file covering a different area than the zone is refused.
 
 ## pmtiles CLI hash mismatch
 

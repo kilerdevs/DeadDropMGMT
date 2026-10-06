@@ -169,6 +169,10 @@ T::ok('...and routing stays on', osm_proxy_enabled() === true);
 $root = dirname(__DIR__);
 $act = (string)file_get_contents($root . '/admin/maps_action.php');
 T::eq('zone add/retry/refresh are all refused on an unsupported host', 3, substr_count($act, 'maps_downloads_supported()'));
+T::ok('zone upload has its own gate (works with downloads off)',
+    str_contains($act, "case 'upload'") && str_contains($act, 'maps_upload_supported()'));
+T::ok('upload needs no outbound engine, only zlib and a writable tiles dir',
+    str_contains((string)file_get_contents($root . '/includes/maps.php'), "extension_loaded('zlib') && host_dir_writable(maps_tiles_dir())"));
 $set = (string)file_get_contents($root . '/admin/settings.php');
 T::ok('Settings lists the host capabilities', str_contains($set, 'host_capabilities()') && str_contains($set, 'host-list'));
 T::ok('Settings warns about the automatic switch-off, never about missing cURL',

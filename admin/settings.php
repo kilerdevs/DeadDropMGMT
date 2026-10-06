@@ -334,6 +334,10 @@ function s_label(array $s, string $key): string {
                     <?php if (!$map_zones): ?>
                     <div class="log-empty" id="maps-empty"><?= t('admin.maps.no_zones_yet') ?></div>
                     <?php endif; ?>
+                    <?php if (maps_upload_supported()): ?>
+                    <div class="proxies-hint" id="maps-upload-hint"><?= t('admin.maps.upload_hint') ?></div>
+                    <input type="file" id="mz-file" accept=".pmtiles,application/octet-stream" hidden>
+                    <?php endif; ?>
                     <table class="proxies-table maps-table" id="maps-table" <?= $map_zones ? '' : 'hidden' ?>>
                         <thead>
                         <tr>
@@ -533,6 +537,7 @@ function s_label(array $s, string $key): string {
         'mz_request_failed' => t('admin.maps.js.request_failed'),
         'mz_retry'          => t('admin.maps.retry_button'),
         'mz_refresh'        => t('admin.maps.refresh_button'),
+        'mz_upload'         => t('admin.maps.upload_button'),
         'mz_stale'          => t('admin.maps.stale_badge'),
         'mz_delete'         => t('admin.maps.delete_button'),
         'mz_no_zones'       => t('admin.maps.no_zones_yet'),
@@ -851,13 +856,23 @@ function s_label(array $s, string $key): string {
             speed = z.speed_bps !== null ? mzFmtBytes(z.speed_bps) + '/s' : '';
             eta = z.eta_secs !== null ? mzFmtDur(z.eta_secs) : '';
             var status = mzStatusLabel(z.status);
-            if (z.status === 'failed' && z.error) status += ' — ' + z.error;
+            if (z.status === 'failed') {
+                if (z.error_group) status += ' (' + z.error_group + ')';
+                if (z.error) status += ' — ' + z.error;
+                if (z.error_fix) status += ' — ' + z.error_fix;
+            }
             if (z.stale) status += ' — ' + I.mz_stale;
             actions = z.status === 'failed'
                 ? '<button type="button" class="action-btn mz-retry">' + I.mz_retry + '</button> '
                 : '';
             if (z.status === 'ready' && z.stale) {
                 actions += '<button type="button" class="action-btn mz-refresh">' + I.mz_refresh + '</button> ';
+            }
+            // Manual bootstrap for hosts that cannot download (or a faster fix
+            // than another retry): the hidden picker exists only when the host
+            // supports uploads, so its presence is the capability check.
+            if ((z.status === 'failed' || z.status === 'ready') && document.getElementById('mz-file')) {
+                actions += '<button type="button" class="action-btn mz-up">' + I.mz_upload + '</button> ';
             }
             actions += '<button type="button" class="action-btn action-btn--danger mz-del">' + I.mz_delete + '</button>';
             tr.innerHTML = '<td class="px-url"></td><td>z' + z.maxzoom + '</td>'
@@ -943,7 +958,26 @@ function s_label(array $s, string $key): string {
                     if (res.ok && res.j.ok) { mzPoll(); }
                     else { btn.disabled = false; showPopup(res.j.error || I.save_error, true); }
                 });
+            } else if (btn.classList.contains('mz-up')) {
+                var picker = document.getElementById('mz-file');
+                if (!picker) return;
+                picker.dataset.zone = tr.dataset.id;
+                picker.click();
             }
+        });
+        // One hidden picker serves every row: the chosen file posts straight to
+        // the upload action (FormData carries the Blob), then the picker resets
+        // so the same file can be chosen again after a refusal.
+        var mzPicker = document.getElementById('mz-file');
+        if (mzPicker) mzPicker.addEventListener('change', function () {
+            var picked = mzPicker.files && mzPicker.files[0];
+            var zid = mzPicker.dataset.zone;
+            mzPicker.value = '';
+            if (!picked || !zid) return;
+            mzPost('upload', { id: zid, zonefile: picked }).then(function (res) {
+                if (res.ok && res.j.ok) { mzPoll(); }
+                else { showPopup(res.j.error || I.save_error, true); mzPoll(); }
+            });
         });
         // Start live for the server-rendered rows; keep polling while active.
         mzPoll();
