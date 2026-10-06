@@ -145,6 +145,22 @@ function ix_zip_names_ok(array $names): bool {
     return true;
 }
 
+// Conservative SHOW GRANTS parse — line-for-line mirror of
+// capabilities_grants_allow_create() (standalone-file rule, same as
+// ix_schema_*): only an explicit global CREATE privilege answers true;
+// anything unclear assumes a restricted panel account, the safe direction
+// because the no-CREATE path always works. NEVER throws.
+function ix_grants_allow_create($grants): bool {
+    if (!is_string($grants) || $grants === '') return false;
+    foreach (explode("\n", strtoupper($grants)) as $line) {
+        $line = trim($line);
+        if (!str_starts_with($line, 'GRANT')) continue;
+        if (str_contains($line, 'ALL PRIVILEGES')) return true;
+        if (preg_match('/\bCREATE\b/', $line) === 1 && str_contains($line, 'ON *.*')) return true;
+    }
+    return false;
+}
+
 // ── direct HTTP fetch with manual redirect loop ──────────────────────────────
 // No proxy support by design: the installer downloads from GitHub over a
 // plain direct connection. A host that cannot reach GitHub at all gets the
@@ -422,41 +438,159 @@ function ix_sock_hop(string $url, string $method, int $timeout = 25): array {
     }
 }
 
-// ── capability check (mirrors includes/setup_check.php rows, standalone) ─────
+// ── capability check (mirrors includes/capabilities.php, standalone) ────────
+// The installer is ONE file and can never load the kernel, so the registry's
+// definition table is mirrored here with installer-worded details (same ids,
+// same required flags, same soft severities, same state transitions —
+// capabilities_evaluate() logic duplicated line-for-line). Two rows are
+// static info by necessity: `jobs` (a web SAPI cannot reliably find a CLI
+// php to probe detached jobs with) and `env` (the installer takes no env
+// vars; the row documents the app's config.php-constant fallback for panel
+// hosts). `db_create` needs credentials, so it is probed in dbtest instead.
+// tests/CapabilitiesTest.php runs this check under hostile php.ini combos
+// and asserts the shared rows match the registry's answers — a drift fails
+// the build.
+// [id, label, required, soft, detail-when-limited, detail-when-missing]
+function ix_cap_defs(): array {
+    return [
+        ['php', 'PHP', true, 'warn', '',
+            'DeadDropMGMT needs PHP 8.2+. Ask the host to switch the PHP version for this domain.'],
+        ['pdo_mysql', 'pdo_mysql', true, 'warn', '',
+            'Required. Enable pdo_mysql in the panel (Select PHP Version / extensions).'],
+        ['mbstring', 'mbstring', true, 'warn', '',
+            'Required. Enable mbstring in the panel (Select PHP Version / extensions).'],
+        ['zlib', 'zlib', false, 'warn',
+            'Optional: without zlib some features degrade (updates need zlib).',
+            'Optional: without zlib some features degrade (updates need zlib).'],
+        ['openssl', 'openssl', false, 'warn',
+            'Fine — cURL handles TLS itself; only the socket fallback stays HTTP-only.',
+            'HTTPS downloads would ride the socket engine, which needs openssl. Enable cURL or openssl.'],
+        ['curl', 'curl', false, 'info',
+            'Optional. Direct downloads fall back to the bundled socket engine.',
+            'Optional. Direct downloads fall back to the bundled socket engine.'],
+        ['tls', 'HTTPS transport', true, 'warn', '',
+            'No HTTPS transport: cURL is missing and the bundled socket engine needs openssl. Enable cURL or openssl.'],
+        ['zip', 'ZipArchive', true, 'warn',
+            'No php-zip extension — unpacking uses the `%s` binary instead (same result, a little slower).',
+            'Required to unpack the release. Enable the zip extension in the panel.'],
+        ['exec', 'exec', false, 'info',
+            'Disabled — detached jobs and the unzip fallback use proc_open instead; without either, both stay off.',
+            'Disabled — detached jobs and the unzip fallback use proc_open instead; without either, both stay off.'],
+        ['proc_open', 'proc_open', false, 'info',
+            'Fine — the app runs its pure-PHP maps pipeline instead.',
+            'Fine — the app runs its pure-PHP maps pipeline instead.'],
+        ['jobs', 'background jobs', false, 'info',
+            'No cron daemon needed: point a panel cron at cron/cleanup.php hourly, or let page visits run maintenance (pseudo-cron). Proxy upkeep runs inline; zone downloads advance from the progress poll.',
+            ''],
+        ['env', 'env vars', false, 'info',
+            'If the panel cannot set environment variables, the app reads the same DDMGMT_* names as constants in config.php — nothing is lost.',
+            ''],
+        ['set_time_limit', 'set_time_limit', false, 'warn',
+            'Long steps run in small chunks anyway — slower but fine.',
+            'Long steps run in small chunks anyway — slower but fine.'],
+    ];
+}
+
+// Same state transitions as capabilities_evaluate(): ok, limited (covered
+// degradation), missing (no fallback). jobs/env are static info (see above).
+function ix_cap_evaluate(array $env): array {
+    $curl = (bool)($env['curl'] ?? false);
+    $out = [];
+    foreach (ix_cap_defs() as [$id, $label, $required, $soft, $detLim, $detMiss]) {
+        $state = 'ok';
+        $note = '';
+        switch ($id) {
+            case 'php':
+                $state = version_compare((string)($env['php_version'] ?? PHP_VERSION), '8.2.0', '>=') ? 'ok' : 'missing';
+                break;
+            case 'pdo_mysql':
+            case 'mbstring':
+            case 'zlib':
+                $state = !empty($env['ext'][$id]) ? 'ok' : ($required ? 'missing' : 'limited');
+                break;
+            case 'openssl':
+                $state = !empty($env['ext']['openssl']) ? 'ok' : 'limited';
+                if ($state === 'limited' && $curl) {
+                    $soft = 'info'; // cURL handles TLS itself; socket-only HTTPS is the only loss
+                }
+                break;
+            case 'curl':
+                $state = $curl ? 'ok' : 'limited';
+                break;
+            case 'tls':
+                $sockets = (bool)($env['sockets'] ?? false);
+                $state = ($curl || ($sockets && !empty($env['ext']['openssl']))) ? 'ok' : 'missing';
+                break;
+            case 'zip':
+                if (!empty($env['zip_ext'])) {
+                    $state = 'ok';
+                } elseif (is_string($env['unzip_bin'] ?? null) && ($env['unzip_bin'] ?? '') !== '') {
+                    $state = 'limited';
+                    $note = (string)$env['unzip_bin'];
+                } else {
+                    $state = 'missing';
+                }
+                break;
+            case 'exec':
+            case 'proc_open':
+            case 'set_time_limit':
+                $key = $id === 'exec' ? 'exec' : ($id === 'proc_open' ? 'proc_open' : 'set_time_limit');
+                $state = !empty($env[$key]) ? 'ok' : 'limited';
+                break;
+            case 'jobs':
+            case 'env':
+                $state = 'limited';
+                break;
+        }
+        $out[] = ['id' => $id, 'label' => $label, 'state' => $state,
+                  'required' => $required, 'soft' => $soft, 'note' => $note,
+                  'detLim' => $detLim, 'detMiss' => $detMiss];
+    }
+    return $out;
+}
+
+function ix_cap_env(): array {
+    return [
+        'php_version' => PHP_VERSION,
+        'ext' => ['pdo_mysql' => extension_loaded('pdo_mysql'), 'mbstring' => extension_loaded('mbstring'),
+                  'zlib' => extension_loaded('zlib'), 'openssl' => extension_loaded('openssl')],
+        'curl' => function_exists('curl_init'),
+        'sockets' => function_exists('stream_socket_client'),
+        'zip_ext' => class_exists('ZipArchive'),
+        'unzip_bin' => class_exists('ZipArchive') ? null : ix_unzip_bin(),
+        'exec' => function_exists('exec'),
+        'proc_open' => function_exists('proc_open'),
+        'set_time_limit' => function_exists('set_time_limit'),
+    ];
+}
+
 function cap_checks(): array {
     $out = [];
-    $out[] = version_compare(PHP_VERSION, '8.2.0', '>=')
-        ? row('php', 'PHP ' . PHP_VERSION, 'ok')
-        : row('php', 'PHP ' . PHP_VERSION, 'fail', 'DeadDropMGMT needs PHP 8.2+. Ask the host to switch the PHP version for this domain.');
-    foreach (['pdo_mysql' => 'fail', 'mbstring' => 'fail', 'zlib' => 'warn'] as $ext => $lvl) {
-        $out[] = extension_loaded($ext)
-            ? row('ext_' . $ext, $ext . ' ' . pver($ext), 'ok')
-            : row('ext_' . $ext, $ext . ($lvl === 'fail' ? ' MISSING' : ' missing'), $lvl,
-                $lvl === 'fail' ? "Required. Enable $ext in the panel (Select PHP Version / extensions)."
-                    : "Optional: without $ext some features degrade (updates need zlib).");
+    foreach (ix_cap_evaluate(ix_cap_env()) as $r) {
+        // Row ids are the historic ones (ext_<name> for extensions).
+        $rowId = in_array($r['id'], ['php', 'tls', 'zip', 'exec', 'proc_open', 'jobs', 'env', 'set_time_limit'], true)
+            ? $r['id'] : 'ext_' . $r['id'];
+        $label = $r['label'];
+        if ($r['id'] === 'php') {
+            $label .= ' ' . PHP_VERSION;
+        } elseif (str_starts_with($rowId, 'ext_')) {
+            // Historic wording: version when loaded, " missing"/" MISSING"
+            // when not (lowercase for soft, upper for blocking).
+            $label .= extension_loaded($r['id']) ? ' ' . pver($r['id'])
+                : ($r['state'] === 'missing' ? ' MISSING' : ' missing');
+        } elseif ($r['id'] === 'zip' && $r['state'] === 'limited') {
+            $label .= ' via unzip binary';
+        }
+        if ($r['state'] === 'ok') {
+            $out[] = row($rowId, $label, 'ok');
+        } elseif ($r['state'] === 'limited') {
+            $det = $r['id'] === 'zip' ? sprintf($r['detLim'], $r['note']) : $r['detLim'];
+            $out[] = row($rowId, $label, $r['soft'], $det);
+        } else {
+            // Missing with no fallback: required capabilities block (fail).
+            $out[] = row($rowId, $label . ($r['id'] === 'zip' ? ' MISSING' : ''), 'fail', $r['detMiss']);
+        }
     }
-    $hasCurl = function_exists('curl_init');
-    // openssl only matters when cURL is absent: cURL brings its own TLS,
-    // the bundled socket engine needs the PHP extension for https://.
-    $out[] = extension_loaded('openssl') ? row('ext_openssl', 'openssl ' . pver('openssl'), 'ok')
-        : row('ext_openssl', 'openssl missing', $hasCurl ? 'info' : 'warn',
-            $hasCurl ? 'Fine — cURL handles TLS itself; only the socket fallback stays HTTP-only.'
-                : 'HTTPS downloads would ride the socket engine, which needs openssl. Enable cURL or openssl.');
-    $out[] = $hasCurl ? row('ext_curl', 'curl ' . pver('curl'), 'ok')
-        : row('ext_curl', 'curl missing', 'info', 'Optional. Direct downloads fall back to the bundled socket engine.');
-    // One working HTTPS path is enough: cURL, or raw sockets + openssl.
-    // (allow_url_fopen is NOT one: HTTP no longer rides streams — file://
-    // test hooks only — so hosts with it off lose nothing. No row for it.)
-    $tls = $hasCurl || (function_exists('stream_socket_client') && extension_loaded('openssl'));
-    $out[] = $tls ? row('tls', 'HTTPS transport', 'ok')
-        : row('tls', 'HTTPS transport', 'fail', 'No HTTPS transport: cURL is missing and the bundled socket engine needs openssl. Enable cURL or openssl.');
-    // ZipArchive is preferred, but the `unzip` binary unpacks just as well —
-    // a missing php-zip extension no longer blocks the install.
-    $ubin = class_exists('ZipArchive') ? null : ix_unzip_bin();
-    $out[] = class_exists('ZipArchive') ? row('zip', 'ZipArchive', 'ok')
-        : ($ubin !== null
-            ? row('zip', 'ZipArchive via unzip binary', 'warn', 'No php-zip extension — unpacking uses the `unzip` binary instead (same result, a little slower).')
-            : row('zip', 'ZipArchive MISSING', 'fail', 'Required to unpack the release. Enable the zip extension in the panel.'));
     $w = is_writable(base());
     $out[] = $w ? row('writedir', 'directory writable', 'ok')
         : row('writedir', 'directory NOT writable', 'fail', 'The installer cannot write here. Fix ownership/permissions (755/775) or pick another dir.');
@@ -733,9 +867,21 @@ if ($action !== '') {
             try {
                 foreach ($pdo->query('SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE()')->fetchAll(PDO::FETCH_COLUMN) as $t) $have[] = $t;
             } catch (Throwable) {}
+            // Read-only privilege census: SHOW GRANTS reveals only the
+            // caller's own privileges. A forced user_xxx panel account has
+            // no CREATE DATABASE — normal, the schema applies into the
+            // existing database either way — so this informs, never blocks.
+            $grants = null;
+            try {
+                $g = $pdo->query('SHOW GRANTS');
+                if ($g instanceof PDOStatement) $grants = implode("\n", array_map('strval', $g->fetchAll(PDO::FETCH_COLUMN)));
+            } catch (Throwable) {}
+            $canCreate = $grants === null ? null : ix_grants_allow_create($grants);
             jout(['ok' => true, 'version' => $ver,
                 'tables' => count(array_intersect(INST_TABLES, $have)) . '/' . count(INST_TABLES),
-                'log' => "connected: MySQL $ver, schema tables present: " . count(array_intersect(INST_TABLES, $have)) . '/' . count(INST_TABLES)]);
+                'create_priv' => $canCreate,
+                'log' => "connected: MySQL $ver, schema tables present: " . count(array_intersect(INST_TABLES, $have)) . '/' . count(INST_TABLES)
+                    . ($canCreate === false ? ' — no CREATE DATABASE privilege (normal on panel hosts: the schema applies into this existing database)' : '')]);
         }
         // — full setup —
         $log = ["connected: MySQL $ver"];

@@ -28,6 +28,7 @@ require_once dirname(__DIR__) . '/config.php';
 // braces rather than load-bearing.
 foreach ([
     'logger',
+    'capabilities',
     'host',
     'db',
     'net',

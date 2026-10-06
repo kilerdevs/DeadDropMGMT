@@ -138,6 +138,64 @@ jobs:
       - name: Run tests
         run: php tests/run_all.php
 
+  # Capability matrix: the hostile-host contract. The full matrix proves the
+  # app works; this job proves it degrades honestly where hosts cannot —
+  # installer answers under crippled php.ini combos, the registry and its
+  # installer mirror agree, setup diagnostics stay accurate, and language
+  # dictionaries keep parity for the fallback sentences.
+  capability-matrix:
+    runs-on: ubuntu-24.04
+    name: capability matrix
+    services:
+      db:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      DDMGMT_DB_HOST: 127.0.0.1
+      DDMGMT_DB_PORT: '3306'
+      DDMGMT_DB_USER: root
+      DDMGMT_DB_PASS: root
+      DDMGMT_TEST_DB: deaddrops_test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: '8.3'
+          extensions: pdo_mysql, openssl, gd, fileinfo
+
+      - name: Prepare config
+        run: cp config.php.example config.php
+
+      - name: Load schema into test database
+        run: php tests/schema_loader.php
+
+      - name: Registry contract + installer parity + live privilege probe
+        run: php tests/CapabilitiesTest.php
+
+      - name: Installer on crippled hosts
+        run: php tests/InstallerLimitedEnvTest.php
+
+      - name: Installer + min-bundle freshness
+        run: |
+          php tests/InstallerTest.php
+          php tests/InstallerMinTest.php
+
+      - name: Setup diagnostics + host capabilities + i18n parity
+        run: |
+          php tests/SetupCheckTest.php
+          php tests/HostTest.php
+          php tests/I18nTest.php
+
   # Static analysis (PHPStan level 5) over the runtime code. The phar is
   # version- AND hash-pinned: a compromised release must not analyse — or
   # worse, pass — this repo's code.

@@ -9,6 +9,20 @@ All notable changes to DeadDropMGMT are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Hosting doctor (`admin/hosting_doctor.php`, owner-only, linked from
+  Settings → Hosting and the setup check): every host capability from the
+  new `includes/capabilities.php` registry with its state on this host and
+  the exact automatic fallback where one is missing — no cURL, no exec,
+  no zip, no cron/detach, no env vars, forced `user_xxx` database names
+  without `CREATE DATABASE`, disabled `set_time_limit`. The installer
+  check, the setup check and the doctor all evaluate the same registry
+  (the standalone installer mirrors it line-for-line; a new
+  `capability-matrix` CI job asserts they agree under hostile `php.ini`
+  combos). `dbtest` now also reports the account's `CREATE DATABASE`
+  privilege via read-only `SHOW GRANTS`. Missing TLS stays blocking by
+  design — no plain-HTTP fallback is offered anywhere.
+
 ### Changed
 - Web installer (`tools/install.php`) needs less from the host: the
   `allow_url_fopen` row is gone (HTTP never rides streams — file:// test

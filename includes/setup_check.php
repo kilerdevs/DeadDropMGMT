@@ -1,5 +1,6 @@
 <?php
 declare(strict_types=1);
+require_once __DIR__ . '/capabilities.php';
 
 // First-run / restricted-host diagnostics and schema installer.
 //
@@ -29,35 +30,39 @@ function setup_row(string $id, string $label, string $status, string $detail = '
 
 // ── Runtime: PHP, extensions, functions ─────────────────────────────────────
 
-// PHP version, required extensions, and disabled functions — no DB needed.
+// PHP version, required extensions, transports, and process control — no DB
+// needed. Every row is one capability_definitions() entry evaluated with the
+// live host probes, so the installer, this page and the hosting doctor name
+// the same fallbacks (admin.cap.<id>). Quantitative infos (max_time) stay
+// bespoke below: they are measurements, not capabilities.
 function setup_runtime_checks(): array {
-    $out = [];
-    $out[] = version_compare(PHP_VERSION, '8.2.0', '>=')
-        ? setup_row('php', 'PHP ' . PHP_VERSION, 'ok')
-        : setup_row('php', 'PHP ' . PHP_VERSION, 'fail', t('admin.setupcheck.version_low', ['v' => PHP_VERSION]));
-    foreach (['pdo_mysql' => 'fail', 'mbstring' => 'fail', 'openssl' => 'warn', 'zlib' => 'warn', 'curl' => 'info'] as $ext => $level) {
-        if (extension_loaded($ext)) {
-            $out[] = setup_row('ext_' . $ext, $ext . ' ' . (string)phpversion($ext), 'ok');
-            continue;
-        }
-        $detail = match ($level) {
-            'fail' => t('admin.setupcheck.ext_missing', ['item' => $ext]),
-            'warn' => t('admin.setupcheck.ext_limited', ['item' => $ext]),
-            default => t('admin.setupcheck.ext_optional', ['item' => $ext]),
-        };
-        $out[] = setup_row('ext_' . $ext, $ext, $level, $detail);
+    $eval = [];
+    foreach (capabilities_evaluate(capabilities_live_env()) as $row) {
+        $eval[$row['id']] = $row;
     }
-    // HTTPS needs cURL or raw sockets + OpenSSL; either leg alone is fine.
-    $tls = extension_loaded('curl') || (function_exists('stream_socket_client') && extension_loaded('openssl'));
-    $out[] = $tls
-        ? setup_row('tls', 'HTTPS transport', 'ok')
-        : setup_row('tls', 'HTTPS transport', 'fail', t('admin.setupcheck.no_tls'));
-    $out[] = function_exists('proc_open')
-        ? setup_row('proc_open', 'proc_open', 'ok')
-        : setup_row('proc_open', 'proc_open', 'info', t('admin.setupcheck.no_exec'));
-    $out[] = function_exists('set_time_limit')
-        ? setup_row('set_time_limit', 'set_time_limit', 'ok')
-        : setup_row('set_time_limit', 'set_time_limit', 'warn', t('admin.setupcheck.no_set_time'));
+    $out = [];
+    foreach (['php', 'pdo_mysql', 'mbstring', 'zlib', 'openssl', 'curl', 'tls',
+              'zip', 'exec', 'proc_open', 'jobs', 'env', 'set_time_limit'] as $id) {
+        $row = $eval[$id];
+        $status = capabilities_consumer_status($row);
+        $label = $row['label'];
+        $params = [];
+        if ($id === 'php') {
+            $label .= ' ' . PHP_VERSION;
+            $params = ['v' => PHP_VERSION];
+        } elseif (str_starts_with($id, 'pdo_') || in_array($id, ['mbstring', 'zlib', 'openssl', 'curl'], true)) {
+            $label .= ' ' . (string)phpversion($id === 'curl' ? 'curl' : $id);
+        } elseif ($id === 'zip' && $row['state'] === 'limited') {
+            $label .= ' via unzip binary';
+            $params = ['bin' => $row['note']];
+        }
+        $detail = $status === 'ok' ? '' : t($row['fallback'], $params);
+        // Row ids are the historic ones (ext_<name> for extensions, bare
+        // capability name otherwise) — tests and the doctor rely on them.
+        $rowId = ($id === 'php' || in_array($id, ['tls', 'zip', 'exec', 'proc_open', 'jobs', 'env', 'set_time_limit'], true))
+            ? $id : 'ext_' . $id;
+        $out[] = setup_row($rowId, $label, $status, $detail);
+    }
     $out[] = sprintf('max_execution_time=%s', (string)@ini_get('max_execution_time')) === 'max_execution_time='
         ? setup_row('max_time', 'max_execution_time', 'info')
         : setup_row('max_time', 'max_execution_time=' . (string)@ini_get('max_execution_time'), 'info');
@@ -135,7 +140,7 @@ function setup_db_probe(): array {
     } catch (PDOException $e) {
         return ['connected' => false, 'error' => $e->getMessage(), 'pdo' => null,
                 'zone' => null, 'tables' => [], 'engines' => [], 'owner_exists' => false,
-                'owner_known' => false];
+                'owner_known' => false, 'grants' => null];
     }
     $zone = null;
     try {
@@ -166,9 +171,22 @@ function setup_db_probe(): array {
         $known = true;
     } catch (Throwable) {
     }
+    // Read-only privilege census for the forced-name panel case: SHOW GRANTS
+    // reveals only the caller's own privileges, and a failed call (revoked
+    // SHOW, proxied frontend) conservatively reads as restricted — the
+    // no-CREATE path works either way, so the row informs, never blocks.
+    $grants = null;
+    try {
+        $g = $pdo->query('SHOW GRANTS');
+        if ($g instanceof PDOStatement) {
+            $grants = implode("\n", array_map('strval', $g->fetchAll(PDO::FETCH_COLUMN)));
+        }
+    } catch (Throwable) {
+    }
     return ['connected' => true, 'error' => '', 'pdo' => $pdo,
             'zone' => is_string($zone) ? $zone : null, 'tables' => $tables,
-            'engines' => $engines, 'owner_exists' => $owner, 'owner_known' => $known];
+            'engines' => $engines, 'owner_exists' => $owner, 'owner_known' => $known,
+            'grants' => $grants];
 }
 
 // Rows for the Database section from a probe above.
@@ -200,6 +218,15 @@ function setup_db_rows(array $probe): array {
     }
     if ($wrong !== []) {
         $out[] = setup_row('engines', 'table engines', 'fail', t('admin.setupcheck.engines', ['tables' => implode(', ', $wrong)]));
+    }
+    // Forced-name panel accounts (user_xxx, no CREATE DATABASE) are normal:
+    // the schema applies into the existing database either way, so this row
+    // names the situation and its non-action instead of failing it.
+    $dc = capability_row('db_create', ['grants' => $probe['grants'] ?? null]);
+    if ($dc !== null) {
+        $dcStatus = capabilities_consumer_status($dc);
+        $out[] = setup_row('db_create', $dc['label'], $dcStatus,
+            $dcStatus === 'ok' ? '' : t($dc['fallback']));
     }
     return $out;
 }

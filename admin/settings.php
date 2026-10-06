@@ -429,6 +429,7 @@ function s_label(array $s, string $key): string {
             </div>
             <?php endforeach; ?>
         </div>
+        <p class="td-muted"><a href="/admin/hosting_doctor.php"><?= htmlspecialchars(t('admin.host.doctor_link'), ENT_QUOTES, 'UTF-8') ?></a></p>
 
         <!-- ── Log viewer ────────────────────────────────────────────────── -->
         <?php if (get_setting('show_error_log', '0') === '1'): ?>

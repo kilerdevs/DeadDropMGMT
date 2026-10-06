@@ -120,6 +120,7 @@ require_once dirname(__DIR__) . '/includes/pmtiles.php';
 require_once dirname(__DIR__) . '/includes/maps.php';
 require_once dirname(__DIR__) . '/includes/cleanup.php';
 require_once dirname(__DIR__) . '/includes/version.php';
+require_once dirname(__DIR__) . '/includes/capabilities.php';
 require_once dirname(__DIR__) . '/includes/host.php';
 
 // Suites run their own HTTP servers against a shared database: a sweep firing

@@ -1,5 +1,6 @@
 <?php
 declare(strict_types=1);
+require_once __DIR__ . '/capabilities.php';
 
 // ── Host capabilities ────────────────────────────────────────────────────────
 // The app must run on free shared hosting: no Docker, often no cron, no exec /
@@ -123,6 +124,34 @@ function host_dir_writable(string $dir): bool {
         $dir = $parent;
     }
     return is_writable($dir);
+}
+
+// Live probe-result map for capabilities_evaluate(), built from the same
+// probes (and the same test override seam) as the host_* helpers above — so
+// the setup check, the hosting doctor and this file's own capability rows
+// all answer from one measurement. Consumers fill in what only they know:
+// grants (a live PDO), dirs (their own writability list), session_*,
+// server_sw/htaccess_ok. $overrides win (tests, installer-parity probes).
+function capabilities_live_env(array $overrides = []): array {
+    $env = [
+        'php_version' => PHP_VERSION,
+        'ext' => [
+            'pdo_mysql' => extension_loaded('pdo_mysql'),
+            'mbstring'  => extension_loaded('mbstring'),
+            'zlib'      => extension_loaded('zlib'),
+            'openssl'   => extension_loaded('openssl'),
+        ],
+        'curl' => host_has_curl(),
+        'sockets' => host_function_usable('stream_socket_client'),
+        'zip_ext' => class_exists('ZipArchive'),
+        'unzip_bin' => capabilities_find_unzip(),
+        'exec' => host_can_exec(),
+        'proc_open' => host_can_proc_open(),
+        'detach' => host_can_detach(),
+        'putenv_ok' => host_function_usable('putenv') && host_function_usable('getenv'),
+        'set_time_limit' => host_function_usable('set_time_limit'),
+    ];
+    return $overrides + $env;
 }
 
 // What the Settings → Hosting panel lists: [id, status, note]. Status is

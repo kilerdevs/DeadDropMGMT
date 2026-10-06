@@ -48,7 +48,7 @@ T::ok('php -n check is valid JSON with rows', is_array($check['rows'] ?? null) &
 $fails = array_filter($check['rows'], static fn(array $r): bool => $r['status'] === 'fail');
 T::ok('php -n check reports blocking failures', count($fails) > 0);
 $ids = array_column($check['rows'], 'id');
-foreach (['php', 'ext_pdo_mysql', 'ext_mbstring', 'zip', 'tls'] as $need) {
+foreach (['php', 'ext_pdo_mysql', 'ext_mbstring', 'zip', 'tls', 'exec', 'jobs', 'env', 'set_time_limit'] as $need) {
     T::ok('php -n row present: ' . $need, in_array($need, $ids, true));
 }
 
@@ -121,6 +121,13 @@ T::ok('proc_open says disabled', str_contains(strtolower((string)(($byId['proc_o
 T::eq('tiny upload limit warns', 'warn', $byId['upload']['status'] ?? null);
 T::eq('dead session path warns', 'warn', $byId['sessions']['status'] ?? null);
 T::ok('max_execution_time row present', isset($byId['max_time']));
+// Registry rows under the same lockdown: no process functions, no time
+// control — each names its fallback and none blocks the install.
+T::eq('exec reported without fallback path', 'info', $byId['exec']['status'] ?? null);
+T::eq('set_time_limit disabled warns with the chunk fallback', 'warn', $byId['set_time_limit']['status'] ?? null);
+T::ok('set_time_limit names chunked steps', str_contains(strtolower((string)($byId['set_time_limit']['detail'] ?? '')), 'chunk'));
+T::eq('jobs row is static info (web SAPI cannot probe detach)', 'info', $byId['jobs']['status'] ?? null);
+T::eq('env row is static info (installer takes no env vars)', 'info', $byId['env']['status'] ?? null);
 
 // ── 6. no curl + streams off → the socket engine still fetches http ──────────
 // Needs a real local HTTP origin: reuse the stub trick (parent HAS proc_open
