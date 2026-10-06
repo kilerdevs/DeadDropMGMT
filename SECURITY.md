@@ -72,7 +72,7 @@ reasonable window (90 days is customary) to publish a fix before any public disc
 
 | Area | Examples |
 |---|---|
-| `index.php`, `receive.php` | Public order lookup, unlock, reveal and delivery-confirmation flows |
+| `index.php`, `receive.php`, `photo.php` | Public order lookup, unlock, reveal, delivery-confirmation and photo-serving flows |
 | `admin/*` | Authentication, session handling, CSRF, 2FA, authorization gaps between owner and courier roles, the `admin/dispatch.php` route envelope |
 | `includes/crypto.php` | Encryption, key separation, hashing, the order-token index, ≥64-bit passphrase generation |
 | `includes/order_state.php` | The atomic order state machine (deliver / receive / delete / expiry) |

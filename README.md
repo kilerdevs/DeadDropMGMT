@@ -577,7 +577,7 @@ Server-local files (`config.php`, `includes/`, `logs/`, `uploads/`) are never se
 | SQL injection | PDO prepared statements throughout — zero string interpolation in SQL | S1–S5 | A1–A2 |
 | Password storage | bcrypt cost=12 via `password_hash()` / `password_verify()` | S5 | A4 |
 | Account takeover | TOTP 2FA (RFC 6238) — self-service per account, secret GCM-encrypted at rest. Passwordless accounts are claimed only with a single-use enrollment secret, never by username alone. Per-account attempt budgets on login and 2FA; password / 2FA resets end all of the account's sessions; hard 12-hour session ceiling | S5 | A1, A2 |
-| Location data at rest | Location text, pin, instructions **and order notes** travel in one AES-256-GCM (authenticated) blob, random nonce per record (notes of orders saved before this lived in a plaintext column until their next save). **Drop photos are not encrypted on disk** — they are re-encoded, EXIF-stripped files under unguessable names, deleted with the order and by panic wipe; keys are HKDF purpose-subkeys of the master key — locations, TOTP secrets, reveal payloads, one-time session messages, the order-token index and copy, and the log chain each use their own (ADR-016). Legacy CBC rows and raw-master rows are rejected at runtime — migrate with `tools/migrate_cbc_to_gcm.php` then `tools/separate_keys.php`. Master key lives only in `config.php`, env (`DDMGMT_AES_KEY_HEX`) or the `/config/aes_key_hex` file — never in the DB | S1, S4 | A4 |
+| Location data at rest | Location text, pin, instructions **and order notes** travel in one AES-256-GCM (authenticated) blob, random nonce per record (notes of orders saved before this lived in a plaintext column until their next save). **Drop photos are encrypted on disk** (AES-256-GCM sealed envelopes, thumbnails included) and served decrypted via `photo.php` — they are re-encoded, EXIF-stripped files under unguessable names, deleted with the order and by panic wipe; keys are HKDF purpose-subkeys of the master key — locations, TOTP secrets, reveal payloads, one-time session messages, the order-token index and copy, drop photos (`deaddrop:photo-v1`), and the log chain each use their own (ADR-016). Legacy CBC rows and raw-master rows are rejected at runtime — migrate with `tools/migrate_cbc_to_gcm.php` then `tools/separate_keys.php`. Master key lives only in `config.php`, env (`DDMGMT_AES_KEY_HEX`) or the `/config/aes_key_hex` file — never in the DB | S1, S4 | A4 |
 | Order tokens at rest | Lookups go through `orders.token_hmac`: HMAC-SHA256 of the (lower-cased) token under its own HKDF subkey, unique-indexed. Events and the audit trail keep only that index. The admin panel's display copy is AES-256-GCM under a second subkey. A database dump therefore contains no usable token and cannot be used to test candidate tokens offline. Existing installs upgrade with `tools/migrate_order_tokens.php` (ADR-019) | S3 | A4 |
 | Pickup password guessing | Per-order budget (10 wrong passwords per window per token, from any address — a leaked link plus rotating IPs buys no more) plus a dual budget enforced together: IP-based limiter (IPv6 clients counted per /64) (**fail-closed**: if the limiter DB is down, pickup and login are denied, not waved through) **and** a per-session failure bucket (5 failures per window, its own constant — not tied to the IP attempt count) — whoever trips either is blocked; ≥64-bit generated passphrases (6 words + 4-digit + symbol), hash-only at rest, equalized-cost responses for unknown tokens | S2 | A1 |
 | Rate-limit bypass via spoofed `X-Forwarded-For` | Proxy headers are honored only when `DDMGMT_TRUST_PROXY=1` (opt-in for reverse-proxy/CDN installs) **and** the direct peer matches `DDMGMT_TRUSTED_PROXIES` (default: loopback + RFC1918); header values are validated as literal IPs and `REMOTE_ADDR` is the default source of truth | S2 | A1 |
@@ -734,9 +734,9 @@ A separate CI job runs the suite under `pcov` and reports line coverage over `in
 
 | Scope | Floor |
 |---|---|
-| Every security-critical file | 85% (80% for `db.php`, whose residual lines are the connect-failure `die()` itself) |
+| Every security-critical file | 85% |
 | Overall across `includes/` | 85% |
-| Per-file pins | `net.php` 100 · `logger.php` 92 · `cleanup.php` 85 · `proxy.php` 63 (live proxy discovery stays external by design) |
+| Per-file pins | `net.php` 100 · `logger.php` 92 · `crypto.php` 85 · `cleanup.php` 85 · `auth.php` 82 · `db.php` 80 (connect-failure `die()`) · `proxy.php` 63 (live proxy discovery stays external by design) |
 
 Per-file pins lock in hermetic gains that were hard-won — any regression from the measured baseline fails the build. The summary lands in the job summary; a browsable HTML report is uploaded as an artifact for 14 days. Composer is dev-only tooling here, the application itself never touches it.
 
@@ -762,6 +762,7 @@ DeadDropMGMT/
 │
 ├── index.php                 Public order lookup & location reveal
 ├── receive.php               Delivery confirmation endpoint
+├── photo.php                 Encrypted photo serving (`?file=`, decrypt-to-temp stream)
 ├── healthz.php               Container/monitor health probe
 ├── public.js, gallery.js     Public-facing JS (lookup flow, photo gallery)
 ├── reveal-map.js             Self-hosted public reveal map (MapLibre + PMTiles)
@@ -844,7 +845,8 @@ DeadDropMGMT/
 │   └── proxy_heal.php        Replaces failed discovered pool proxies (CLI only)
 │
 ├── logs/                     App + error log (blocked from web)
-├── uploads/                  Order photos: served by URL, no listing,
+├── uploads/                  Order photos (AES-256-GCM sealed files, served
+│                             decrypted via photo.php): no listing,
 │                             no PHP execution, no disk caching
 ├── cache/                    OSM tile disk cache (blocked from web)
 ├── data/                     Map worker files: the pmtiles CLI and scratch data (blocked from web)

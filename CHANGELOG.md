@@ -16,10 +16,28 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   blocks the install (the `unzip` binary unpacks instead, same result), and
   `max_execution_time` is pure info (cURL and the socket engine re-arm the
   limit while bytes flow, so slow links can't kill the download). Hard
-  requirements are now exactly: PHP 8.2+, pdo_mysql, mbstring, one HTTPS
-  transport (cURL, or sockets + openssl), a writable directory, 32 MB disk.
-  New upload/extract paths also reject zips with absolute or `../` entries
-  (zip-slip guard on manual uploads).
+ requirements are now exactly: PHP 8.2+, pdo_mysql, mbstring, one HTTPS
+   transport (cURL, or sockets + openssl), a writable directory, 32 MB disk.
+   New upload/extract paths also reject zips with absolute or `../` entries
+   (zip-slip guard on manual uploads).
+
+### Fixed
+- Order creation answered 500 on every request: the staged-upload cleanup in
+  `admin/create.php` registered a shutdown handler with one array argument
+  for a two-parameter closure (fatal on all PHP versions), and the prefix
+  scheme it cleaned by pointed at the wrong directory level. The handler now
+  shares an `ArrayObject` with the request, so fatal uploads are still
+  reaped from `uploads/0/` instead of killing the order.
+- Rate-limit window parsing rejected real PostgreSQL whole-hour offsets
+  (`YYYY-MM-DD HH:MM:SS+HH`, e.g. `...+00`): such rows fell through to the
+  `strtotime` fallback instead of parsing as UTC. Short `+HH` is accepted.
+
+### Security
+- Drop photos are encrypted at rest: AES-256-GCM sealed envelopes under a
+  dedicated `deaddrop:photo-v1` purpose subkey (thumbnails included), served
+  decrypted via the new `photo.php` endpoint (`/photo.php?file=`), which
+  answers 400/404/403 without disclosing anything. A disk or backup leak no
+  longer yields viewable images.
 
 ## [1.6.2] - 2026-09-28
 

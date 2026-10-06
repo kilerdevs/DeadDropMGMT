@@ -331,7 +331,8 @@ payloads and the log-integrity chain alike. A weakness or leak in any one use
 material flows from the master alone) and a purpose-bound info string:
 `deaddrop:location-v1`, `deaddrop:totp-v1`, `deaddrop:reveal-v1`,
 `deaddrop:flash-v1` (one-time session messages: generated passwords, enrollment
-secrets), `deaddrop:token-index-v1` and `deaddrop:token-v1` (order tokens, ADR-019)
+secrets), `deaddrop:token-index-v1` and `deaddrop:token-v1` (order tokens, ADR-019),
+`deaddrop:photo-v1` (drop photos and thumbnails, sealed files served via `photo.php`)
 and `deaddrop:log-hmac-v1`. Rows encrypted under the raw master key are refused at
 runtime; `tools/separate_keys.php` migrates them (dry-run first), and
 `tools/rotate_aes_key.php` re-encrypts under the *new* master's subkeys.
