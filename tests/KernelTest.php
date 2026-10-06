@@ -123,12 +123,19 @@ foreach ($cliOnly as $f) {
 $htaccess = (string)file_get_contents($root . '/.htaccess');
 $nginx    = (string)file_get_contents($root . '/docker/nginx.conf');
 $caddy    = (string)file_get_contents($root . '/docker/Caddyfile');
+$nginxDoc = (string)file_get_contents($root . '/docs/nginx-deaddrop.conf');
 foreach (['cron', 'tools', 'tests', 'docker', 'e2e', 'backups', 'data'] as $blocked) {
     T::ok("Apache blocks /$blocked/", str_contains($htaccess, $blocked . '|') || str_contains($htaccess, '|' . $blocked));
     T::ok("nginx blocks /$blocked/", (bool)preg_match('#\^/\([^)]*\b' . $blocked . '\b[^)]*\)/#', $nginx));
     T::ok("Caddy blocks /$blocked/", str_contains($caddy, "/$blocked/*"));
 }
 T::ok('Apache blocks setup.sql and config.php.example', str_contains($htaccess, 'setup\.sql') && str_contains($htaccess, 'config\\.php\\.example'));
+// INSTALL_UNLOCK holds the installer's rotating upgrade token: no profile
+// may serve it (the .zip staging file is dot-prefixed, so the dotfile rules
+// cover it on nginx/Caddy and .htaccess names it explicitly).
+foreach (['htaccess' => $htaccess, 'docker nginx' => $nginx, 'docs nginx' => $nginxDoc, 'Caddy' => $caddy] as $profile => $conf) {
+    T::ok("$profile never serves INSTALL_UNLOCK", str_contains($conf, 'INSTALL_UNLOCK'));
+}
 
 // ── Compression parity: text assets gzip/deflate on all three servers,
 // while already-compressed bytes (uploads, .pmtiles, tile PNGs) and Range

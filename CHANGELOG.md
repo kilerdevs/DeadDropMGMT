@@ -20,8 +20,21 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   (the standalone installer mirrors it line-for-line; a new
   `capability-matrix` CI job asserts they agree under hostile `php.ini`
   combos). `dbtest` now also reports the account's `CREATE DATABASE`
-  privilege via read-only `SHOW GRANTS`. Missing TLS stays blocking by
-  design — no plain-HTTP fallback is offered anywhere.
+   privilege via read-only `SHOW GRANTS`. Missing TLS stays blocking by
+   design — no plain-HTTP fallback is offered anywhere.
+- Web installer upgrades are safe to run: the empty `INSTALL_UNLOCK` file
+  now only authorizes arming — the installer mints a random run token into
+  it (rotated after every step) and each state-changing action must present
+  it back, so a planted empty file cannot be driven remotely. Before the
+  extract moves anything, the working tree is snapshotted to
+  `backups/upgrade-<UTC>/` (newest three kept, web-denied, restorable by
+  hand or with the new Roll back button); `config.php` is never rewritten
+  and data dirs are merged, never replaced. A schema-only Upgrade action
+  (idempotent `setup.sql` re-apply) replaces the old setup refusal on
+  installed apps and re-locks the run; interrupted runs resume from the
+  tree probe (waiting package, newest snapshot, arm state). `INSTALL_UNLOCK`
+  is now denied on all four server profiles (Apache, both nginx snippets,
+  Caddy). Full pass in `docs/TROUBLESHOOTING.md`.
 
 ### Changed
 - Web installer (`tools/install.php`) needs less from the host: the

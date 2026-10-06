@@ -188,6 +188,8 @@ T::ok('download reports a transport', isset($dl['via']));
 [$code, $dlBad] = ix_run($work, [], ['action' => 'download', 'url' => $base . '/ping.txt']);
 T::eq('non-zip download refused', false, $dlBad['ok'] ?? true);
 T::eq('refused download keeps the good package', filesize($stub . '/pkg.zip'), @filesize($work . '/.__install_dl.zip') ?: -1);
+[$code, $treeDl] = ix_run($work, ['action' => 'tree'], []);
+T::eq('tree reports the downloaded package', filesize($stub . '/pkg.zip'), $treeDl['pending_package'] ?? -1);
 
 // ── 4. extract (moves tree, never the running installer) ────────────────────
 [$code, $ex] = ix_run($work, [], ['action' => 'extract']);
@@ -197,13 +199,18 @@ T::ok('setup.sql landed', is_file($work . '/setup.sql'));
 T::ok('running installer survived (decoy skipped)', str_contains((string)file_get_contents($work . '/install.php'), 'INST_VERSION'));
 [$code, $tree2] = ix_run($work, ['action' => 'tree'], []);
 T::eq('tree: app present after extract', true, $tree2['present'] ?? null);
-// installed (config.php present) → locked: only probes + self-removal answer
+T::ok('tree reports arm state', array_key_exists('armed', $tree2) && array_key_exists('unlock_present', $tree2));
+[$code, $armFresh] = ix_run($work, [], ['action' => 'arm']);
+T::ok('arm refused on fresh installs', ($armFresh['ok'] ?? true) === false);
+// installed (config.php present) → locked: only probes + arming + self-removal answer
 file_put_contents($work . '/config.php', 'sentinel');
 [$code, $treeL] = ix_run($work, ['action' => 'tree'], []);
 T::eq('tree: installed app reports locked', true, $treeL['locked'] ?? null);
-foreach ([['action' => 'download', 'url' => $base . '/pkg.zip'], ['action' => 'extract'], ['action' => 'upload'],
+T::ok('tree reports the unlock state', ($treeL['unlock_present'] ?? true) === false && ($treeL['armed'] ?? true) === false);
+foreach ([['action' => 'arm'], ['action' => 'download', 'url' => $base . '/pkg.zip'], ['action' => 'extract'], ['action' => 'upload'],
           ['action' => 'fetch', 'url' => $base . '/ping.txt'], ['action' => 'tags', 'src' => $base . '/gh-tags.json'],
-          ['action' => 'dbtest', 'db_name' => 'x', 'db_user' => 'x'], ['action' => 'setup', 'db_name' => 'x', 'db_user' => 'x']] as $post) {
+          ['action' => 'dbtest', 'db_name' => 'x', 'db_user' => 'x'], ['action' => 'setup', 'db_name' => 'x', 'db_user' => 'x'],
+          ['action' => 'upgrade', 'db_name' => 'x', 'db_user' => 'x'], ['action' => 'rollback']] as $post) {
     [$code, $lk] = ix_run($work, [], $post);
     T::ok('locked: ' . $post['action'] . ' refused', ($lk['ok'] ?? true) === false && str_contains((string)($lk['error'] ?? ''), 'locked'));
 }
@@ -212,21 +219,57 @@ T::eq('locked: config.php untouched', 'sentinel', file_get_contents($work . '/co
 [$code, $dsn] = ix_run($work, [], ['action' => 'dbtest', 'db_host' => '127.0.0.1;unix_socket=/tmp/x', 'db_name' => 'x', 'db_user' => 'x']);
 T::ok('DSN injection through the host is refused', str_contains((string)($dsn['error'] ?? ''), 'plain host name'));
 file_put_contents($work . '/config.php', 'sentinel');
-// upgrade mode: owner proves filesystem access with INSTALL_UNLOCK; config.php
-// and runtime data survive, the release's .htaccess is merged in, lock returns
+// upgrade mode: the empty INSTALL_UNLOCK file only authorizes ARMING — the
+// installer mints a rotating token into it, and only the token authorizes.
+// config.php and runtime data survive, the release's .htaccess is merged in,
+// and the run stays armed (the schema step still needs it) until upgrade.
 file_put_contents($work . '/INSTALL_UNLOCK', '');
+[$code, $arm] = ix_run($work, [], ['action' => 'arm']);
+T::eq('arm mints a 32-hex run token', 1, preg_match('/^[0-9a-f]{32}$/', (string)($arm['unlock'] ?? '')));
+$tok = (string)$arm['unlock'];
+[$code, $armAgain] = ix_run($work, [], ['action' => 'arm']);
+T::ok('arm is single-use per marker', ($armAgain['ok'] ?? true) === false && str_contains((string)($armAgain['error'] ?? ''), 'another browser session'));
 @mkdir($work . '/uploads/7', 0777, true);
 file_put_contents($work . '/uploads/7/photo.jpg', 'user-data');
-[$code, $dl2] = ix_run($work, [], ['action' => 'download', 'url' => $base . '/pkg.zip']);
+foreach ([['action' => 'download', 'url' => $base . '/pkg.zip'], ['action' => 'extract'], ['action' => 'rollback']] as $post) {
+    [$code, $noTok] = ix_run($work, [], $post);
+    T::ok('no token refused: ' . $post['action'], ($noTok['ok'] ?? true) === false && str_contains((string)($noTok['error'] ?? ''), 'locked'));
+    [$code, $badTok] = ix_run($work, [], $post + ['unlock' => 'deadbeefdeadbeefdeadbeefdeadbeef']);
+    T::ok('wrong token refused: ' . $post['action'], ($badTok['ok'] ?? true) === false && str_contains((string)($badTok['error'] ?? ''), 'locked'));
+}
+[$code, $dl2] = ix_run($work, [], ['action' => 'download', 'url' => $base . '/pkg.zip', 'unlock' => $tok]);
 T::eq('unlocked: download ok', true, $dl2['ok'] ?? false);
-[$code, $ex2] = ix_run($work, [], ['action' => 'extract', 'keep_config' => '1']);
+T::ok('download rotates the token', ($dl2['unlock'] ?? '') !== '' && $dl2['unlock'] !== $tok);
+[$code, $stale] = ix_run($work, [], ['action' => 'extract', 'unlock' => $tok]);
+T::ok('rotated-out token is dead', ($stale['ok'] ?? true) === false);
+$tok = (string)$dl2['unlock'];
+[$code, $ex2] = ix_run($work, [], ['action' => 'extract', 'keep_config' => '1', 'unlock' => $tok]);
 T::eq('unlocked: extract ok', true, $ex2['ok'] ?? false);
+T::ok('extract reports the snapshot', str_contains((string)($ex2['log'] ?? ''), 'backups/upgrade-'));
+$snap = (string)($ex2['snapshot'] ?? '');
+T::ok('snapshot dir exists', $snap !== '' && is_dir($work . '/backups/' . $snap));
+T::ok('snapshot manifest written', is_file($work . '/backups/' . $snap . '/snapshot.json'));
+T::ok('snapshot dir denies the web', trim((string)@file_get_contents($work . '/backups/.htaccess')) === 'Require all denied');
+T::ok('snapshot skips config.php', !is_file($work . '/backups/' . $snap . '/config.php'));
+T::ok('snapshot skips runtime data', !is_dir($work . '/backups/' . $snap . '/uploads'));
 T::eq('keep_config preserves config.php', 'sentinel', file_get_contents($work . '/config.php'));
 T::eq('upgrade keeps uploaded photos', 'user-data', @file_get_contents($work . '/uploads/7/photo.jpg'));
 T::ok('upgrade merges release uploads/.htaccess', is_file($work . '/uploads/.htaccess'));
-T::ok('upgrade re-locks (unlock file consumed)', !is_file($work . '/INSTALL_UNLOCK'));
-file_put_contents($work . '/INSTALL_UNLOCK', '');
-[$code, $reSetup] = ix_run($work, [], ['action' => 'setup', 'db_host' => '127.0.0.1', 'db_port' => '9', 'db_name' => 'x', 'db_user' => 'x']);
+T::ok('extract keeps the run armed (schema step still needs it)', is_file($work . '/INSTALL_UNLOCK'));
+$tok = (string)($ex2['unlock'] ?? '');
+// rollback: break an extracted file, restore it from the snapshot
+file_put_contents($work . '/setup.sql', 'broken by test');
+[$code, $rbNone] = ix_run($work, [], ['action' => 'rollback', 'unlock' => 'deadbeefdeadbeefdeadbeefdeadbeef']);
+T::ok('rollback needs the token too', ($rbNone['ok'] ?? true) === false);
+[$code, $rb] = ix_run($work, [], ['action' => 'rollback', 'unlock' => $tok]);
+T::eq('rollback ok', true, $rb['ok'] ?? false);
+T::eq('rollback restored setup.sql', $setupSql, (string)file_get_contents($work . '/setup.sql'));
+T::eq('rollback keeps config.php', 'sentinel', file_get_contents($work . '/config.php'));
+T::eq('rollback keeps photos', 'user-data', @file_get_contents($work . '/uploads/7/photo.jpg'));
+$tok = (string)($rb['unlock'] ?? $tok);
+// setup still refuses over an existing config.php — now reached WITH a valid
+// token, proving the refusal is the setup guard, not the lock gate
+[$code, $reSetup] = ix_run($work, [], ['action' => 'setup', 'db_host' => '127.0.0.1', 'db_port' => '9', 'db_name' => 'x', 'db_user' => 'x', 'unlock' => $tok]);
 T::ok('setup refuses an existing config.php', str_contains((string)($reSetup['error'] ?? ''), 'already exists'));
 T::eq('setup never runs over an existing config.php', 'sentinel', file_get_contents($work . '/config.php'));
 @unlink($work . '/INSTALL_UNLOCK');
@@ -288,11 +331,25 @@ if (!$canDb) {
             T::ok('dir created: ' . $d, is_dir($work . '/' . $d));
         }
     }
+    // schema-only upgrade over the installed app: idempotent re-apply of the
+    // same fixture schema, config.php untouched, run re-locks itself
+    file_put_contents($work . '/INSTALL_UNLOCK', '');
+    [$code, $arm2] = ix_run($work, [], ['action' => 'arm']);
+    T::eq('upgrade arm ok', true, $arm2['ok'] ?? false);
+    [$code, $upg] = ix_run($work, [], ['action' => 'upgrade'] + $dbc + ['unlock' => (string)($arm2['unlock'] ?? '')]);
+    T::eq('upgrade ok', true, $upg['ok'] ?? false);
+    T::ok('upgrade applied statements', ($upg['applied'] ?? 0) > 0);
+    T::ok('upgrade re-locks (unlock file consumed)', !is_file($work . '/INSTALL_UNLOCK'));
+    T::ok('upgrade never rewrites config.php', str_contains((string)@file_get_contents($work . '/config.php'), "'$scratch'"));
 }
 
 // ── 6. self-delete (last — nothing runs after this) ──────────────────────────
+file_put_contents($work . '/INSTALL_UNLOCK', 'stale-token');
+file_put_contents($work . '/.__install_dl.zip', 'stale');
 [$code, $rm] = ix_run($work, [], ['action' => 'remove']);
 T::eq('remove ok', true, $rm['ok'] ?? false);
 T::eq('installer file gone', false, is_file($work . '/install.php'));
+T::eq('remove consumes the unlock file', false, is_file($work . '/INSTALL_UNLOCK'));
+T::eq('remove drops the staging package', false, is_file($work . '/.__install_dl.zip'));
 
 exit(T::done());

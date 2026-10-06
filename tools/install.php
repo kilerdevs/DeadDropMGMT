@@ -17,6 +17,15 @@ const INST_KEEP = ['uploads','tiles','data','cache','logs','backups'];
 // once config.php exists every state-changing action needs this empty file
 // next to the installer, created by the owner via FTP / file manager.
 const INST_UNLOCK = 'INSTALL_UNLOCK';
+// Pre-upgrade snapshots: extract replaces app files in place, so the working
+// tree is copied to backups/upgrade-<UTC>/ first (rollback source). Plain
+// copies, no zip: restorable by hand over FTP, and ZipArchive may be missing
+// exactly when an upgrade is attempted. Only the newest few are kept.
+const INST_SNAP_KEEP = 3;
+// Per-dir deny file for backups/ the installer creates (same one line the
+// app's own PanicTest writes): root .htaccess + every nginx/Caddy profile
+// already deny backups/, this closes hosts with none of those applied.
+const INST_BACKUP_DENY = "Require all denied\n";
 
 // Cheap hosts disableini_set/ini_get/disk_free_space via disable_functions —
 // and on PHP 8 calling one throws Error, which @ cannot suppress. So every
@@ -50,11 +59,15 @@ function shorthand_bytes(string $v): int {
 }
 
 // ── tiny helpers ─────────────────────────────────────────────────────────────
+// jout()/jer() never return (the exit() below) — declared so, so both human
+// readers and static analysis know code after them is dead by construction.
+/** @return never */
 function jout(array $d): void {
     header('Content-Type: application/json; charset=utf-8');
     echo json_encode($d, JSON_UNESCAPED_SLASHES);
     exit;
 }
+/** @return never */
 function jer(string $msg, array $extra = []): void { jout(['ok' => false, 'error' => $msg] + $extra); }
 function row(string $id, string $label, string $st, string $detail = ''): array {
     return ['id' => $id, 'label' => $label, 'status' => $st, 'detail' => $detail];
@@ -69,6 +82,228 @@ function dl_paths(): array {
 }
 function inst_installed(): bool { return is_file(base() . '/config.php'); }
 function inst_unlocked(): bool { return is_file(base() . '/' . INST_UNLOCK); }
+
+// ── upgrade run marker ─────────────────────────────────────────────────────
+// The filesystem is the installer's only authority, and an EMPTY unlock file
+// proves little: any file-creation primitive (a since-fixed upload flaw, a
+// stray deploy script, another app on the same shared account) can plant one,
+// and then the installer would happily extract an attacker's zip over the app
+// for whoever drives it remotely. So the empty file the owner drops via FTP
+// only AUTHORIZES arming: the installer mints 128 bits of randomness into
+// the file, and every state-changing action must present it back. Forging the
+// marker now needs file READ — which already equals full compromise. The file
+// itself is never served (.htaccess + every nginx/Caddy profile deny it,
+// pinned by KernelTest), and the token rotates after every mutating step, so
+// a copy that leaks (proxy log, shoulder-surfed screen) dies with the next
+// request. PHP 7-parse-safe: no 8.x-only syntax in this file.
+function inst_unlock_token(): string {
+    $f = base() . '/' . INST_UNLOCK;
+    if (!is_file($f)) return '';
+    $t = @file_get_contents($f);
+    return $t === false ? '' : trim($t);
+}
+function inst_armed(): bool { return inst_unlock_token() !== ''; }
+// Mint a run token into an owner-created EMPTY marker. Returns the token, or
+// '' when there is nothing to arm (no file, or already armed by someone).
+function inst_arm(): string {
+    $f = base() . '/' . INST_UNLOCK;
+    if (!is_file($f) || @filesize($f) !== 0) return '';
+    try {
+        $tok = bin2hex(random_bytes(16));
+    } catch (Throwable) {
+        return '';
+    }
+    if (@file_put_contents($f, $tok . "\n") === false) return '';
+    return $tok;
+}
+// Fresh token, returned to the browser session that earned it. A failed write
+// keeps the OLD token (fail-closed for that write, session keeps working).
+function inst_rotate(): string {
+    $f = base() . '/' . INST_UNLOCK;
+    $old = inst_unlock_token();
+    if ($old === '') return '';
+    try {
+        $tok = bin2hex(random_bytes(16));
+    } catch (Throwable) {
+        return $old;
+    }
+    if (@file_put_contents($f, $tok . "\n") === false) return $old;
+    return $tok;
+}
+function inst_relock(): void { @unlink(base() . '/' . INST_UNLOCK); }
+// Null when $action may run, else the refusal. Fresh installs stay open (as
+// every web installer is); installed apps need an armed marker + its token
+// for everything but the read-only probes, arming itself, and self-removal.
+function inst_gate(string $action, string $given): ?string {
+    if (in_array($action, ['', 'check', 'tree', 'remove', 'arm'], true)) return null;
+    if (!inst_installed()) return null;
+    $tok = inst_unlock_token();
+    if ($tok === '') {
+        return is_file(base() . '/' . INST_UNLOCK)
+            ? 'upgrade not armed yet — reload the installer page (it arms this browser session automatically once the empty ' . INST_UNLOCK . ' file exists)'
+            : 'locked: config.php exists, so this app is already installed. To upgrade, create an empty file named '
+                . INST_UNLOCK . ' next to this installer (FTP / file manager), reload the page, and retry.';
+    }
+    if (!hash_equals($tok, trim($given)))
+        return 'locked: a wrong or missing upgrade run token — reload the installer page to re-arm this browser session (a rotated token dies with the next step).';
+    return null;
+}
+
+// ── pre-upgrade snapshot ─────────────────────────────────────────────────────
+// ix_snapshot_maybe() copies every top-level CODE entry into
+// backups/upgrade-<UTC>/ before the first byte moves, plus a manifest. Skips
+// runtime-data dirs (INST_KEEP), config.php (never touched either way), the
+// marker, the staging area, backups/ itself and the running installer. Never
+// follows symlinks. Returns ok/snapshot/files; extract aborts unless ok.
+function ix_snap_skip(): array {
+    [$zip, $src] = dl_paths();
+    return array_merge([basename(__FILE__), INST_UNLOCK, basename((string)$zip), basename((string)$src), 'backups', 'config.php'], INST_KEEP);
+}
+function ix_snapshot_needed(): bool {
+    $skip = ix_snap_skip();
+    foreach ((array)@scandir(base()) as $e) {
+        if ($e === '.' || $e === '..' || $e === '') continue;
+        if (!in_array($e, $skip, true)) return true;
+    }
+    return false;
+}
+function ix_ensure_backups(): bool {
+    $b = base() . '/backups';
+    if (!is_dir($b) && !@mkdir($b, 0755, true)) return false;
+    $ht = $b . '/.htaccess';
+    if (!is_file($ht)) @file_put_contents($ht, INST_BACKUP_DENY);
+    return is_dir($b);
+}
+function ix_copy_tree(string $from, string $to): bool {
+    if (!is_dir($to) && !@mkdir($to, 0755, true)) return false;
+    foreach ((array)@scandir($from) as $e) {
+        if ($e === '.' || $e === '..' || $e === '') continue;
+        $s = $from . '/' . $e;
+        $d = $to . '/' . $e;
+        if (is_link($s)) continue;
+        if (is_dir($s)) {
+            if (is_file($d) || is_link($d) || !ix_copy_tree($s, $d)) return false;
+        } elseif (is_file($s)) {
+            if (is_dir($d) || !@copy($s, $d)) return false;
+        }
+    }
+    return true;
+}
+function ix_snapshot_maybe(): array {
+    if (!ix_snapshot_needed()) return ['ok' => true, 'snapshot' => null, 'files' => 0];
+    if (!ix_ensure_backups())
+        return ['ok' => false, 'error' => 'cannot create backups/ — permissions? (snapshot refused, nothing was changed)'];
+    $skip = ix_snap_skip();
+    $name = 'upgrade-' . gmdate('Ymd-His');
+    $i = 0;
+    while (is_dir(base() . '/backups/' . $name)) { $i++;
+        $name = 'upgrade-' . gmdate('Ymd-His') . '-' . $i; }
+    $dst = base() . '/backups/' . $name;
+    if (!@mkdir($dst, 0755, true))
+        return ['ok' => false, 'error' => 'cannot write backups/' . $name . ' — permissions? (snapshot refused, nothing was changed)'];
+    $n = 0;
+    foreach ((array)@scandir(base()) as $e) {
+        if ($e === '.' || $e === '..' || $e === '' || in_array($e, $skip, true)) continue;
+        $s = base() . '/' . $e;
+        if (is_link($s)) continue;
+        $ok = is_dir($s) ? ix_copy_tree($s, $dst . '/' . $e) : (@copy($s, $dst . '/' . $e));
+        if (!$ok) { rmdir_r($dst); return ['ok' => false, 'error' => 'snapshot of ' . $e . ' failed — disk full? (aborted, nothing was changed)']; }
+        $n++;
+    }
+    @file_put_contents($dst . '/snapshot.json', json_encode([
+        'created_utc' => gmdate('Y-m-d H:i:s'), 'installer' => INST_VERSION,
+        'entries' => $n, 'reason' => 'pre-extract upgrade snapshot',
+    ], JSON_UNESCAPED_SLASHES));
+    ix_snapshot_prune();
+    return ['ok' => true, 'snapshot' => $name, 'files' => $n];
+}
+function ix_snapshot_latest(): ?string {
+    $b = base() . '/backups';
+    if (!is_dir($b)) return null;
+    $found = [];
+    foreach ((array)@scandir($b) as $e) {
+        if (str_starts_with($e, 'upgrade-') && is_dir($b . '/' . $e)) $found[] = $e;
+    }
+    if ($found === []) return null;
+    rsort($found);
+    return $found[0];
+}
+function ix_snapshot_prune(): void {
+    $b = base() . '/backups';
+    if (!is_dir($b)) return;
+    $found = [];
+    foreach ((array)@scandir($b) as $e) {
+        if (str_starts_with($e, 'upgrade-') && is_dir($b . '/' . $e)) $found[] = $e;
+    }
+    rsort($found);
+    foreach (array_slice($found, INST_SNAP_KEEP) as $old) rmdir_r($b . '/' . $old);
+}
+// Restore-only rollback: snapshot files are copied back over the app.
+// Runtime data and config.php were never IN the snapshot, so they survive
+// both directions. Files the failed upgrade ADDED (absent from the snapshot)
+// are deliberately left in place and named in the log — deleting unknown
+// files automatically would be the dangerous direction.
+function ix_snapshot_restore(string $name): array {
+    if (preg_match('/^upgrade-[0-9]{8}-[0-9]{6}(-\d+)?$/', $name) !== 1) return ['ok' => false, 'error' => 'not a snapshot name'];
+    $src = base() . '/backups/' . $name;
+    if (!is_dir($src)) return ['ok' => false, 'error' => 'snapshot ' . $name . ' is gone'];
+    $n = 0;
+    foreach ((array)@scandir($src) as $e) {
+        if ($e === '.' || $e === '..' || $e === '' || $e === 'snapshot.json') continue;
+        $s = $src . '/' . $e;
+        $d = base() . '/' . $e;
+        if (is_link($s)) continue;
+        if ($e === basename(__FILE__)) continue; // never restore over the running installer
+        if (in_array($e, INST_KEEP, true) || $e === 'config.php' || $e === 'backups') continue;
+        $ok = is_dir($s) ? ix_copy_tree($s, $d) : ((is_dir($d) || is_link($d)) ? false : @copy($s, $d));
+        if (!$ok) return ['ok' => false, 'error' => 'restore of ' . $e . ' failed — permissions?', 'restored' => $n];
+        $n++;
+    }
+    return ['ok' => true, 'restored' => $n];
+}
+
+// ── shared database connect (dbtest/setup/upgrade) ─────────────────────────
+// One gate, identical messages by contract (InstallerTest pins the refusal
+// texts): pdo_mysql present, plain host/IP (no DSN smuggling), plain db name,
+// live PDO + server version. Never returns on failure — jer() exits.
+function ix_db_connect(): array {
+    if (!class_exists('PDO') || !extension_loaded('pdo_mysql')) {
+        jer('database step needs pdo_mysql (missing here) — enable it in the panel, then re-run this step only.');
+    }
+    $h = trim((string)($_POST['db_host'] ?? 'localhost'));
+    $port = max(1, min(65535, (int)($_POST['db_port'] ?? 3306)));
+    $name = trim((string)($_POST['db_name'] ?? ''));
+    $user = trim((string)($_POST['db_user'] ?? ''));
+    $pass = (string)($_POST['db_pass'] ?? '');
+    if ($name === '' || $user === '') jer('database name and user are required');
+    // The host lands in the PDO DSN verbatim: ';unix_socket=…' or
+    // ';dbname=…' riding in it would rewrite the connection string.
+    if (preg_match('/^[A-Za-z0-9.\-]+$|^\[?[0-9A-Fa-f:.]+\]?$/', $h) !== 1) jer('database host must be a plain host name or IP address');
+    if (!preg_match('/^[0-9A-Za-z_$]+$/', $name)) jer('database name must be plain [A-Za-z0-9_$] (panel-prefixed names are fine)');
+    try {
+        $pdo = new PDO("mysql:host=$h;port=$port;dbname=$name;charset=utf8mb4", $user, $pass,
+            [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_TIMEOUT => 10]);
+    } catch (PDOException $e) {
+        jer('connect failed: ' . $e->getMessage() . ' — create the database + user in the panel first (the installer has no CREATE DATABASE privilege there).');
+    }
+    /** @var PDO $pdo connection live past this point (jer() exits, it never returns) */
+    $ver = (string)$pdo->query('SELECT VERSION()')->fetchColumn();
+    return [$pdo, $ver, $h, $port, $name, $user, $pass];
+}
+// Verify the managed tables exist and run on InnoDB. Read-only.
+function ix_verify_tables(PDO $pdo): array {
+    $have = [];
+    $engines = [];
+    try {
+        foreach ($pdo->query('SELECT TABLE_NAME, ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE()')->fetchAll() as $r) {
+            $have[] = $r['TABLE_NAME']; $engines[$r['TABLE_NAME']] = strtoupper((string)$r['ENGINE']);
+        }
+    } catch (Throwable) {}
+    $missing = array_values(array_diff(INST_TABLES, $have));
+    $badEng = [];
+    foreach (INST_TABLES as $t) if (($engines[$t] ?? 'INNODB') !== 'INNODB') $badEng[] = $t . ':' . $engines[$t];
+    return [$missing, $badEng];
+}
 // The copy every release ships in tools/ is source, not a deployable
 // installer: served from there it would see no config.php and act "fresh".
 function inst_embedded(): bool {
@@ -664,21 +899,37 @@ function ix_schema_apply(PDO $pdo, array $stmts): array {
 // ── lock ─────────────────────────────────────────────────────────────────────
 // The installer has no accounts, so the filesystem is its only authority:
 // before config.php exists it is open (as every web installer is — finish it
-// promptly); after, only the read-only probes and self-removal answer unless
-// the owner drops INSTALL_UNLOCK beside it. Re-running setup over an existing
-// config.php is never allowed (a fresh AES key would orphan all data).
+// promptly); after, only the read-only probes, arming and self-removal answer
+// unless the owner armed an upgrade run (INSTALL_UNLOCK + rotating token, see
+// inst_gate()). Re-running SETUP over an existing config.php is never allowed
+// (a fresh AES key would orphan all data) — schema-only UPGRADES have their
+// own action instead.
+$action = (string)($_GET['action'] ?? $_POST['action'] ?? '');
+if ($action !== '' && $action !== 'arm') {
+    $refusal = inst_gate($action, (string)($_POST['unlock'] ?? ''));
+    if ($refusal !== null) {
+        http_response_code(403);
+        jer($refusal);
+    }
+}
+if ($action === 'arm') {
+    if (!inst_installed()) jer('nothing to arm — no config.php yet (fresh installs need no unlock).');
+    $f = base() . '/' . INST_UNLOCK;
+    if (!is_file($f))
+        jer('locked: config.php exists, so this app is already installed. To upgrade, create an empty file named '
+            . INST_UNLOCK . ' next to this installer (FTP / file manager), reload the page, and retry.');
+    if (inst_armed())
+        jer('this upgrade is already armed by another browser session. If that was not you, delete ' . INST_UNLOCK
+            . ' via FTP / file manager, recreate it empty, and reload the page.');
+    $tok = inst_arm();
+    if ($tok === '') jer('could not arm the upgrade — directory not writable?');
+    jout(['ok' => true, 'unlock' => $tok, 'log' => 'upgrade armed for this browser session (token rotates every step)']);
+}
 if (inst_embedded()) {
     http_response_code(403);
     header('Content-Type: text/plain; charset=utf-8');
     echo "This is the installer's source copy inside an installed app. Copy install.php into an empty hosting directory to install.\n";
     exit;
-}
-$action = (string)($_GET['action'] ?? $_POST['action'] ?? '');
-if ($action !== '' && inst_installed() && !inst_unlocked()
-    && !in_array($action, ['check', 'tree', 'remove'], true)) {
-    http_response_code(403);
-    jer('locked: config.php exists, so this app is already installed. To upgrade, create an empty file named '
-        . INST_UNLOCK . ' next to this installer (FTP / file manager) and retry; it is removed after the extract.');
 }
 if ($action !== '') {
     unlimit();
@@ -707,8 +958,15 @@ if ($action !== '') {
         jout(['ok' => true, 'tags' => $out, 'via' => $r['via'] ?? '?']);
     }
     if ($action === 'tree') { // already-extracted app present?
+        // Resume state for an interrupted run: an armed marker (but never its
+        // token — read-only endpoint), a downloaded-but-unextracted package,
+        // and the newest pre-upgrade snapshot for the rollback button.
+        [$zip] = dl_paths();
         jout(['ok' => true, 'present' => is_file(base() . '/setup.sql') && is_file(base() . '/includes/kernel.php'),
-            'has_config' => inst_installed(), 'locked' => inst_installed() && !inst_unlocked()]);
+            'has_config' => inst_installed(), 'locked' => inst_installed() && !inst_unlocked(),
+            'unlock_present' => is_file(base() . '/' . INST_UNLOCK), 'armed' => inst_armed(),
+            'pending_package' => is_file($zip) ? (int)@filesize($zip) : 0,
+            'snapshot' => ix_snapshot_latest()]);
     }
     if ($action === 'download') {
         // One single request: GitHub's archive endpoint (codeload) ignores
@@ -737,6 +995,7 @@ if ($action !== '') {
         }
         $size = filesize($zip);
         jout(['ok' => true, 'size' => $size, 'total' => $size, 'done' => true, 'via' => $r['via'] ?? '?',
+            'unlock' => inst_rotate(),
             'log' => 'download complete: ' . number_format($size) . ' B']);
     }
     // Probe any URL directly: powers the connection check (and
@@ -773,6 +1032,7 @@ if ($action !== '') {
             $n = count($names);
         }
         jout(['ok' => true, 'size' => filesize($zip), 'files' => $n,
+            'unlock' => inst_rotate(),
             'log' => 'upload received: ' . number_format((int)filesize($zip)) . ' B, ' . $n . ' entries']);
     }
     if ($action === 'extract') {
@@ -812,6 +1072,11 @@ if ($action !== '') {
         }
         $from = $src . '/' . $prefix;
         if (!is_dir($from)) { rmdir_r($src); jer('unexpected zip layout (no top folder)'); }
+        // Snapshot BEFORE the first byte moves: extract replaces app files in
+        // place, and without a working-tree copy a failed upgrade leaves a
+        // half-new app with no way back. Aborts when the snapshot fails.
+        $snap = ix_snapshot_maybe();
+        if (!$snap['ok']) { rmdir_r($src); jer($snap['error']); }
         $keepCfg = !empty($_POST['keep_config']) && is_file(base() . '/config.php');
         $moved = 0; $skipped = 0;
         foreach (scandir($from) as $e) {
@@ -834,34 +1099,21 @@ if ($action !== '') {
             $moved++;
         }
         rmdir_r($src); @unlink($zip);
-        @unlink(base() . '/' . INST_UNLOCK); // upgrade done: re-lock
+        // The run marker SURVIVES the extract (the schema upgrade still needs
+        // it) with a rotated token; setup/upgrade consume it at the end.
+        $snapNote = $snap['snapshot'] !== null
+            ? ' — pre-upgrade snapshot backups/' . $snap['snapshot'] . ' (' . $snap['files'] . ' entries, rollback ready)'
+            : ' — nothing to snapshot (empty directory)';
         jout(['ok' => true, 'moved' => $moved, 'entries' => $n, 'kept_config' => $keepCfg,
-            'log' => "extracted $n entries, placed $moved top-level items" . ($keepCfg ? ' (existing config.php kept)' : '')]);
+            'snapshot' => $snap['snapshot'], 'unlock' => inst_rotate(),
+            'log' => "extracted $n entries, placed $moved top-level items" . ($keepCfg ? ' (existing config.php kept)' : '') . $snapNote]);
     }
-    if ($action === 'dbtest' || $action === 'setup') {
+    if ($action === 'dbtest' || $action === 'setup' || $action === 'upgrade') {
         if ($action === 'setup' && inst_installed())
             jer('config.php already exists — setup never overwrites it (a fresh AES key would make all encrypted data unreadable). Delete config.php by hand only to start over.');
-        if (!class_exists('PDO') || !extension_loaded('pdo_mysql')) {
-            jer('database step needs pdo_mysql (missing here) — enable it in the panel, then re-run this step only.');
-        }
-        $h = trim((string)($_POST['db_host'] ?? 'localhost'));
-        $port = max(1, min(65535, (int)($_POST['db_port'] ?? 3306)));
-        $name = trim((string)($_POST['db_name'] ?? ''));
-        $user = trim((string)($_POST['db_user'] ?? ''));
-        $pass = (string)($_POST['db_pass'] ?? '');
-        if ($name === '' || $user === '') jer('database name and user are required');
-        // The host lands in the PDO DSN verbatim: ';unix_socket=…' or
-        // ';dbname=…' riding in it would rewrite the connection string.
-        if (preg_match('/^[A-Za-z0-9.\-]+$|^\[?[0-9A-Fa-f:.]+\]?$/', $h) !== 1) jer('database host must be a plain host name or IP address');
-        if (!preg_match('/^[0-9A-Za-z_$]+$/', $name)) jer('database name must be plain [A-Za-z0-9_$] (panel-prefixed names are fine)');
-        try {
-            $pdo = new PDO("mysql:host=$h;port=$port;dbname=$name;charset=utf8mb4", $user, $pass,
-                [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_TIMEOUT => 10]);
-        } catch (PDOException $e) {
-            jer('connect failed: ' . $e->getMessage() . ' — create the database + user in the panel first (the installer has no CREATE DATABASE privilege there).');
-        }
-        /** @var PDO $pdo connection live past this point (jer() exits, it never returns) */
-        $ver = (string)$pdo->query('SELECT VERSION()')->fetchColumn();
+        if ($action === 'upgrade' && !inst_installed())
+            jer('no installed app here (no config.php) — use Install now for a fresh setup.');
+        [$pdo, $ver, $h, $port, $name, $user, $pass] = ix_db_connect();
         if ($action === 'dbtest') {
             $have = [];
             try {
@@ -882,6 +1134,32 @@ if ($action !== '') {
                 'create_priv' => $canCreate,
                 'log' => "connected: MySQL $ver, schema tables present: " . count(array_intersect(INST_TABLES, $have)) . '/' . count(INST_TABLES)
                     . ($canCreate === false ? ' — no CREATE DATABASE privilege (normal on panel hosts: the schema applies into this existing database)' : '')]);
+        }
+        // — schema-only upgrade (installed apps; the gate enforced marker+token)
+        // setup.sql is idempotent by contract, so this is a safe no-op on an
+        // up-to-date database. config.php is never written here — AES key and
+        // credentials survive untouched. Re-locks on success.
+        if ($action === 'upgrade') {
+            $ulog = ["connected: MySQL $ver"];
+            foreach (INST_DIRS as $d) {
+                $p = base() . '/' . $d;
+                if (!is_dir($p) && !@mkdir($p, 0755, true)) jer('cannot create ' . $d . ' — permissions?');
+                $probe = $p . '/.__w';
+                if (@file_put_contents($probe, '1') === false || !@unlink($probe)) jer($d . ' is not writable — permissions?');
+                $ulog[] = 'dir ok: ' . $d;
+            }
+            if (!is_file(base() . '/setup.sql'))
+                jer('app files missing — extract the release first (setup.sql not found).');
+            $ustmts = ix_schema_statements((string)file_get_contents(base() . '/setup.sql'));
+            $ures = ix_schema_apply($pdo, $ustmts);
+            $ulog[] = 'schema: ' . $ures['applied'] . '/' . count($ustmts) . ' statements applied (idempotent re-run)';
+            if ($ures['error'] !== '') jer('schema upgrade failed after ' . $ures['applied'] . ' statements: ' . $ures['error'] . ' — statement: ' . substr($ures['statement'], 0, 200));
+            [$umissing, $ubadEng] = ix_verify_tables($pdo);
+            if ($umissing !== []) jer('schema applied but tables missing: ' . implode(', ', $umissing) . ' — roll back to the backups/ snapshot or import setup.sql by hand');
+            $ulog[] = 'schema verified: ' . count(INST_TABLES) . '/' . count(INST_TABLES) . ' tables';
+            if ($ubadEng !== []) $ulog[] = 'WARNING non-InnoDB tables: ' . implode(', ', $ubadEng) . ' (ask host to default to InnoDB)';
+            inst_relock(); // upgrade done: re-lock
+            jout(['ok' => true, 'log' => $ulog, 'applied' => $ures['applied'], 'relocked' => true]);
         }
         // — full setup —
         $log = ["connected: MySQL $ver"];
@@ -923,18 +1201,9 @@ if ($action !== '') {
         $log[] = 'schema: ' . $res['applied'] . '/' . count($stmts) . ' statements applied';
         if ($res['error'] !== '') jer('schema failed after ' . $res['applied'] . ' statements: ' . $res['error'] . ' — statement: ' . substr($res['statement'], 0, 200));
         // 4. verify
-        $have = [];
-        $engines = [];
-        try {
-            foreach ($pdo->query('SELECT TABLE_NAME, ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE()')->fetchAll() as $r) {
-                $have[] = $r['TABLE_NAME']; $engines[$r['TABLE_NAME']] = strtoupper((string)$r['ENGINE']);
-            }
-        } catch (Throwable) {}
-        $missing = array_values(array_diff(INST_TABLES, $have));
+        [$missing, $badEng] = ix_verify_tables($pdo);
         if ($missing !== []) jer('schema applied but tables missing: ' . implode(', ', $missing));
         $log[] = 'schema verified: ' . count(INST_TABLES) . '/' . count(INST_TABLES) . ' tables';
-        $badEng = [];
-        foreach (INST_TABLES as $t) if (($engines[$t] ?? 'INNODB') !== 'INNODB') $badEng[] = $t . ':' . $engines[$t];
         if ($badEng !== []) $log[] = 'WARNING non-InnoDB tables: ' . implode(', ', $badEng) . ' (ask host to default to InnoDB)';
         // 5. session fallback dir + server note
         $sp = eini('session.save_path');
@@ -947,9 +1216,21 @@ if ($action !== '') {
         elseif (!is_file(base() . '/.htaccess'))
             $log[] = 'WARNING .htaccess missing from package — protection rules absent!';
         else $log[] = 'server: Apache + .htaccess present';
+        inst_relock(); // a finished setup never leaves an armed marker behind
         jout(['ok' => true, 'log' => $log, 'applied' => $res['applied']]);
     }
+    if ($action === 'rollback') {
+        $latest = ix_snapshot_latest();
+        if ($latest === null) jer('no upgrade snapshot in backups/ — nothing to roll back to');
+        $rb = ix_snapshot_restore($latest);
+        if (!$rb['ok']) jer('rollback failed: ' . $rb['error'] . ' (' . ($rb['restored'] ?? 0) . ' files restored before the failure)');
+        jout(['ok' => true, 'snapshot' => $latest, 'restored' => $rb['restored'], 'unlock' => inst_rotate(),
+            'log' => 'rolled back to backups/' . $latest . ': ' . $rb['restored']
+                . ' files restored (config.php and data dirs untouched; files the failed upgrade ADDED are left in place — delete them by hand if the app misbehaves)']);
+    }
     if ($action === 'remove') {
+        [$zip, $src] = dl_paths();
+        @unlink($zip); rmdir_r($src); inst_relock(); // no armed leftovers
         $me = __FILE__;
         if (@unlink($me)) jout(['ok' => true]);
         jer('could not delete itself — remove ' . basename($me) . ' via FTP/file manager.');
@@ -1151,13 +1432,13 @@ code{
 <p class="hint">Direct connection to GitHub from this server. If the host cannot reach GitHub at all, upload the release zip yourself with the button below.</p>
 <div class="bar"><i id="dbar"></i></div><div class="hint" id="dtxt"></div>
 <div><button id="bdl">Download</button><button class="ghost" id="bup">Upload a zip instead…</button><input type="file" id="fup" accept=".zip" class="hidden"></div>
-<div id="dlbtns" class="hidden"><label><input type="checkbox" id="keepcfg" checked> Keep existing config.php (upgrade mode)</label><br><button id="bex">Extract into this directory</button></div>
+<div id="dlbtns" class="hidden"><label><input type="checkbox" id="keepcfg" checked> Keep existing config.php (upgrade mode)</label><br><button id="bex">Extract into this directory</button> <button class="ghost hidden" id="broll">Roll back to snapshot</button></div>
 <div><button id="b1" class="hidden">Continue →</button></div>
 </div>
 
 <div class="card hidden" id="p2">
 <div class="sec">Database + site setup</div>
-<p class="hint">Create the database and user in your hosting panel first (the installer has no such privilege there), then enter them here. Writes <code>config.php</code>, creates storage dirs, imports the schema.</p>
+<p class="hint" id="dbhint">Create the database and user in your hosting panel first (the installer has no such privilege there), then enter them here. Writes <code>config.php</code>, creates storage dirs, imports the schema.</p>
 <div class="grid2">
 <div><label>Host</label><input type="text" id="dh" value="localhost"></div>
 <div><label>Port</label><input type="number" id="dp" value="3306"></div>
@@ -1165,7 +1446,7 @@ code{
 <div><label>User</label><input type="text" id="du" placeholder="user_ddmgmt"></div>
 </div>
 <label>Password</label><input type="password" id="dk">
-<div><button class="ghost" id="btest">Test connection</button><button id="b2">Install now</button></div>
+<div><button class="ghost" id="btest">Test connection</button><button id="b2">Install now</button><button id="bup2" class="hidden">Upgrade schema (keeps config + data)</button></div>
 <div id="setuprows"></div>
 </div>
 
@@ -1183,6 +1464,8 @@ code{
 (function(){
 "use strict";
 var $ = function(id){ return document.getElementById(id); };
+var UTOK = "";
+var HASCFG = false;
 var step = 0;
 function stamp(){
   var d = new Date();
@@ -1214,9 +1497,14 @@ function fd(o){
 }
 function api(action, data, files){
   var f = files || fd(data || {});
+  // Upgrade run token: minted by arm, rotated after every mutating step,
+  // auto-stored from any response that carries one. Never sent for arm
+  // itself (there is nothing to present yet) or the GET probes.
+  if (action !== "arm" && UTOK) f.append("unlock", UTOK);
   f.append("action", action);
   return fetch("?action=" + encodeURIComponent(action), {method:"POST", body:f})
     .then(function(r){ return r.json(); })
+    .then(function(j){ if (j && j.unlock) UTOK = j.unlock; return j; })
     .catch(function(e){ return {ok:false, error:"request failed: " + e}; });
 }
 function get(action, qs){
@@ -1252,25 +1540,42 @@ $("override").onchange = runCheck;
 $("b0").onclick = function(){ go(1); loadTree(); loadTags(); };
 
 /* step 1 */
+function lockNote(r){
+  if (!r.locked) return HASCFG ? '<p class="hint">Upgrade run armed for this browser session — the token rotates after every step.</p>' : "";
+  if (!r.unlock_present) return '<p class="hint"><b>Locked:</b> this app is installed. To upgrade, create an empty file named <code>INSTALL_UNLOCK</code> next to this installer via FTP / file manager, then reload. Otherwise delete the installer.</p>';
+  if (!r.armed) return '<p class="hint">Unlock file seen — arming this browser session…</p>';
+  return '<p class="hint"><b>Locked:</b> this upgrade run is armed by another browser session. If that was not you, delete <code>INSTALL_UNLOCK</code> via FTP / file manager, recreate it empty, and reload.</p>';
+}
 function loadTree(){
   get("tree").then(function(r){
     if (!r.ok) return;
-    $("treeinfo").innerHTML = r.present
+    HASCFG = !!r.has_config;
+    var h = r.present
       ? '<p class="hint">App files already present in this directory'
-        + (r.has_config
+        + (HASCFG
           ? " <b>and config.php exists</b> (upgrade mode — your config is kept)."
           : " (no config.php yet).")
         + " You may skip straight to extraction or setup.</p>"
-        + (r.locked
-          ? '<p class="hint"><b>Locked:</b> this app is installed. To upgrade, create an empty file named <code>INSTALL_UNLOCK</code> next to this installer via FTP / file manager, then reload. Otherwise delete the installer.</p>'
-          : "")
       : '<p class="hint">No app files here yet — download the release package below.</p>';
-    if (r.present){
+    if (r.pending_package) h += '<p class="hint">A downloaded package (' + Math.round(r.pending_package / 1024) + ' KB) is waiting — resume with Extract below.</p>';
+    if (r.snapshot) h += '<p class="hint">Pre-upgrade snapshot <code>backups/' + r.snapshot + '</code> exists — rollback is available.</p>';
+    h += lockNote(r);
+    $("treeinfo").innerHTML = h;
+    if (r.present || r.pending_package){
       $("dlbtns").classList.remove("hidden");
-      $("b1").classList.remove("hidden");
+      if (r.snapshot) $("broll").classList.remove("hidden");
+    }
+    if (r.present) $("b1").classList.remove("hidden");
+    // Owner UX is unchanged (create the empty file, reload): the page arms
+    // this browser session by itself the moment it sees the empty marker.
+    if (r.locked && r.unlock_present && !r.armed && !UTOK){
+      api("arm", {}).then(function(a){
+        if (a.ok){ log("upgrade authorized for this browser session", "ok"); loadTree(); }
+        else log("arm failed: " + (a.error || "unknown"), "fail");
+      });
     }
     log("tree probe: app files " + (r.present ? "present" : "absent")
-      + ", config.php " + (r.has_config ? "present" : "absent"), "info");
+      + ", config.php " + (HASCFG ? "present" : "absent"), "info");
   });
 }
 function loadTags(){
@@ -1328,16 +1633,33 @@ $("bdl").onclick = function(){
   });
 };
 $("bex").onclick = function(){
-  log("extracting…", "info");
+  log("extracting (snapshotting first when upgrading)…", "info");
   $("bex").disabled = true;
   api("extract", {keep_config:$("keepcfg").checked ? "1" : ""}).then(function(r){
     $("bex").disabled = false;
     if (!r.ok){ log("extract failed: " + r.error, "fail"); return; }
     log(r.log, "ok");
     $("b1").classList.remove("hidden");
+    loadTree();
   });
 };
-$("b1").onclick = function(){ go(2); };
+$("broll").onclick = function(){
+  if (!confirm("Restore the pre-upgrade snapshot over the current app files?")) return;
+  log("rolling back…", "info");
+  api("rollback", {}).then(function(r){
+    if (!r.ok){ log("ROLLBACK FAILED: " + r.error, "fail"); return; }
+    log(r.log, "ok");
+    loadTree();
+  });
+};
+$("b1").onclick = function(){
+  go(2);
+  $("b2").classList.toggle("hidden", HASCFG);
+  $("bup2").classList.toggle("hidden", !HASCFG);
+  $("dbhint").textContent = HASCFG
+    ? "This app is already installed: re-enter the database credentials (they stay in config.php — the installer never reads it), then run the schema upgrade. config.php is never rewritten."
+    : "Create the database and user in your hosting panel first (the installer has no such privilege there), then enter them here. Writes config.php, creates storage dirs, imports the schema.";
+};
 
 /* step 2 */
 function dbObj(){
@@ -1371,6 +1693,24 @@ $("b2").onclick = function(){
       + '<br>2. Then run the full diagnostics at <a href="' + base + 'admin/setup_check.php">admin/setup_check.php</a>.'
       + '<br>3. Delete this installer (button below).</p>';
     log("setup complete — create the owner at admin/", "ok");
+    go(3);
+  });
+};
+$("bup2").onclick = function(){
+  var d = dbObj();
+  if (!d.db_name || !d.db_user){ log("enter database name + user first", "warn"); return; }
+  log("upgrading schema (config.php untouched)…", "info");
+  $("bup2").disabled = true;
+  api("upgrade", d).then(function(r){
+    $("bup2").disabled = false;
+    if (!r.ok){ log("UPGRADE FAILED: " + r.error, "fail"); return; }
+    (r.log || []).forEach(function(m){ log(m, "ok"); });
+    $("setuprows").innerHTML = '<div class="row"><span><b>Schema upgrade complete</b><br><span class="det">'
+      + r.applied + ' statements applied, run re-locked.</span></span><span class="st st-ok">ok</span></div>';
+    var base = location.href.split("?")[0].replace(/\/[^\/]*$/, "/");
+    $("finlinks").innerHTML = '<p>1. Run the full diagnostics at <a href="' + base + 'admin/setup_check.php">admin/setup_check.php</a>.'
+      + '<br>2. The upgrade run re-locked itself — delete this installer (button below).</p>';
+    log("schema upgrade complete — installer re-locked", "ok");
     go(3);
   });
 };

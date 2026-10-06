@@ -472,15 +472,19 @@ locked-down `php.ini`. Everything that would normally lean on Docker, cron or pr
 (`https://your-host/install.min.php`). It is the minified build of [`tools/install.php`](tools/install.php) — same wizard, smaller upload — regenerated with `php tools/build_installer_min.php` after any change to the source (CI fails the build while the bundle is stale, so it never silently drifts). A four-step wizard takes it from there:
 
 1. **Server check** — PHP version, extensions, disabled functions, writable folders, database reachability, with the fix next to each failing row.
-2. **Package** — pick a release; the installer downloads it itself (resumable, verified) over a direct connection. No proxy support by design: a host that cannot reach GitHub gets the manual-upload button instead.
-3. **Database + site setup** — create the empty database and user in the hosting panel first (the installer has no such privilege there), enter them, hit *Test connection*, then *Install now*: it writes `config.php` with a fresh random AES key, creates the storage dirs and imports the schema without the privileged statements.
-4. **Finish** — verify, then delete the installer (one click; it removes itself).
+2. **Package** — pick a release; the installer downloads it itself (atomic and content-checked: it lands in `.part`, is validated as a zip, and only then replaces the package — an interrupted transfer restarts from scratch, just retry) over a direct connection. No proxy support by design: a host that cannot reach GitHub gets the manual-upload button instead.
+3. **Database + site setup** — create the empty database and user in the hosting panel first (the installer has no such privilege there), enter them, hit *Test connection*, then *Install now*: it writes `config.php` with a fresh random AES key, creates the storage dirs and imports the schema without the privileged statements. On an installed app this step becomes *Upgrade schema* instead (idempotent re-apply — safe on an up-to-date database, `config.php` never rewritten).
+4. **Finish** — verify, then delete the installer (one click; it removes itself plus any staging and unlock leftovers).
 
 The installer has no login, so until step 3 finishes it is open to anyone who finds it — run it straight through. Once
-`config.php` exists it **locks itself**: only the read-only server check and self-removal still answer, and setup never
-overwrites an existing `config.php`. To **upgrade** later, create an empty file named `INSTALL_UNLOCK` next to the
-installer (FTP / file manager) — that proves you control the files — then download + extract; `uploads/`, `tiles/`,
-`data/`, `cache/`, `logs/` and `backups/` are merged, never replaced, and the unlock file is removed afterwards.
+`config.php` exists it **locks itself**: only the read-only server check, run-arming and self-removal still answer.
+To **upgrade** later, create an empty file named `INSTALL_UNLOCK` next to the installer (FTP / file manager) and
+reload the page — the installer arms that browser session with a random run token minted into the file (rotated after
+every step; the empty file alone authorizes nothing), then download + extract. Before anything moves, the working
+tree is snapshotted to `backups/upgrade-<UTC>/` (newest three kept; **Roll back to snapshot** restores the latest);
+`uploads/`, `tiles/`, `data/`, `cache/`, `logs/` and `backups/` are merged, never replaced, and `config.php` is never
+rewritten. The schema upgrade re-locks the run afterwards. See [Upgrading to a new release
+safely](docs/TROUBLESHOOTING.md#upgrading-to-a-new-release-safely) for the full pass including rollback.
 
 No shell, no phpMyAdmin import, no hand-written config. Without the `zip` extension the installer falls back to a manual upload-and-extract path instead of failing.
 

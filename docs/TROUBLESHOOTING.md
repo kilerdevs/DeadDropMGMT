@@ -247,6 +247,37 @@ currently deployed; `rotate_aes_key.php` refuses to run while plaintext token co
 
 ---
 
+## Upgrading to a new release safely
+
+The one-file installer (`tools/install.min.php`) upgrades in place. The full pass, in order:
+
+1. **Upload the installer** next to the installed app and open it in a browser.
+2. **Create the empty `INSTALL_UNLOCK` file** beside it (FTP / file manager) and **reload the page**. The installer
+   then arms that browser session with a random run token (minted into the file, rotated after every step) — the
+   empty file alone authorizes nothing, so a planted one cannot be driven remotely. `INSTALL_UNLOCK` is denied by
+   `.htaccess` and every nginx/Caddy profile; if the page says the run is "armed by another browser session" and
+   that was not you, delete the file, recreate it empty, and reload.
+3. **Download (or upload) the release and Extract.** Before the first byte moves, the working tree is snapshotted to
+   `backups/upgrade-<UTC>/` with a manifest (`snapshot.json`); only the newest three snapshots are kept.
+   `config.php` is never rewritten, and `uploads/`, `tiles/`, `data/`, `cache/`, `logs/` and `backups/` are merged,
+   never replaced. If the extract aborts, nothing was changed — read the error and retry.
+4. **Upgrade schema** (step 3 of the wizard becomes this button on an installed app): re-enter the database
+   credentials — the installer never reads `config.php` — and run it. `setup.sql` is idempotent, so this is a safe
+   no-op on an up-to-date database. Success re-locks the run (the unlock file is deleted).
+5. **Verify** at `admin/setup_check.php`, then **delete the installer**.
+
+**Rollback:** if the new version misbehaves, reload the installer page (re-arm if needed) and press **Roll back to
+snapshot** — the newest `backups/upgrade-*/` is copied back over the app files. `config.php` and all data dirs
+survive both directions. Files the failed upgrade *added* (absent from the snapshot) are deliberately left in place
+and named in the log — delete them by hand if the app misbehaves. Snapshots are plain copies, restorable over FTP
+too, and web-denied like every other backup.
+
+**Interrupted runs** resume honestly: reloading shows a waiting package ("resume with Extract"), the newest snapshot,
+and the arm state — each wizard step is independent, and only the download restarts from scratch (the release host
+ignores Range requests, so the transfer is one atomic, validated request — retry it).
+
+---
+
 ## Links, redirects or assets break under a sub-path
 
 **Symptom:** the app works at `https://drop.example.org/` but `https://example.org/drop/` shows a login that redirects to
