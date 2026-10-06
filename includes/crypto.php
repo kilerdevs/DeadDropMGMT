@@ -643,7 +643,7 @@ function save_uploaded_photo(array $file_entry, int $order_id, int $max_bytes = 
 
     $ext = $allowed_mime[$mime];
     $dir = dirname(__DIR__) . '/uploads/' . $order_id . '/';
-    if (!is_dir($dir) && !mkdir($dir, 0750, true)) {
+    if (!is_dir($dir) && !@mkdir($dir, 0750, true)) {
         return false;
     }
 

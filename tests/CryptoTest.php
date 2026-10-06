@@ -262,6 +262,12 @@ T::ok('claim rejects non-staged rel', photo_staged_claim('nope.jpg', 1) === null
 T::ok('claim rejects order zero', photo_staged_claim('0/ab12cd34.jpg', 0) === null);
 T::ok('claim fails closed on missing stage', photo_staged_claim('0/ab12cd34ef56.jpg', 999991) === null);
 @rmdir(dirname(__DIR__) . '/uploads/999991');
+// A file squatting where the order dir should be fails the claim closed
+// (the mkdir fails) — no rename is attempted, nothing is served.
+$squat = dirname(__DIR__) . '/uploads/29514';
+file_put_contents($squat, 'squat');
+T::ok('claim fails closed when order dir is blocked', photo_staged_claim('0/ab12cd34ef56.png', 29514) === null);
+@unlink($squat);
 
 $ptd = sys_get_temp_dir() . '/ddmgmt_cov_crypto';
 if (!is_dir($ptd)) { mkdir($ptd, 0700, true); }
@@ -320,6 +326,26 @@ if (function_exists('imagecreatetruecolor')) {
     T::ok('wide source is capped to 2560px',
         _compress_image($ptd . '/wide.jpg', $ptd . '/wide.out.jpg', 'image/jpeg', 12582912)
         && getimagesize($ptd . '/wide.out.jpg')[0] === 2560);
+
+    // Alpha sources keep transparency through the long-edge downscale.
+    $alpha = imagecreatetruecolor(2600, 100);
+    imagealphablending($alpha, false);
+    imagesavealpha($alpha, true);
+    imagefill($alpha, 0, 0, imagecolorallocatealpha($alpha, 0, 0, 0, 127));
+    imagepng($alpha, $ptd . '/alpha.png');
+    imagedestroy($alpha);
+    T::ok('alpha PNG downscales with transparency intact',
+        _compress_image($ptd . '/alpha.png', $ptd . '/alpha.out.png', 'image/png', 12582912)
+        && getimagesize($ptd . '/alpha.out.png')[0] === 2560);
+
+    // A file squatting where the order dir should be fails the upload closed.
+    $ublock = dirname(__DIR__) . '/uploads/29515';
+    file_put_contents($ublock, 'squat');
+    $blockedEntry = ['name' => 'x.jpg', 'type' => 'image/jpeg', 'tmp_name' => $ptd . '/small.jpg',
+        'error' => UPLOAD_ERR_OK, 'size' => filesize($ptd . '/small.jpg')];
+    T::ok('upload fails closed when order dir is blocked',
+        save_uploaded_photo($blockedEntry, 29515) === false);
+    @unlink($ublock);
 }
 
 foreach (glob($ptd . '/*') ?: [] as $f) { @unlink($f); }

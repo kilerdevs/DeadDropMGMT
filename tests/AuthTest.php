@@ -29,6 +29,10 @@ $_SESSION = [];
 T::eq('wrong password returns fail', 'fail', admin_login('t_auth_owner', 'wrong-password'));
 T::ok('failed login leaves session empty', empty($_SESSION['user_id']));
 T::eq('unknown user returns fail', 'fail', admin_login('no_such_user', 'CorrectHorse1!'));
+// Non-ASCII input can MATCH a row under utf8mb4_unicode_ci ("ówner" ==
+// "owner") while hashing to a fresh rate-limit key — guaranteed miss here,
+// with the dummy-hash verify so timing reveals nothing.
+T::eq('non-ASCII username is a guaranteed miss', 'fail', admin_login('ówner', 'CorrectHorse1!'));
 
 // Session fixation: id must change on login
 $_SESSION = [];

@@ -252,6 +252,7 @@ T::eq('garbage fails closed', false, _rl_parse_window_start('not-a-date'));
 T::eq('impossible ISO falls through to closed', false, _rl_parse_window_start('2026-10-04T25:00:00Z'));
 T::eq('impossible datetime fails closed', false, _rl_parse_window_start('2026-13-04 12:00:00'));
 T::eq('impossible date fails closed', false, _rl_parse_window_start('2026-13-40'));
+T::eq('impossible PG-offset datetime fails closed', false, _rl_parse_window_start('2026-10-04 25:00:00+05'));
 
 // Legacy spend-only shim still spends exactly once.
 rl_reset('cov_legacy_spend');
