@@ -856,51 +856,127 @@ function rmdir_r(string $p): void {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DeadDropMGMT installer</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E %3Crect width='64' height='64' rx='14' fill='%23101314'/%3E %3Cpath d='M32 9c-9.4 0-17 7.3-17 16.6C15 38.6 32 55 32 55s17-16.4 17-29.4C49 16.3 41.4 9 32 9z' fill='%234caf50'/%3E %3Ccircle cx='32' cy='25.5' r='7' fill='%23101314'/%3E %3Ccircle cx='32' cy='25.5' r='3' fill='%234caf50'/%3E %3C/svg%3E">
 <style>
-:root{--bg:#0a0a0a;--surface:#111111;--border:#222222;--text:#e8e8e8;--muted:#666666;--accent:#ffffff;--error:#ff3333;--warn:#e0a100;--info:#4caf50}
-*{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--bg);color:var(--text);font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;font-size:15px;line-height:1.65;padding:48px 24px 80px}
-.wrap{max-width:720px;margin:0 auto}
-.wordmark{font-family:ui-monospace,'IBM Plex Mono',Menlo,Consolas,monospace;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--muted);padding-bottom:20px;border-bottom:1px solid var(--border);margin-bottom:28px}
-h1{font-size:20px;font-weight:300;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);margin-bottom:8px}
-.sub{color:var(--text);margin-bottom:32px;font-size:15px}
-.card{background:transparent;border:1px solid var(--border);border-radius:0;padding:24px;margin-bottom:40px}
-.steps{display:flex;gap:0;margin-bottom:40px;border:1px solid var(--border)}
-.step{flex:1;min-width:90px;font-family:ui-monospace,'IBM Plex Mono',Menlo,Consolas,monospace;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);padding:12px 8px;text-align:center;border-right:1px solid var(--border)}
-.step:last-child{border-right:0}.step.on{color:var(--text);background:var(--surface)}.step.done{color:var(--muted)}
-.sec{font-family:ui-monospace,'IBM Plex Mono',Menlo,Consolas,monospace;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:20px 0 12px}
+:root{
+  --bg:#0a0a0a; --surface:#111111; --border:#222222; --text:#e8e8e8;
+  --muted:#666666; --accent:#ffffff;
+  --error:#ff3333; --warn:#e0a100; --info:#4caf50;
+}
+*{box-sizing:border-box; margin:0; padding:0}
+body{
+  background:var(--bg); color:var(--text);
+  font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;
+  font-size:15px; line-height:1.65; padding:48px 24px 80px;
+}
+.wrap{max-width:720px; margin:0 auto}
+.wordmark{
+  font-family:ui-monospace,'IBM Plex Mono',Menlo,Consolas,monospace;
+  font-size:11px; letter-spacing:.2em; text-transform:uppercase;
+  color:var(--muted); padding-bottom:20px;
+  border-bottom:1px solid var(--border); margin-bottom:28px;
+}
+h1{
+  font-size:20px; font-weight:300; letter-spacing:.06em; text-transform:uppercase;
+  color:var(--accent); margin-bottom:8px;
+}
+.sub{color:var(--text); margin-bottom:32px; font-size:15px}
+.card{background:transparent; border:1px solid var(--border); border-radius:0; padding:24px; margin-bottom:40px}
+.steps{display:flex; gap:0; margin-bottom:40px; border:1px solid var(--border)}
+.step{
+  flex:1; min-width:90px;
+  font-family:ui-monospace,'IBM Plex Mono',Menlo,Consolas,monospace;
+  font-size:10px; letter-spacing:.12em; text-transform:uppercase;
+  color:var(--muted); padding:12px 8px; text-align:center; border-right:1px solid var(--border);
+}
+.step:last-child{border-right:0}
+.step.on{color:var(--text); background:var(--surface)}
+.step.done{color:var(--muted)}
+.sec{
+  font-family:ui-monospace,'IBM Plex Mono',Menlo,Consolas,monospace;
+  font-size:11px; letter-spacing:.12em; text-transform:uppercase;
+  color:var(--muted); margin:20px 0 12px;
+}
 .sec:first-child{margin-top:0}
-label{display:block;margin:14px 0 2px;color:var(--muted);font-size:13px}
-input[type=text],input[type=password],input[type=number],select{width:100%;background:transparent;border:0;border-bottom:1px solid var(--border);color:var(--text);font-family:ui-monospace,'IBM Plex Mono',Menlo,Consolas,monospace;font-size:14px;padding:10px 0;outline:none;border-radius:0}
+label{display:block; margin:14px 0 2px; color:var(--muted); font-size:13px}
+input[type=text],input[type=password],input[type=number],select{
+  width:100%; background:transparent; border:0; border-bottom:1px solid var(--border);
+  color:var(--text);
+  font-family:ui-monospace,'IBM Plex Mono',Menlo,Consolas,monospace;
+  font-size:14px; padding:10px 0; outline:none; border-radius:0;
+}
 input:focus,select:focus{border-bottom-color:var(--accent)}
-input::placeholder{color:var(--muted);font-size:13px}
+input::placeholder{color:var(--muted); font-size:13px}
 select option{background:var(--surface)}
 input[type=checkbox]{accent-color:var(--accent)}
-input[type=number]{-moz-appearance:textfield;appearance:textfield}
-input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
-input[type=file]{width:100%;font-family:ui-monospace,'IBM Plex Mono',Menlo,Consolas,monospace;font-size:13px;color:var(--muted);padding:10px 0;border-bottom:1px solid var(--border);cursor:pointer;background:transparent;border-radius:0}
-input[type=file]::file-selector-button{background:transparent;border:1px solid var(--border);color:var(--muted);font-family:ui-monospace,'IBM Plex Mono',Menlo,Consolas,monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;padding:6px 14px;cursor:pointer;margin-right:14px}
-input[type=file]::file-selector-button:hover{background:var(--accent);color:var(--bg)}
-.grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 16px}.grid3{display:grid;grid-template-columns:2fr 1fr 1fr;gap:0 16px}
-button{display:inline-block;background:transparent;color:var(--text);border:1px solid var(--border);font-family:ui-monospace,'IBM Plex Mono',Menlo,Consolas,monospace;font-size:11px;letter-spacing:.12em;text-transform:uppercase;padding:12px 28px;cursor:pointer;margin:16px 16px 0 0;border-radius:0}
-button:hover{background:var(--accent);color:var(--bg);border-color:var(--accent)}
-button.ghost{border:0;color:var(--muted);padding:12px 0}
-button.ghost:hover{background:transparent;color:var(--text)}
-button.sm{padding:8px 18px;font-size:10px;margin:8px 8px 0 0}
-button:disabled{opacity:.35;cursor:default}button:disabled:hover{background:transparent;color:var(--text);border-color:var(--border)}
+input[type=number]{-moz-appearance:textfield; appearance:textfield}
+input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none; margin:0}
+input[type=file]{
+  width:100%;
+  font-family:ui-monospace,'IBM Plex Mono',Menlo,Consolas,monospace;
+  font-size:13px; color:var(--muted); padding:10px 0;
+  border-bottom:1px solid var(--border); cursor:pointer; background:transparent; border-radius:0;
+}
+input[type=file]::file-selector-button{
+  background:transparent; border:1px solid var(--border); color:var(--muted);
+  font-family:ui-monospace,'IBM Plex Mono',Menlo,Consolas,monospace;
+  font-size:10px; letter-spacing:.1em; text-transform:uppercase;
+  padding:6px 14px; cursor:pointer; margin-right:14px;
+}
+input[type=file]::file-selector-button:hover{background:var(--accent); color:var(--bg)}
+.grid2{display:grid; grid-template-columns:1fr 1fr; gap:0 16px}
+.grid3{display:grid; grid-template-columns:2fr 1fr 1fr; gap:0 16px}
+button{
+  display:inline-block; background:transparent; color:var(--text);
+  border:1px solid var(--border);
+  font-family:ui-monospace,'IBM Plex Mono',Menlo,Consolas,monospace;
+  font-size:11px; letter-spacing:.12em; text-transform:uppercase;
+  padding:12px 28px; cursor:pointer; margin:16px 16px 0 0; border-radius:0;
+}
+button:hover{background:var(--accent); color:var(--bg); border-color:var(--accent)}
+button.ghost{border:0; color:var(--muted); padding:12px 0}
+button.ghost:hover{background:transparent; color:var(--text)}
+button.sm{padding:8px 18px; font-size:10px; margin:8px 8px 0 0}
+button:disabled{opacity:.35; cursor:default}
+button:disabled:hover{background:transparent; color:var(--text); border-color:var(--border)}
 button.ghost:disabled:hover{color:var(--muted)}
-button.btn-big{display:block;width:100%;padding:18px;font-size:13px;border-color:var(--text);margin:16px 0 8px}
-.row{display:flex;gap:12px;align-items:baseline;padding:8px 0;border-top:1px solid var(--border);font-size:13px}
-.st{margin-left:auto;flex:0 0 auto;font-family:ui-monospace,'IBM Plex Mono',Menlo,Consolas,monospace;font-size:10px;letter-spacing:.12em;text-transform:uppercase}
-.st-ok{color:var(--info)}.st-fail{color:var(--error)}.st-warn{color:var(--warn)}.st-info{color:var(--muted)}
-.det{color:var(--muted);font-size:12px}
-.bar{height:2px;background:var(--border);margin:16px 0 8px}.bar>i{display:block;height:100%;background:var(--accent);width:0}
-#log{background:#000;border:1px solid var(--border);border-radius:0;padding:14px 16px;height:240px;overflow-y:auto;font:12px/1.7 ui-monospace,'IBM Plex Mono',Menlo,Consolas,monospace;white-space:pre-wrap}
-#log .t{color:#444}#log .ok{color:var(--info)}#log .fail{color:var(--error)}#log .warn{color:var(--warn)}#log .info{color:var(--text)}
-.hint{font-size:13px;color:var(--muted)}a{color:var(--accent)}.hidden{display:none}
-code{font-family:ui-monospace,'IBM Plex Mono',Menlo,Consolas,monospace;font-size:12px;color:var(--text)}
-.copy-scratch{position:fixed;opacity:0;top:0;left:0}
-@media(max-width:640px){.grid2,.grid3{grid-template-columns:1fr}body{padding:24px 12px 60px}}
+button.btn-big{display:block; width:100%; padding:18px; font-size:13px; border-color:var(--text); margin:16px 0 8px}
+.row{display:flex; gap:12px; align-items:baseline; padding:8px 0; border-top:1px solid var(--border); font-size:13px}
+.st{
+  margin-left:auto; flex:0 0 auto;
+  font-family:ui-monospace,'IBM Plex Mono',Menlo,Consolas,monospace;
+  font-size:10px; letter-spacing:.12em; text-transform:uppercase;
+}
+.st-ok{color:var(--info)}
+.st-fail{color:var(--error)}
+.st-warn{color:var(--warn)}
+.st-info{color:var(--muted)}
+.det{color:var(--muted); font-size:12px}
+.bar{height:2px; background:var(--border); margin:16px 0 8px}
+.bar>i{display:block; height:100%; background:var(--accent); width:0}
+#log{
+  background:#000; border:1px solid var(--border); border-radius:0;
+  padding:14px 16px; height:240px; overflow-y:auto;
+  font:12px/1.7 ui-monospace,'IBM Plex Mono',Menlo,Consolas,monospace;
+  white-space:pre-wrap;
+}
+#log .t{color:#444}
+#log .ok{color:var(--info)}
+#log .fail{color:var(--error)}
+#log .warn{color:var(--warn)}
+#log .info{color:var(--text)}
+.hint{font-size:13px; color:var(--muted)}
+a{color:var(--accent)}
+.hidden{display:none}
+code{
+  font-family:ui-monospace,'IBM Plex Mono',Menlo,Consolas,monospace;
+  font-size:12px; color:var(--text);
+}
+.copy-scratch{position:fixed; opacity:0; top:0; left:0}
+@media(max-width:640px){
+  .grid2,.grid3{grid-template-columns:1fr}
+  body{padding:24px 12px 60px}
+}
 </style>
 </head>
 <body>
@@ -960,136 +1036,229 @@ code{font-family:ui-monospace,'IBM Plex Mono',Menlo,Consolas,monospace;font-size
 <script>
 (function(){
 "use strict";
-var $=function(id){return document.getElementById(id)};
-var step=0;
-function stamp(){var d=new Date();return d.toISOString().substr(11,8)}
-function log(msg,cls){var el=$("log");var s=document.createElement("span");s.innerHTML='<span class="t">['+stamp()+'] </span><span class="'+(cls||"info")+'"></span>';s.lastChild.textContent=msg;el.appendChild(s);el.appendChild(document.createTextNode("\n"));el.scrollTop=el.scrollHeight}
-function go(n){step=n;["p0","p1","p2","p3"].forEach(function(id,i){$(id).classList.toggle("hidden",i!==n)});
-var st=document.querySelectorAll("#steps .step");st.forEach(function(e,i){e.classList.toggle("on",i===n);e.classList.toggle("done",i<n)});window.scrollTo(0,0)}
-function fd(o){var f=new FormData();for(var k in o)f.append(k,o[k]);return f}
-function api(action,data,files){
-var f=files||fd(data||{});f.append("action",action);
-return fetch("?action="+encodeURIComponent(action),{method:"POST",body:f}).then(function(r){return r.json()}).catch(function(e){return {ok:false,error:"request failed: "+e}});
+var $ = function(id){ return document.getElementById(id); };
+var step = 0;
+function stamp(){
+  var d = new Date();
+  return d.toISOString().substr(11, 8);
 }
-function get(action,qs){return fetch("?action="+encodeURIComponent(action)+(qs||""),{method:"GET"}).then(function(r){return r.json()}).catch(function(e){return {ok:false,error:"request failed: "+e}})}
-var stw={ok:"ok",fail:"blocked",warn:"limited",info:"info"};
+function log(msg, cls){
+  var el = $("log");
+  var s = document.createElement("span");
+  s.innerHTML = '<span class="t">[' + stamp() + '] </span><span class="' + (cls || "info") + '"></span>';
+  s.lastChild.textContent = msg;
+  el.appendChild(s);
+  el.appendChild(document.createTextNode("\n"));
+  el.scrollTop = el.scrollHeight;
+}
+function go(n){
+  step = n;
+  ["p0", "p1", "p2", "p3"].forEach(function(id, i){ $(id).classList.toggle("hidden", i !== n); });
+  var st = document.querySelectorAll("#steps .step");
+  st.forEach(function(e, i){
+    e.classList.toggle("on", i === n);
+    e.classList.toggle("done", i < n);
+  });
+  window.scrollTo(0, 0);
+}
+function fd(o){
+  var f = new FormData();
+  for (var k in o) f.append(k, o[k]);
+  return f;
+}
+function api(action, data, files){
+  var f = files || fd(data || {});
+  f.append("action", action);
+  return fetch("?action=" + encodeURIComponent(action), {method:"POST", body:f})
+    .then(function(r){ return r.json(); })
+    .catch(function(e){ return {ok:false, error:"request failed: " + e}; });
+}
+function get(action, qs){
+  return fetch("?action=" + encodeURIComponent(action) + (qs || ""), {method:"GET"})
+    .then(function(r){ return r.json(); })
+    .catch(function(e){ return {ok:false, error:"request failed: " + e}; });
+}
+var stw = {ok:"ok", fail:"blocked", warn:"limited", info:"info"};
 
 /* step 0 */
 function runCheck(){
-$("checks").innerHTML="<p class='hint'>Running…</p>";$("b0").disabled=true;
-get("check").then(function(r){
-if(!r.ok){$("checks").innerHTML="<p class='hint'>check failed: "+r.error+"</p>";return}
-var h="",fails=r.fails||0;
-r.rows.forEach(function(x){h+='<div class="row"><span><b>'+x.label+'</b>'+(x.detail?'<br><span class="det">'+x.detail+'</span>':"")+'</span><span class="st st-'+x.status+'">'+stw[x.status]+"</span></div>";log(x.label+(x.detail?" — "+x.detail:""),x.status)});
-$("checks").innerHTML=h;
-$("b0").disabled=fails>0&&!$("override").checked;
-log("capability check: "+r.rows.length+" rows, "+fails+" blocking failure(s)",fails>0?"fail":"ok");
-});
+  $("checks").innerHTML = "<p class='hint'>Running…</p>";
+  $("b0").disabled = true;
+  get("check").then(function(r){
+    if (!r.ok){
+      $("checks").innerHTML = "<p class='hint'>check failed: " + r.error + "</p>";
+      return;
+    }
+    var h = "", fails = r.fails || 0;
+    r.rows.forEach(function(x){
+      h += '<div class="row"><span><b>' + x.label + '</b>'
+        + (x.detail ? '<br><span class="det">' + x.detail + '</span>' : "")
+        + '</span><span class="st st-' + x.status + '">' + stw[x.status] + "</span></div>";
+      log(x.label + (x.detail ? " — " + x.detail : ""), x.status);
+    });
+    $("checks").innerHTML = h;
+    $("b0").disabled = fails > 0 && !$("override").checked;
+    log("capability check: " + r.rows.length + " rows, " + fails + " blocking failure(s)", fails > 0 ? "fail" : "ok");
+  });
 }
-$("recheck").onclick=runCheck;$("override").onchange=runCheck;
-$("b0").onclick=function(){go(1);loadTree();loadTags()};
+$("recheck").onclick = runCheck;
+$("override").onchange = runCheck;
+$("b0").onclick = function(){ go(1); loadTree(); loadTags(); };
 
 /* step 1 */
 function loadTree(){
-get("tree").then(function(r){
-if(!r.ok)return;
-$("treeinfo").innerHTML=r.present
-?'<p class="hint">App files already present in this directory'+(r.has_config?" <b>and config.php exists</b> (upgrade mode — your config is kept).":" (no config.php yet).")+" You may skip straight to extraction or setup.</p>"+(r.locked?'<p class="hint"><b>Locked:</b> this app is installed. To upgrade, create an empty file named <code>INSTALL_UNLOCK</code> next to this installer via FTP / file manager, then reload. Otherwise delete the installer.</p>':"")
-:'<p class="hint">No app files here yet — download the release package below.</p>';
-if(r.present){$("dlbtns").classList.remove("hidden");$("b1").classList.remove("hidden")}
-log("tree probe: app files "+(r.present?"present":"absent")+", config.php "+(r.has_config?"present":"absent"),"info");
-});
+  get("tree").then(function(r){
+    if (!r.ok) return;
+    $("treeinfo").innerHTML = r.present
+      ? '<p class="hint">App files already present in this directory'
+        + (r.has_config
+          ? " <b>and config.php exists</b> (upgrade mode — your config is kept)."
+          : " (no config.php yet).")
+        + " You may skip straight to extraction or setup.</p>"
+        + (r.locked
+          ? '<p class="hint"><b>Locked:</b> this app is installed. To upgrade, create an empty file named <code>INSTALL_UNLOCK</code> next to this installer via FTP / file manager, then reload. Otherwise delete the installer.</p>'
+          : "")
+      : '<p class="hint">No app files here yet — download the release package below.</p>';
+    if (r.present){
+      $("dlbtns").classList.remove("hidden");
+      $("b1").classList.remove("hidden");
+    }
+    log("tree probe: app files " + (r.present ? "present" : "absent")
+      + ", config.php " + (r.has_config ? "present" : "absent"), "info");
+  });
 }
 function loadTags(){
-log("version list via direct connection…","info");
-api("tags",{}).then(function(r){
-if(r.ok&&r.tags&&r.tags.length){
-var s=$("ver");s.innerHTML="";r.tags.forEach(function(t,j){var o=document.createElement("option");o.value=t.zip;o.textContent=t.tag+(j===0?" (latest)":"");s.appendChild(o)});
-var m=document.createElement("option");m.value="MASTER";m.textContent="master (bleeding edge)";s.appendChild(m);
-log("versions via "+(r.via||"?")+": "+r.tags.map(function(t){return t.tag}).join(", "),"ok");
-}else{$("ver").innerHTML='<option value="">version list failed — paste a zip URL manually</option>';log("version list failed: "+(r.error||"empty"),"fail")}
-});
+  log("version list via direct connection…", "info");
+  api("tags", {}).then(function(r){
+    if (r.ok && r.tags && r.tags.length){
+      var s = $("ver");
+      s.innerHTML = "";
+      r.tags.forEach(function(t, j){
+        var o = document.createElement("option");
+        o.value = t.zip;
+        o.textContent = t.tag + (j === 0 ? " (latest)" : "");
+        s.appendChild(o);
+      });
+      var m = document.createElement("option");
+      m.value = "MASTER";
+      m.textContent = "master (bleeding edge)";
+      s.appendChild(m);
+      log("versions via " + (r.via || "?") + ": " + r.tags.map(function(t){ return t.tag; }).join(", "), "ok");
+    } else {
+      $("ver").innerHTML = '<option value="">version list failed — paste a zip URL manually</option>';
+      log("version list failed: " + (r.error || "empty"), "fail");
+    }
+  });
 }
-$("bup").onclick=function(){$("fup").click()};
-$("fup").onchange=function(){
-if(!$("fup").files.length)return;
-log("uploading "+$("fup").files[0].name+"…","info");
-var f=new FormData();f.append("zip",$("fup").files[0]);
-api("upload",null,f).then(function(r){
-if(!r.ok){log("upload failed: "+r.error,"fail");return}
-log(r.log,"ok");$("dtxt").textContent="upload complete: "+r.size+" B";
-$("dlbtns").classList.remove("hidden");
-});
+$("bup").onclick = function(){ $("fup").click(); };
+$("fup").onchange = function(){
+  if (!$("fup").files.length) return;
+  log("uploading " + $("fup").files[0].name + "…", "info");
+  var f = new FormData();
+  f.append("zip", $("fup").files[0]);
+  api("upload", null, f).then(function(r){
+    if (!r.ok){ log("upload failed: " + r.error, "fail"); return; }
+    log(r.log, "ok");
+    $("dtxt").textContent = "upload complete: " + r.size + " B";
+    $("dlbtns").classList.remove("hidden");
+  });
 };
-$("bdl").onclick=function(){
-var url=$("url").value.trim();
-if(!url){if(!$("ver").value){log("pick a version or paste a URL","warn");return}
-url=$("ver").value==="MASTER"?"<?= INST_MASTER_ZIP ?>":$("ver").value}
-log("downloading "+url+" (one request, a few MB)…","info");$("bdl").disabled=true;$("dtxt").textContent="downloading…";
-api("download",{url:url}).then(function(r){
-$("bdl").disabled=false;
-if(!r.ok){$("dtxt").textContent="failed";log("download failed: "+r.error,"fail");return}
-$("dbar").style.width="100%";$("dtxt").textContent=Math.round(r.size/1024)+" KB";
-log(r.log+" via "+(r.via||"?"),"ok");$("dlbtns").classList.remove("hidden");
-});
+$("bdl").onclick = function(){
+  var url = $("url").value.trim();
+  if (!url){
+    if (!$("ver").value){ log("pick a version or paste a URL", "warn"); return; }
+    url = $("ver").value === "MASTER" ? "<?= INST_MASTER_ZIP ?>" : $("ver").value;
+  }
+  log("downloading " + url + " (one request, a few MB)…", "info");
+  $("bdl").disabled = true;
+  $("dtxt").textContent = "downloading…";
+  api("download", {url:url}).then(function(r){
+    $("bdl").disabled = false;
+    if (!r.ok){ $("dtxt").textContent = "failed"; log("download failed: " + r.error, "fail"); return; }
+    $("dbar").style.width = "100%";
+    $("dtxt").textContent = Math.round(r.size / 1024) + " KB";
+    log(r.log + " via " + (r.via || "?"), "ok");
+    $("dlbtns").classList.remove("hidden");
+  });
 };
-$("bex").onclick=function(){
-log("extracting…","info");$("bex").disabled=true;
-api("extract",{keep_config:$("keepcfg").checked?"1":""}).then(function(r){
-$("bex").disabled=false;
-if(!r.ok){log("extract failed: "+r.error,"fail");return}
-log(r.log,"ok");$("b1").classList.remove("hidden");
-});
+$("bex").onclick = function(){
+  log("extracting…", "info");
+  $("bex").disabled = true;
+  api("extract", {keep_config:$("keepcfg").checked ? "1" : ""}).then(function(r){
+    $("bex").disabled = false;
+    if (!r.ok){ log("extract failed: " + r.error, "fail"); return; }
+    log(r.log, "ok");
+    $("b1").classList.remove("hidden");
+  });
 };
-$("b1").onclick=function(){go(2)};
+$("b1").onclick = function(){ go(2); };
 
 /* step 2 */
-function dbObj(){return {db_host:$("dh").value,db_port:$("dp").value,db_name:$("dn").value.trim(),db_user:$("du").value.trim(),db_pass:$("dk").value}}
-$("btest").onclick=function(){
-var d=dbObj();if(!d.db_name||!d.db_user){log("enter database name + user first","warn");return}
-log("testing connection to "+d.db_user+"@"+d.db_host+"/"+d.db_name+"…","info");
-api("dbtest",d).then(function(r){
-if(!r.ok){log("DB: "+r.error,"fail");return}
-log("DB: "+r.log,"ok");
-});
+function dbObj(){
+  return {
+    db_host:$("dh").value, db_port:$("dp").value,
+    db_name:$("dn").value.trim(), db_user:$("du").value.trim(), db_pass:$("dk").value
+  };
+}
+$("btest").onclick = function(){
+  var d = dbObj();
+  if (!d.db_name || !d.db_user){ log("enter database name + user first", "warn"); return; }
+  log("testing connection to " + d.db_user + "@" + d.db_host + "/" + d.db_name + "…", "info");
+  api("dbtest", d).then(function(r){
+    if (!r.ok){ log("DB: " + r.error, "fail"); return; }
+    log("DB: " + r.log, "ok");
+  });
 };
-$("b2").onclick=function(){
-var d=dbObj();if(!d.db_name||!d.db_user){log("enter database name + user first","warn");return}
-log("installing: config → dirs → schema → verify","info");$("b2").disabled=true;
-api("setup",d).then(function(r){
-$("b2").disabled=false;
-if(!r.ok){log("SETUP FAILED: "+r.error,"fail");return}
-(r.log||[]).forEach(function(m){log(m,/^warn|not |non-/i.test(m)?"warn":"ok")});
-$("setuprows").innerHTML='<div class="row"><span><b>Setup complete</b><br><span class="det">'+r.applied+' schema statements, all checks passed.</span></span><span class="st st-ok">ok</span></div>';
-var base=location.href.split("?")[0].replace(/\/[^\/]*$/,"/");
-$("finlinks").innerHTML='<p>1. Open <a href="'+base+'admin/">admin/</a> — with zero accounts it shows the <b>create-owner form</b>.<br>2. Then run the full diagnostics at <a href="'+base+'admin/setup_check.php">admin/setup_check.php</a>.<br>3. Delete this installer (button below).</p>';
-log("setup complete — create the owner at admin/","ok");go(3);
-});
+$("b2").onclick = function(){
+  var d = dbObj();
+  if (!d.db_name || !d.db_user){ log("enter database name + user first", "warn"); return; }
+  log("installing: config → dirs → schema → verify", "info");
+  $("b2").disabled = true;
+  api("setup", d).then(function(r){
+    $("b2").disabled = false;
+    if (!r.ok){ log("SETUP FAILED: " + r.error, "fail"); return; }
+    (r.log || []).forEach(function(m){ log(m, /^warn|not |non-/i.test(m) ? "warn" : "ok"); });
+    $("setuprows").innerHTML = '<div class="row"><span><b>Setup complete</b><br><span class="det">'
+      + r.applied + ' schema statements, all checks passed.</span></span><span class="st st-ok">ok</span></div>';
+    var base = location.href.split("?")[0].replace(/\/[^\/]*$/, "/");
+    $("finlinks").innerHTML = '<p>1. Open <a href="' + base + 'admin/">admin/</a> — with zero accounts it shows the <b>create-owner form</b>.'
+      + '<br>2. Then run the full diagnostics at <a href="' + base + 'admin/setup_check.php">admin/setup_check.php</a>.'
+      + '<br>3. Delete this installer (button below).</p>';
+    log("setup complete — create the owner at admin/", "ok");
+    go(3);
+  });
 };
 
 /* step 3 */
-$("bdel").onclick=function(){
-if(!confirm("Delete the installer file?"))return;
-api("remove",{}).then(function(r){
-log(r.ok?"installer deleted. Installation finished.":"DELETE FAILED: "+r.error,r.ok?"ok":"fail");
-if(r.ok)$("bdel").disabled=true;
-});
+$("bdel").onclick = function(){
+  if (!confirm("Delete the installer file?")) return;
+  api("remove", {}).then(function(r){
+    log(r.ok ? "installer deleted. Installation finished." : "DELETE FAILED: " + r.error, r.ok ? "ok" : "fail");
+    if (r.ok) $("bdel").disabled = true;
+  });
 };
-$("copylog").onclick=function(){
-var t=$("log").innerText;
-function done(){log("log copied to clipboard","info")}
-function fallback(){
-var ta=document.createElement("textarea");ta.className="copy-scratch";ta.value=t;
-document.body.appendChild(ta);ta.select();
-try{document.execCommand("copy");done()}catch(e){log("copy failed — select the log text manually","warn")}
-document.body.removeChild(ta);
-}
-/* clipboard API needs a secure context (https/localhost) — plain-IP http
-   hosting is not one, so fall back to the execCommand scratch element. */
-if(navigator.clipboard&&window.isSecureContext){navigator.clipboard.writeText(t).then(done,fallback)}
-else fallback();
+$("copylog").onclick = function(){
+  var t = $("log").innerText;
+  function done(){ log("log copied to clipboard", "info"); }
+  function fallback(){
+    var ta = document.createElement("textarea");
+    ta.className = "copy-scratch";
+    ta.value = t;
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand("copy"); done(); }
+    catch (e){ log("copy failed — select the log text manually", "warn"); }
+    document.body.removeChild(ta);
+  }
+  /* clipboard API needs a secure context (https/localhost) — plain-IP http
+     hosting is not one, so fall back to the execCommand scratch element. */
+  if (navigator.clipboard && window.isSecureContext){
+    navigator.clipboard.writeText(t).then(done, fallback);
+  } else {
+    fallback();
+  }
 };
-log("installer <?= INST_VERSION ?> ready — checking this server…","info");
+log("installer <?= INST_VERSION ?> ready — checking this server…", "info");
 runCheck();
 })();
 </script>

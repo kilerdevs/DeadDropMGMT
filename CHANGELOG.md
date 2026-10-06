@@ -20,6 +20,9 @@ All notable changes to DeadDropMGMT are documented here. The format follows
    transport (cURL, or sockets + openssl), a writable directory, 32 MB disk.
    New upload/extract paths also reject zips with absolute or `../` entries
    (zip-slip guard on manual uploads).
+- Web installer page now shows the app favicon (inline SVG data URI — no
+  extra file to upload) and its CSS/JS source is human-readable; the
+  minified single-file build is generated from it unchanged.
 
 ### Fixed
 - Order creation answered 500 on every request: the staged-upload cleanup in
