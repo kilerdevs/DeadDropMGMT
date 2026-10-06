@@ -167,6 +167,7 @@ Prefer nginx or Caddy? Bare-metal? See [Docker](#docker) and [Setup](#setup).
 - Health probe at `/healthz.php` for containers and monitors
 - Owner backups (**Backups** page): one file with every database row plus the encrypted photos — zip where ZipArchive exists, pure-PHP JSON bundle otherwise. Restore verifies checksums before replacing anything and asks for your password too. Zone map files are excluded (redraw/re-upload them); the encryption key is NOT in the backup, so keep `DDMGMT_AES_KEY_HEX` separately — without it the photos are unreadable. Details in [TROUBLESHOOTING](docs/TROUBLESHOOTING.md)
 - Operational metrics (**Diagnostics** page, owner-only, read-only): system, job heartbeats, log health, 24h traffic, live rate-limit pressure, queue depth and backup freshness — plus a `?format=json` output (owner + CSRF token) for external monitoring
+- Benchmarks (`php tools/bench.php`, `Benchmarks` CI job): times the core six hot paths against `tests/bench-budgets.json` cliff gates, so perf regressions fail the build instead of arriving as user complaints
 
 ### Maps
 

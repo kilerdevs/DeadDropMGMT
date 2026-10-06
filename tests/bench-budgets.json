@@ -1,0 +1,26 @@
+{
+    "backup_create": {
+        "max_s": 30,
+        "why": "cliff gate, not a target: observed ~0.3s local for 10k rows + 5 MiB photos. 30s tolerates 100x runner noise but catches algorithmic regressions (e.g. per-row queries turning the chunked stream quadratic)."
+    },
+    "backup_verify": {
+        "max_s": 30,
+        "why": "cliff gate: observed ~0.1s local. Verify must stay a linear streaming pass; anything near 30s means the streaming broke."
+    },
+    "backup_restore": {
+        "max_s": 30,
+        "why": "cliff gate: observed ~0.3s local for the single-transaction replay. Guards the chunked multi-INSERT path, not absolute speed."
+    },
+    "diagnostics_collect": {
+        "max_s": 30,
+        "why": "cliff gate: observed ~0.01s local under 10k-row load. Aggregations must stay index-served COUNT/GROUP queries plus capped log/tail walks."
+    },
+    "pmtiles_verify": {
+        "max_s": 30,
+        "why": "cliff gate: observed <0.01s local on the 2 MiB fixture. Guards the entry/dir caps (DIR_INFLATED_MAX, ENTRIES_MAX) against blowup on hostile files."
+    },
+    "installer_min_build": {
+        "max_s": 30,
+        "why": "cliff gate: observed ~0.05s local including PHP startup. The tokenizer pass is linear; 30s catches pathological backtracking in the quote-aware strip."
+    }
+}

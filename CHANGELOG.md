@@ -71,6 +71,13 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   depth, zones, pool staleness) and backup freshness. Every source is
   fail-soft on its own; `?format=json` (owner + CSRF token) serves the same
   payload for external monitoring.
+- Benchmark harness (`tools/bench.php`, `Benchmarks (cliff gate)` CI job):
+  seeds 10k marker rows plus 5 MiB of photos and times the core six hot
+  paths — backup create/verify/restore, diagnostics aggregation, pmtiles
+  verify, installer min-build — against `tests/bench-budgets.json`. The
+  budgets are generous cliff gates (~100x observed, rationale documented
+  per scenario), so shared-runner noise never fails the build; the JSON +
+  console report uploads as an artifact for trend reading.
 
 ### Changed
 - Web installer (`tools/install.php`) needs less from the host: the
