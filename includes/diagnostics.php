@@ -181,10 +181,14 @@ function diagnostics_logs(): array {
         ];
     }
     // Chain tip: the newest entry's seq anchors "how much log exists".
+    // log_recent_entries() returns ['total'=>…,'entries'=>[…]] — the tuple
+    // shape, not a bare list (a past revision read $recent[0] and the tip
+    // silently stayed null).
     $tip = null;
     $recent = log_recent_entries(1);
-    if (isset($recent[0]) && is_array($recent[0])) {
-        $tip = ['seq' => $recent[0]['seq'] ?? null, 'ts' => $recent[0]['ts'] ?? null];
+    $newest = $recent['entries'][0] ?? null;
+    if (is_array($newest)) {
+        $tip = ['seq' => $newest['seq'] ?? null, 'ts' => $newest['ts'] ?? null];
     }
     $checkpoint = null;
     try {
@@ -222,10 +226,14 @@ function diagnostics_traffic(): array {
     }
     // App-log histogram over the capped tail: labeled by sample size so a
     // busy host's "last 500 lines" is never mistaken for a full day.
+    // log_tail_lines() returns [lines oldest-first, cut] — iterate the lines,
+    // not the tuple (a past revision decoded the tuple itself and the
+    // histogram silently stayed empty).
     $levels = [];
     $events = [];
     $sampled = 0;
-    foreach (log_tail_lines(APP_LOG_PATH, 262144, DIAGNOSTICS_LOG_TAIL_LINES) as $line) {
+    [$tailLines] = log_tail_lines(APP_LOG_PATH, 262144, DIAGNOSTICS_LOG_TAIL_LINES);
+    foreach ($tailLines as $line) {
         $dec = json_decode($line, true);
         if (!is_array($dec)) {
             continue;

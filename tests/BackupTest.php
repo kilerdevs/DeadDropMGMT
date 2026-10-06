@@ -72,6 +72,16 @@ T::eq('garbage is not a backup', false, (backup_verify($tmpRoot . '/uploads/7/aa
 // ── Manifest strictness ────────────────────────────────────────────────────
 $good = $ver['manifest'];
 $wrongVer = $good;
+// Second-engine bundle, built now while the marker still reads 'before': the
+// JSON bundle must build, verify and restore even when zip is the active
+// engine (and vice versa) — one engine's lines must never go dark just
+// because the host prefers the other.
+$jsonManifest = $good;
+$jsonManifest['format'] = 'json';
+$useGz = extension_loaded('zlib');
+$jsonManifest['encoding'] = $useGz ? 'gzip' : 'raw';
+$jsonPath = $tmpRoot . '/explicit.' . ($useGz ? 'json.gz' : 'json');
+T::eq('explicit JSON bundle builds', true, backup_write_json_bundle($jsonPath, $db, $jsonManifest, $useGz, $tmpRoot));
 $wrongVer['backup'] = 999;
 T::eq('wrong version rejected', null, backup_manifest_parse($wrongVer));
 $dropTable = $good;
@@ -118,6 +128,215 @@ $badRestore = backup_restore($db, $tampered, $good, $tmpRoot);
 T::eq('tampered restore refused', false, $badRestore['ok'] ?? true);
 T::eq('live data untouched by refusal', 'after', get_setting('backup_test_marker', ''));
 @unlink($tampered);
+
+// ── Second engine round-trip: the JSON bundle must build, verify and
+// restore even when zip is the active engine (and vice versa) — one
+// engine's lines must never go dark just because the host prefers the other.
+$verJson = backup_verify($jsonPath);
+T::eq('explicit JSON bundle verifies', true, $verJson['ok'] ?? false);
+set_setting('backup_test_marker', 'after');
+$restJson = backup_restore($db, $jsonPath, $verJson['manifest'], $tmpRoot);
+T::eq('explicit JSON bundle restores', true, $restJson['ok'] ?? false);
+T::eq('marker rewound via JSON restore', 'before', get_setting('backup_test_marker', ''));
+
+// ── Dispatch and shape edges ─────────────────────────────────────────────
+T::eq('missing file is invalid', 'invalid', (backup_verify($tmpRoot . '/nope.bin')['code'] ?? ''));
+T::eq('unopenable zip is invalid', 'invalid', (backup_verify_zip($tmpRoot . '/uploads/7/aaa.enc')['code'] ?? ''));
+T::eq('wrong table set refuses', false, backup_database_matches('{"users":[]}', $good));
+$drift = [];
+foreach (BACKUP_TABLES as $t) {
+    $drift[$t] = [];
+}
+$drift['users'][] = ['id' => 1];
+T::eq('row count drift refuses', false, backup_database_matches((string)json_encode($drift), $good));
+T::eq('malformed db refuses', false, backup_database_matches('[1,2', $good));
+$nonRows = [];
+foreach (BACKUP_TABLES as $t) {
+    $n = (int)($good['db'][$t] ?? 0);
+    $nonRows[$t] = $n > 0 ? array_fill(0, $n, 7) : [];
+}
+T::eq('non-row entries refuse', false, backup_database_matches((string)json_encode($nonRows), $good));
+T::eq('non-array manifest rejected', null, backup_manifest_parse('x'));
+$emptyField = $good;
+$emptyField['created_utc'] = '';
+T::eq('empty manifest field rejected', null, backup_manifest_parse($emptyField));
+$badFormat = $good;
+$badFormat['format'] = 'tar';
+T::eq('unknown format rejected', null, backup_manifest_parse($badFormat));
+$negCount = $good;
+$negCount['db']['users'] = -1;
+T::eq('negative count rejected', null, backup_manifest_parse($negCount));
+
+// ── Scan edges: missing tree, directories, dotfiles, debris ────────────────
+T::eq('missing uploads tree scans empty', [], backup_photo_files($tmpRoot . '/no-such-root-xyz'));
+@mkdir($tmpRoot . '/uploads/emptydir', 0775, true);
+@mkdir($tmpRoot . '/uploads/.hidedir', 0775, true);
+file_put_contents($tmpRoot . '/uploads/.hidedir/x.enc', 'hidden');
+$scan = backup_photo_files($tmpRoot);
+T::ok('dirs and dotfiles never payload', count($scan) === 2 && !isset($scan['uploads/.hidedir/x.enc']));
+@unlink($tmpRoot . '/uploads/.hidedir/x.enc');
+@rmdir($tmpRoot . '/uploads/.hidedir');
+@rmdir($tmpRoot . '/uploads/emptydir');
+file_put_contents(backup_dir() . '/backup-debris.tmp', 'x');
+T::ok('staging debris never lists', !in_array('backup-debris.tmp', array_column(backup_list(), 'name'), true));
+@unlink(backup_dir() . '/backup-debris.tmp');
+T::eq('db json to a bad path fails', false, backup_write_database_json($db, $tmpRoot . '/no-dir-xyz/x.json'));
+file_put_contents($tmpRoot . '/empty.bin', '');
+T::eq('empty file is invalid', 'invalid', (backup_verify($tmpRoot . '/empty.bin')['code'] ?? ''));
+file_put_contents($tmpRoot . '/badgz.bin', "\x1f\x8bgarbage-garbage");
+T::eq('broken gzip is invalid', 'invalid', (backup_verify($tmpRoot . '/badgz.bin')['code'] ?? ''));
+
+// ── Crafted JSON documents: every shape guard ───────────────────────────────
+$tmpDb2 = $tmpRoot . '/db2.json';
+backup_write_database_json($db, $tmpDb2);
+$dbPayload = json_decode((string)@file_get_contents($tmpDb2), true);
+@unlink($tmpDb2);
+$photosPayload = [];
+foreach (array_keys($jsonManifest['files']) as $rel) {
+    $photosPayload[$rel] = base64_encode((string)@file_get_contents($tmpRoot . '/' . $rel));
+}
+$mkDoc = static fn(array $m, mixed $d, mixed $p, string $f): string => (function () use ($m, $d, $p, $f): string {
+    file_put_contents($f, json_encode(['manifest' => $m, 'db' => $d, 'photos' => $p]));
+    return $f;
+})();
+$mkDoc = static function (array $m, mixed $d, mixed $p, string $f): string {
+    file_put_contents($f, (string)json_encode(['manifest' => $m, 'db' => $d, 'photos' => $p]));
+    return $f;
+};
+T::eq('doc without keys is invalid', 'invalid', (backup_verify($mkDoc([], $dbPayload, $photosPayload, $tmpRoot . '/c1.json'))['code'] ?? ''));
+$zipFmt = $jsonManifest;
+$zipFmt['format'] = 'zip';
+$zipFmt['encoding'] = 'zip';
+T::eq('zip manifest in a json doc is invalid', 'invalid', (backup_verify($mkDoc($zipFmt, $dbPayload, $photosPayload, $tmpRoot . '/c2.json'))['code'] ?? ''));
+$dropDb = $dbPayload;
+unset($dropDb['settings']);
+T::eq('dropped table doc is invalid', 'invalid', (backup_verify($mkDoc($jsonManifest, $dropDb, $photosPayload, $tmpRoot . '/c3.json'))['code'] ?? ''));
+T::eq('string photos doc is invalid', 'invalid', (backup_verify($mkDoc($jsonManifest, $dbPayload, 'x', $tmpRoot . '/c4.json'))['code'] ?? ''));
+$missingPhoto = $photosPayload;
+unset($missingPhoto['uploads/7/aaa.enc']);
+T::eq('missing photo doc is invalid', 'invalid', (backup_verify($mkDoc($jsonManifest, $dbPayload, $missingPhoto, $tmpRoot . '/c5.json'))['code'] ?? ''));
+$badB64 = $photosPayload;
+$badB64['uploads/7/aaa.enc'] = '!!!not-base64!!!';
+T::eq('bad base64 doc is invalid', 'invalid', (backup_verify($mkDoc($jsonManifest, $dbPayload, $badB64, $tmpRoot . '/c6.json'))['code'] ?? ''));
+$wrongBytes = $photosPayload;
+$wrongBytes['uploads/7/aaa.enc'] = base64_encode('wrong-bytes');
+T::eq('wrong photo bytes doc is invalid', 'invalid', (backup_verify($mkDoc($jsonManifest, $dbPayload, $wrongBytes, $tmpRoot . '/c7.json'))['code'] ?? ''));
+$misDoc = $mkDoc($jsonManifest, $dropDb, $photosPayload, $tmpRoot . '/c8.json');
+$misRestore = backup_restore($db, $misDoc, $jsonManifest, $tmpRoot);
+T::eq('count drift restores nothing', 'invalid', $misRestore['code'] ?? '');
+T::eq('live data untouched by drift refusal', 'before', get_setting('backup_test_marker', ''));
+// A boolean inside a restored row takes the PARAM_INT branch, never a crash.
+// Restored twice: the boolean bundle proves the branch, the pristine bundle
+// rewinds the coerced value so later suites inherit sane settings.
+$boolRaw = (string)@file_get_contents($jsonPath);
+if ($useGz && str_starts_with($boolRaw, "\x1f\x8b")) {
+    $boolRaw = (string)@gzdecode($boolRaw);
+}
+$boolDoc = json_decode($boolRaw, true);
+$boolSettings = (is_array($boolDoc) ? $boolDoc['db']['settings'] : null) ?? null;
+if (is_array($boolDoc) && is_array($boolSettings) && $boolSettings !== []) {
+    $boolDoc['db']['settings'][0]['value'] = true;
+    file_put_contents($tmpRoot . '/c9.json', (string)json_encode($boolDoc));
+    set_setting('backup_test_marker', 'after');
+    $boolRestore = backup_restore($db, $tmpRoot . '/c9.json', $boolDoc['manifest'], $tmpRoot);
+    T::eq('boolean row restores', true, $boolRestore['ok'] ?? false);
+    $rewind = backup_restore($db, $jsonPath, $verJson['manifest'], $tmpRoot);
+    T::eq('pristine bundle rewinds the coercion', true, $rewind['ok'] ?? false);
+    T::eq('marker rewound via boolean restore', 'before', get_setting('backup_test_marker', ''));
+    @unlink($tmpRoot . '/c9.json');
+    @unlink($jsonPath);
+} else {
+    T::ok('boolean fixture has a settings row', false);
+    @unlink($jsonPath);
+}
+foreach (['c1.json', 'c2.json', 'c3.json', 'c4.json', 'c5.json', 'c6.json', 'c7.json', 'c8.json', 'c9.json', 'empty.bin', 'badgz.bin'] as $junk) {
+    @unlink($tmpRoot . '/' . $junk);
+}
+// The JSON writer refuses an unwritable destination.
+T::eq('json bundle to a bad path fails', false, backup_write_json_bundle($tmpRoot . '/no-dir-xyz/x.json', $db, $jsonManifest, $useGz, $tmpRoot));
+
+// ── Crafted zips: every structural guard (ZipArchive hosts only) ────────────
+if (backup_zip_supported()) {
+    $zm = $jsonManifest;
+    $zm['format'] = 'zip';
+    $zm['encoding'] = 'zip';
+    $tmpDbZ = $tmpRoot . '/dbz.json';
+    backup_write_database_json($db, $tmpDbZ);
+    $mkZip = static function (string $f, array $entries): string {
+        $z = new ZipArchive();
+        $z->open($f, ZipArchive::CREATE | ZipArchive::OVERWRITE);
+        foreach ($entries as $name => $content) {
+            $z->addFromString($name, $content);
+        }
+        $z->close();
+        return $f;
+    };
+    T::eq('zip without manifest is invalid', 'invalid', (backup_verify($mkZip($tmpRoot . '/z1.zip', ['x.txt' => 'x']))['code'] ?? ''));
+    T::eq('zip with a json manifest is invalid', 'invalid', (backup_verify($mkZip($tmpRoot . '/z2.zip', ['manifest.json' => (string)json_encode($jsonManifest)]))['code'] ?? ''));
+    T::eq('zip without database is invalid', 'invalid', (backup_verify($mkZip($tmpRoot . '/z3.zip', [
+        'manifest.json' => (string)json_encode($zm),
+        'uploads/7/aaa.enc' => 'x',
+    ]))['code'] ?? ''));
+    $dbJsonZ = (string)@file_get_contents($tmpDbZ);
+    T::eq('zip with a missing photo is invalid', 'invalid', (backup_verify($mkZip($tmpRoot . '/z4.zip', [
+        'manifest.json' => (string)json_encode($zm),
+        'database.json' => $dbJsonZ,
+        'uploads/7/aaa.enc' => (string)@file_get_contents($tmpRoot . '/uploads/7/aaa.enc'),
+    ]))['code'] ?? ''));
+    T::eq('zip with altered photo bytes is invalid', 'invalid', (backup_verify($mkZip($tmpRoot . '/z5.zip', [
+        'manifest.json' => (string)json_encode($zm),
+        'database.json' => $dbJsonZ,
+        'uploads/7/aaa.enc' => 'WRONG-BYTES',
+        'uploads/9-bbb.enc' => (string)@file_get_contents($tmpRoot . '/uploads/9-bbb.enc'),
+    ]))['code'] ?? ''));
+    file_put_contents($tmpRoot . '/pkjunk.bin', "PK\x03\x04" . 'junk-junk-junk');
+    T::eq('unopenable zip verifies nothing', 'invalid', (backup_verify($tmpRoot . '/pkjunk.bin')['code'] ?? ''));
+    $wstage = $tmpRoot . '/wstage';
+    @mkdir($wstage, 0775, true);
+    T::eq('unopenable zip stages nothing', false, backup_stage_files($tmpRoot . '/pkjunk.bin', $zm, $wstage));
+    T::eq('unopenable zip reads no rows', null, backup_read_payload_rows($tmpRoot . '/pkjunk.bin', $zm));
+    // A zip missing a manifest photo stages nothing (fail-closed at stage).
+    T::eq('zip with a missing photo stages nothing', false, backup_stage_files($tmpRoot . '/z4.zip', $zm, $wstage));
+    // A zip with altered photo bytes fails the stage checksum.
+    $z5b = $mkZip($tmpRoot . '/z5b.zip', [
+        'manifest.json' => (string)json_encode($zm),
+        'database.json' => $dbJsonZ,
+        'uploads/7/aaa.enc' => 'WRONG-BYTES',
+        'uploads/9-bbb.enc' => (string)@file_get_contents($tmpRoot . '/uploads/9-bbb.enc'),
+    ]);
+    T::eq('zip with altered bytes stages nothing', false, backup_stage_files($z5b, $zm, $wstage));
+    // A zip whose database drifts from the manifest reads no rows.
+    $driftDb = json_decode($dbJsonZ, true);
+    if (is_array($driftDb)) {
+        $driftDb['settings'] = [];
+        $z7 = $mkZip($tmpRoot . '/z7.zip', [
+            'manifest.json' => (string)json_encode($zm),
+            'database.json' => (string)json_encode($driftDb),
+            'uploads/7/aaa.enc' => (string)@file_get_contents($tmpRoot . '/uploads/7/aaa.enc'),
+            'uploads/9-bbb.enc' => (string)@file_get_contents($tmpRoot . '/uploads/9-bbb.enc'),
+        ]);
+        T::eq('zip with drifted database reads no rows', null, backup_read_payload_rows($z7, $zm));
+    } else {
+        T::ok('drift fixture decodes', false);
+    }
+    // z4 stages its one present photo before refusing the missing one, so
+    // the stage dir may be non-empty — sweep it fully.
+    if (is_dir($wstage)) {
+        $sweep = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($wstage, FilesystemIterator::SKIP_DOTS),
+            RecursiveIteratorIterator::CHILD_FIRST
+        );
+        foreach ($sweep as $f) {
+            /** @var SplFileInfo $f */
+            $f->isDir() ? @rmdir($f->getPathname()) : @unlink($f->getPathname());
+        }
+        @rmdir($wstage);
+    }
+    @unlink($tmpDbZ);
+    foreach (['z1.zip', 'z2.zip', 'z3.zip', 'z4.zip', 'z5.zip', 'z5b.zip', 'z7.zip', 'pkjunk.bin'] as $junk) {
+        @unlink($tmpRoot . '/' . $junk);
+    }
+}
 
 // ── Zip path (CI has ZipArchive; this box does not) ────────────────────────
 if (backup_zip_supported()) {
