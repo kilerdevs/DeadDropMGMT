@@ -1,9 +1,9 @@
 <?php
 // Photo serving endpoint for encrypted photos at rest
 declare(strict_types=1);
-require_once dirname(__DIR__) . '/config.php';
-require_once dirname(__DIR__) . '/includes/crypto.php';
-require_once dirname(__DIR__) . '/includes/auth.php';
+require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/includes/crypto.php';
+require_once __DIR__ . '/includes/auth.php';
 
 // Must be logged in (admin or recipient with valid token)
 start_secure_session();
@@ -16,7 +16,7 @@ if ($rel === '' || !preg_match('#^\d+/[0-9a-f]+\.(jpg|jpeg|png|webp|gif)$#i', $r
     exit('Invalid file parameter');
 }
 
-$base = dirname(__DIR__) . '/uploads/';
+$base = __DIR__ . '/uploads/';
 $path = $base . ($thumb ? photo_thumb_rel($rel) : $rel);
 
 if (!is_file($path)) {

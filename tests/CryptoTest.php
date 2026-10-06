@@ -333,7 +333,7 @@ if (function_exists('imagecreatetruecolor')) {
     imagesavealpha($alpha, true);
     imagefill($alpha, 0, 0, imagecolorallocatealpha($alpha, 0, 0, 0, 127));
     imagepng($alpha, $ptd . '/alpha.png');
-    imagedestroy($alpha);
+    $alpha = null; // PHP 8.5 deprecates imagedestroy(); GC frees the GdImage
     T::ok('alpha PNG downscales with transparency intact',
         _compress_image($ptd . '/alpha.png', $ptd . '/alpha.out.png', 'image/png', 12582912)
         && getimagesize($ptd . '/alpha.out.png')[0] === 2560);

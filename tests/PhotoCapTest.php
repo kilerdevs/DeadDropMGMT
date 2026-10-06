@@ -195,7 +195,15 @@ T::ok('order created', $oid > 0);
 if ($oid > 0) {
     $rows = (int)$db->query("SELECT COUNT(*) FROM order_photos WHERE order_id = $oid")->fetchColumn();
     T::eq('twelve uploads leave exactly ten photo rows', 10, $rows);
-    foreach ($db->query("SELECT filename FROM order_photos WHERE order_id = $oid")->fetchAll(PDO::FETCH_COLUMN) as $fn) {
+    $fns = $db->query("SELECT filename FROM order_photos WHERE order_id = $oid")->fetchAll(PDO::FETCH_COLUMN);
+    if ($fns !== []) {
+        // The serving endpoint must boot and decrypt: a wrong base path here
+        // once fataled every photo and thumbnail view.
+        [$pst, $pbody] = _pc('GET', $B . '/photo.php?file=' . urlencode((string)$fns[0]), null, $ck);
+        T::eq('photo endpoint serves the upload', 200, $pst);
+        T::ok('served bytes are the image, not the envelope', str_starts_with($pbody, "\xFF\xD8"));
+    }
+    foreach ($fns as $fn) {
         @unlink($root . '/uploads/' . $fn);
     }
     @rmdir($root . '/uploads/' . $oid);
