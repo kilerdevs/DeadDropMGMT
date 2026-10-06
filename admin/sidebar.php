@@ -24,6 +24,7 @@ $_lang_csrf = generate_csrf();
         <a class="nav-item <?= $_active === 'audit'     ? 'active' : '' ?>" href="/admin/audit_log.php"><?= t('admin.sidebar.audit_log') ?></a>
         <a class="nav-item <?= $_active === 'settings'  ? 'active' : '' ?>" href="/admin/settings.php"><?= t('admin.sidebar.settings') ?></a>
         <a class="nav-item <?= $_active === 'backups'   ? 'active' : '' ?>" href="/admin/backups.php"><?= t('admin.sidebar.backups') ?></a>
+        <a class="nav-item <?= $_active === 'diagnostics' ? 'active' : '' ?>" href="/admin/diagnostics.php"><?= t('admin.sidebar.diagnostics') ?></a>
         <a class="nav-item <?= $_active === 'setup_check' ? 'active' : '' ?>" href="/admin/setup_check.php"><?= t('admin.sidebar.setup_check') ?></a>
         <a class="nav-item <?= $_active === 'hosting_doctor' ? 'active' : '' ?>" href="/admin/hosting_doctor.php"><?= t('admin.sidebar.doctor') ?></a>
         <?php endif; ?>

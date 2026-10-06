@@ -61,7 +61,16 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   unreadable until the original key is back) and crc32s `config.php` for
   host-move diagnosis — neither leaks key material. `backups/` stays
   web-denied; bundles leave the host through the owner download or plain
-  FTP (WinSCP/FTPS walkthrough in `docs/TROUBLESHOOTING.md`).
+   FTP (WinSCP/FTPS walkthrough in `docs/TROUBLESHOOTING.md`).
+- Owner diagnostics (`admin/diagnostics.php`, linked in the sidebar):
+  seven read-only sections aggregated live — system (PHP/DB/disk), job
+  heartbeats (cleanup, maps steward, proxy heal, worker lock), log health
+  (sizes, chain tip and checkpoint age; continuity verification stays a
+  manual click in Settings), 24h traffic (order events plus app-log level
+  histogram), security (live rate-limit pressure, audit mix), data (queue
+  depth, zones, pool staleness) and backup freshness. Every source is
+  fail-soft on its own; `?format=json` (owner + CSRF token) serves the same
+  payload for external monitoring.
 
 ### Changed
 - Web installer (`tools/install.php`) needs less from the host: the

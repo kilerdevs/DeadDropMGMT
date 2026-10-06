@@ -44,6 +44,7 @@ foreach ([
     'pmtiles',
     'maps',
     'backup',
+    'diagnostics',
     'cleanup',
     'wipe',
     'version',

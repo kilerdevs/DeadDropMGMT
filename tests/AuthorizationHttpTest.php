@@ -412,6 +412,23 @@ T::ok('owner deletes the backup over HTTP', !is_file(dirname(__DIR__) . '/backup
 delete_setting('backup_http_marker');
 $db->exec("DELETE FROM audit_log WHERE action IN ('backup_create', 'backup_restore', 'backup_delete')");
 
+// ── Diagnostics gates ─────────────────────────────────────────────────────
+[$stDg] = _az('GET', "$B/admin/diagnostics.php", null, $ck);
+T::eq('courier bounced from diagnostics.php', 302, $stDg);
+[$stDgAnon,,, $locDgAnon] = _az('GET', "$B/admin/diagnostics.php", null, '');
+T::ok('anonymous bounced from diagnostics.php', $stDgAnon === 302 && str_contains($locDgAnon, 'index.php'));
+[$stDgOwner, $bDgOwner] = _az('GET', "$B/admin/diagnostics.php", null, $ckS2);
+T::ok('owner renders all seven sections', $stDgOwner === 200
+    && substr_count($bDgOwner, '<h2>') === 7
+    && str_contains($bDgOwner, 'diagnostics.php?format=json'));
+[$stDgJson, $bDgJson] = _az('GET', "$B/admin/diagnostics.php?format=json", null, $ckS2);
+T::ok('JSON mode needs its token', $stDgJson === 403 && str_contains($bDgJson, 'invalid_csrf'));
+[$stDgJsonOk, $bDgJsonOk] = _az('GET', "$B/admin/diagnostics.php?format=json&csrf_token=" . rawurlencode($liveCsrf()), null, $ckS2);
+$dj = json_decode($bDgJsonOk, true);
+T::ok('JSON mode serves the snapshot', $stDgJsonOk === 200 && is_array($dj)
+    && isset($dj['generated_at'])
+    && count(array_intersect_key($dj, array_flip(['system', 'jobs', 'logs', 'traffic', 'security', 'data', 'backups']))) === 7);
+
 // ── Cleanup ──────────────────────────────────────────────────────────────────
 purge_orders_like($db, 'ahtoken');
 $db->prepare('DELETE FROM users WHERE id IN (?, ?, ?)')->execute([$ownerId, $courierA, $courierB]);
