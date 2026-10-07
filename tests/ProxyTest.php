@@ -154,4 +154,26 @@ T::eq('missing cache dir is a no-op', 0, osm_tile_cache_prune($tc . '/nope'));
 foreach (glob("$tc/3/1/*") ?: [] as $f) { @unlink($f); }
 @rmdir("$tc/3/1"); @rmdir("$tc/3"); @rmdir($tc);
 
+// SOCKS builders are total: over-long inputs clamp to honest framing
+// instead of throwing ValueError on some builds (chr()/pack() of an
+// out-of-range length) or wrapping it silently on others. A 300-byte
+// credential cannot authenticate either way — it fails at auth/connect,
+// never as a fatal in the proxy path.
+$longUser = str_repeat('u', 300);
+T::eq('socks5 auth clamps over-long credentials honestly',
+    "\x01" . chr(255) . str_repeat('u', 255) . chr(1) . 'p',
+    proxy_socks5_auth($longUser, 'p'));
+T::eq('socks5 connect clamps an over-long domain',
+    "\x05\x01\x00\x03" . chr(255) . str_repeat('h', 255) . pack('n', 80),
+    proxy_socks5_connect(str_repeat('h', 300), 80));
+T::eq('socks5 connect folds an over-wide port like tolerant pack()',
+    "\x05\x01\x00\x03" . chr(3) . 'hst' . pack('n', 70000 & 0xFFFF),
+    proxy_socks5_connect('hst', 70000));
+T::eq('socks4 keeps literal IPv4 inline',
+    "\x04\x01" . pack('n', 80) . inet_pton('1.2.3.4') . "u\x00",
+    proxy_socks4_connect('1.2.3.4', 80, 'u'));
+T::eq('socks4 routes NUL hosts to the 4a hostname form',
+    "\x04\x01" . pack('n', 80) . "\x00\x00\x00\xff" . "u\x00" . "1.2.3\0.4" . "\x00",
+    proxy_socks4_connect("1.2.3\0.4", 80, 'u'));
+
 exit(T::done());

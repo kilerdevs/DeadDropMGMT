@@ -727,6 +727,13 @@ function _rl_parse_window_start(string $v): int|false {
 // per-address budgets were free to rotate; IPv4 and v4-mapped stay exact.
 function rl_client_subject(): string {
     $ip = get_client_ip();
+    // NUL bytes never appear in a valid IP (see _cidr_valid in net.php):
+    // skip the parse and stay on the literal subject. On some builds
+    // inet_pton() throws ValueError on them instead of answering false,
+    // which would 500 every rate-limited request on a hostile header.
+    if (str_contains($ip, "\0")) {
+        return $ip;
+    }
     $bin = @inet_pton($ip);
     if ($bin === false || strlen($bin) !== 16 || str_starts_with($bin, str_repeat("\0", 10) . "\xff\xff")) {
         return $ip;

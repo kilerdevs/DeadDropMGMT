@@ -40,6 +40,13 @@ $fzTry = static function (callable $fn): array {
     }
 };
 
+/** Opaque-throw label carrying the sanitized exception identity: a bare
+ * 'throw' once cost a full CI round-trip to diagnose a platform-divergent
+ * chr()/pack()/inet_pton(). */
+$fzThrow = static function (string $where, mixed $detail): string {
+    return $where . ' throw(' . preg_replace('/[^\x20-\x7E]/', '?', (string)$detail) . ')';
+};
+
 $fzBytes = static function (int $n, string $alphabet = ''): string {
     if ($alphabet === '') {
         $s = '';
@@ -203,7 +210,7 @@ $fzAssert = static function (string $name, array $bad) use (&$fzCases): void {
         }
         [$ok, $r] = $GLOBALS['fzTry'](static fn() => proxy_head_split($head));
         if (!$ok) {
-            $bad[] = 'throw';
+            $bad[] = $GLOBALS['fzThrow']('head-split', $r);
             continue;
         }
         $has = str_contains($head, "\r\n\r\n");
@@ -232,7 +239,7 @@ $fzAssert = static function (string $name, array $bad) use (&$fzCases): void {
         $head = implode("\r\n", $lines);
         [$ok, $f] = $GLOBALS['fzTry'](static fn() => proxy_head_fields($head));
         if (!$ok || !is_array($f)) {
-            $bad[] = 'throw';
+            $bad[] = $GLOBALS['fzThrow']('head-fields', $f);
             continue;
         }
         foreach ($f as $k => $v) {
@@ -260,7 +267,7 @@ $fzAssert = static function (string $name, array $bad) use (&$fzCases): void {
         }
         [$ok, $r] = $GLOBALS['fzTry'](static fn() => proxy_resolve_url($GLOBALS['fzPick']($bases), $loc));
         if (!$ok) {
-            $bad[] = 'throw';
+            $bad[] = $GLOBALS['fzThrow']('resolve-url', $r);
             continue;
         }
         if ($r !== null && preg_match('#^[a-zA-Z][a-zA-Z0-9+.-]*://#', $r) !== 1) {
@@ -523,7 +530,10 @@ $fzAssert = static function (string $name, array $bad) use (&$fzCases): void {
         [$okV, $v] = $GLOBALS['fzTry'](static fn() => _cidr_valid($cidr));
         [$okM, $m] = $GLOBALS['fzTry'](static fn() => _ip_in_cidr($ip, $cidr));
         if (!$okV || !$okM) {
-            $bad[] = 'throw';
+            // Record WHICH side threw and its exception identity (sanitized):
+            // a bare 'throw' label once cost a full CI round-trip to diagnose.
+            $detail = (!$okV ? "valid($v)" : "match($m)");
+            $bad[] = 'throw ' . preg_replace('/[^\x20-\x7E]/', '?', (string)$detail);
             continue;
         }
         // _cidr_valid must agree with "parses as IP[/bits]" (reference:
@@ -596,7 +606,7 @@ $fzAssert = static function (string $name, array $bad) use (&$fzCases): void {
         }
         [$ok, $h] = $GLOBALS['fzTry'](static fn() => pmtiles_parse_header($b));
         if (!$ok) {
-            $bad[] = 'throw';
+            $bad[] = $GLOBALS['fzThrow']('pmtiles-header', $h);
             continue;
         }
         if ($h === null) {
@@ -651,7 +661,7 @@ $fzAssert = static function (string $name, array $bad) use (&$fzCases): void {
         }
         [$ok, $d] = $GLOBALS['fzTry'](static fn() => pmtiles_parse_dir($raw, $comp));
         if (!$ok) {
-            $bad[] = 'throw';
+            $bad[] = $GLOBALS['fzThrow']('pmtiles-dir', $d);
             continue;
         }
         if ($d === null) {
@@ -780,14 +790,16 @@ $fzAssert = static function (string $name, array $bad) use (&$fzCases): void {
         $user = $GLOBALS['fzBytes'](mt_rand(0, 300));
         $pass = $GLOBALS['fzBytes'](mt_rand(0, 300));
         foreach ([
-            static fn() => proxy_socks5_greet($user),
-            static fn() => proxy_socks5_auth($user, $pass),
-            static fn() => proxy_socks5_connect($host, mt_rand(0, 70000)),
-            static fn() => proxy_socks4_connect($host, mt_rand(0, 70000), $user),
-        ] as $fn) {
-            [$ok] = $GLOBALS['fzTry']($fn);
+            'greet' => static fn() => proxy_socks5_greet($user),
+            'auth' => static fn() => proxy_socks5_auth($user, $pass),
+            'connect5' => static fn() => proxy_socks5_connect($host, mt_rand(0, 70000)),
+            'connect4' => static fn() => proxy_socks4_connect($host, mt_rand(0, 70000), $user),
+        ] as $name => $fn) {
+            [$ok, $detail] = $GLOBALS['fzTry']($fn);
             if (!$ok) {
-                $bad[] = 'socks builder throw';
+                // Name the builder and the exception: an opaque 'throw'
+                // once hid a platform-divergent chr()/pack()/inet_pton().
+                $bad[] = 'socks ' . $name . ' throw(' . preg_replace('/[^\x20-\x7E]/', '?', (string)$detail) . ')';
             }
         }
         [$ok, $h] = $GLOBALS['fzTry'](static fn() => proxy_basic_auth($user, $pass));

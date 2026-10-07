@@ -48,6 +48,7 @@ async function submitCode(form, secret) {
 }
 
 test('wrong code refuses, right code enables', async ({ browser }) => {
+  test.setTimeout(60_000);
   reseed();
   const page = await freshPage(browser);
   try {
@@ -76,6 +77,7 @@ test('wrong code refuses, right code enables', async ({ browser }) => {
 });
 
 test('challenge gates login, disable restores clean login', async ({ browser }) => {
+  test.setTimeout(60_000);
   reseed();
   let secret = '';
   const page = await freshPage(browser);

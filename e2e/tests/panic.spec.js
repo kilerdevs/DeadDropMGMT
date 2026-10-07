@@ -1,8 +1,17 @@
 // Panic wipe through the real three-step flow: counts previewed, wipe
 // executed, session destroyed, backups directory emptied. This wipes the
-// SHARED e2e database, so the file reseeds first (the wipe then destroys
-// real seeded rows, never an already-empty database) and last (later files
-// get fixtures, and the final login proves the app works post-wipe).
+// SHARED e2e database, so each test reseeds first (the wipe then destroys
+// real seeded rows, never an already-empty database) and the file reseeds
+// last (later files get fixtures, and the final login proves the app works
+// post-wipe). Each test owns its wipe end to end: CI retries a failed test
+// at the END of the suite, after other files reseeded — asserting on a
+// wipe performed by an earlier test would be order-fragile by construction.
+//
+// Budgets are generous on purpose: the wipe synchronously overwrites every
+// backup bundle, log and photo (the server arms set_time_limit(0) for
+// exactly this), which took ~40 s on a loaded CI runner holding php -S's
+// single thread. A 30 s default budget would kill the test while the
+// server keeps wiping with ignore_user_abort — orphan state underfoot.
 const { test, expect } = require('@playwright/test');
 const { freshPage, closePage, reseed } = require('../helpers');
 
@@ -22,29 +31,38 @@ function stepForm(page, step) {
   });
 }
 
+// Walk all three steps; resolve when the done report renders. Asserts the
+// preview counts real seeded rows (orders ≥ 5 after the re-seed), so the
+// wipe below proves something, and that no file failed (a partial wipe
+// renders .panic-report-failed — success must not be assumed from the
+// report alone).
+async function walkWipe(page) {
+  await page.goto('/admin/panic.php');
+  await expect(stepForm(page, 1)).toBeVisible();
+  await stepForm(page, 1).locator('button[type="submit"]').click();
+
+  await expect(stepForm(page, 2)).toBeVisible();
+  await stepForm(page, 2).locator('button[type="submit"]').click();
+
+  await expect(page.locator('.panic-counts')).toBeVisible();
+  const orders = parseInt(await page.locator('.panic-counts-row span').first().textContent(), 10);
+  expect(orders).toBeGreaterThanOrEqual(5);
+  await stepForm(page, 3).locator('button[type="submit"]').click();
+
+  await expect(page.locator('.panic-report')).toBeVisible({ timeout: 120_000 });
+  expect(await page.locator('.panic-report-failed').count()).toBe(0);
+}
+
 test('wipe walks all three steps and logs out', async ({ browser }) => {
+  test.setTimeout(180_000);
   reseed();
   const page = await freshPage(browser);
   try {
     await login(page);
-    await page.goto('/admin/panic.php');
+    await walkWipe(page);
 
-    await expect(stepForm(page, 1)).toBeVisible();
-    await stepForm(page, 1).locator('button[type="submit"]').click();
-
-    await expect(stepForm(page, 2)).toBeVisible();
-    await stepForm(page, 2).locator('button[type="submit"]').click();
-
-    // Step 3 previews what is about to die: the counts must be real seeded
-    // rows (orders ≥ 5 after the re-seed), or the wipe below proves nothing.
-    await expect(page.locator('.panic-counts')).toBeVisible();
-    const orders = parseInt(await page.locator('.panic-counts-row span').first().textContent(), 10);
-    expect(orders).toBeGreaterThanOrEqual(5);
-    await stepForm(page, 3).locator('button[type="submit"]').click();
-
-    // Done report with per-table counts, and the session is dead: the
-    // relogin button lands on the login form, not back inside.
-    await expect(page.locator('.panic-report')).toBeVisible();
+    // The session is dead: the relogin button lands on the login form,
+    // not back inside.
     await page.locator('a[href="/admin/index.php"]').click();
     await expect(page.locator('form[action="/admin/login.php"]')).toBeVisible();
   } finally {
@@ -53,8 +71,13 @@ test('wipe walks all three steps and logs out', async ({ browser }) => {
 });
 
 test('wiped lists stay empty, then fixtures come back', async ({ browser }) => {
+  test.setTimeout(180_000);
+  reseed();
   const page = await freshPage(browser);
   try {
+    await login(page);
+    await walkWipe(page);
+
     // Users survive the wipe, so login still works — but every evidence
     // table and the backups directory are empty.
     await login(page);

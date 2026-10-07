@@ -98,7 +98,29 @@ T::eq('all-trusted chain bottoms out leftmost', '1.2.3.4', get_client_ip());
 putenv('DDMGMT_TRUSTED_PROXIES');
 $_SERVER['HTTP_X_FORWARDED_FOR'] = '9.9.9.9';
 T::eq('single-entry XFF unchanged', '9.9.9.9', get_client_ip());
+// NUL bytes in the header are hostile input, not an address: on some builds
+// inet_pton()/filter_var throw ValueError on them instead of answering false
+// (Windows answers false). Every IP sink must fail closed — never fatal the
+// request, which here is the rate-limiter hot path. Edge NULs never get this
+// far (trim() strips them, leaving a valid IP); interior ones do.
+$_SERVER['HTTP_X_FORWARDED_FOR'] = "9.9\0.9.9";
+T::eq('NUL-bearing single XFF falls back to the peer', '127.0.0.1', get_client_ip());
+// Walk lands ON the NUL entry when everything right of it is trusted: the
+// literal-IP check below must reject it (fall back to the peer), not throw.
+putenv('DDMGMT_TRUSTED_PROXIES=127.0.0.1, 5.6.7.8');
+$_SERVER['HTTP_X_FORWARDED_FOR'] = "1.2.3\0.4, 5.6.7.8";
+T::eq('NUL walk winner falls back to the peer', '127.0.0.1', get_client_ip());
+putenv('DDMGMT_TRUSTED_PROXIES');
 unset($_SERVER['HTTP_X_FORWARDED_FOR']);
+T::eq('NUL CIDR never validates', false, _cidr_valid("10.0.0.0\0/8"));
+T::eq('NUL bare IP never validates', false, _cidr_valid("10.0.0.1\0"));
+T::eq('NUL IP never matches', false, _ip_in_cidr("10.0.0.1\0", '10.0.0.0/8'));
+T::eq('NUL net never matches', false, _ip_in_cidr('10.0.0.1', "10.0.0\0.0/24"));
+// A NUL REMOTE_ADDR reaches rl_client_subject verbatim (TRUST_PROXY off):
+// the subject stays literal instead of throwing inside inet_pton.
+$_SERVER['REMOTE_ADDR'] = "10.0.0.1\0";
+T::eq('NUL client subject stays literal', "10.0.0.1\0", rl_client_subject());
+$_SERVER['REMOTE_ADDR'] = '127.0.0.1';
 putenv('DDMGMT_TRUST_PROXY=0');
 if ($origRemote === null) {
     unset($_SERVER['REMOTE_ADDR']);

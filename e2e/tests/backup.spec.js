@@ -31,6 +31,19 @@ function backupForm(page, action) {
   });
 }
 
+// Bundle names are `backup-YYYYMMDD-HHMMSS.ext`, but same-second creates
+// collide: the app then appends `-N` (`backup-…-1.zip`). The specs must
+// accept every legal name — CI once failed a run on exactly this.
+// Match cells by EXACT text for the same reason: substring matching cannot
+// tell `X.zip` apart from `X-1.zip` in the delete loop below.
+const bundleNameRe = /backup-\d{8}-\d{6}(?:-\d+)?\.(zip|json\.gz|json)/;
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+function tokenCell(page, bundle) {
+  return page.locator('tbody span.token', { hasText: new RegExp(`^${escapeRegExp(bundle)}$`) });
+}
+
 // Click a POST-returns-HTML submit and wait for THAT response: asserting on
 // the DOM alone can pass on the previous request's flash (same page, no
 // redirect), letting the next step race — and kill — the in-flight POST.
@@ -54,15 +67,18 @@ async function createBundle(page) {
   const flash = page.locator('.flash.flash-ok');
   await expect(flash).toBeVisible({ timeout: 30000 });
   const text = await flash.textContent();
-  const name = text.match(/backup-\d{8}-\d{6}\.(zip|json\.gz|json)/)?.[0];
+  const name = text.match(bundleNameRe)?.[0];
   expect(name, 'creation notice names the bundle').toBeTruthy();
   created.push(name);
   // ...and the bundle lists under exactly that name.
-  await expect(page.locator('tbody span.token', { hasText: name })).toHaveCount(1);
+  await expect(tokenCell(page, name)).toHaveCount(1);
   return name;
 }
 
 test('create lists a new bundle', async ({ browser }) => {
+  // Backup I/O runs under a single-threaded php -S against MySQL shared
+  // with the whole CI matrix: budget for a loaded runner, not a laptop.
+  test.setTimeout(60_000);
   const page = await freshPage(browser);
   try {
     await login(page);
@@ -73,13 +89,14 @@ test('create lists a new bundle', async ({ browser }) => {
     const before = await page.locator('tbody span.token').count();
     const name = await createBundle(page);
     expect(await page.locator('tbody span.token').count()).toBe(before + 1);
-    expect(name).toMatch(/^backup-\d{8}-\d{6}\.(zip|json\.gz|json)$/);
+    expect(name).toMatch(/^backup-\d{8}-\d{6}(?:-\d+)?\.(zip|json\.gz|json)$/);
   } finally {
     await closePage(page);
   }
 });
 
 test('restore refuses a wrong owner password', async ({ browser }) => {
+  test.setTimeout(120_000);
   const page = await freshPage(browser);
   try {
     await login(page);
@@ -99,6 +116,9 @@ test('restore refuses a wrong owner password', async ({ browser }) => {
 });
 
 test('restore from the stored bundle succeeds and keeps every row', async ({ browser }) => {
+  // Restore verifies, stages and re-applies the whole database in one
+  // transaction: the slowest owner action in this file on a loaded host.
+  test.setTimeout(120_000);
   const page = await freshPage(browser);
   try {
     await login(page);
@@ -119,6 +139,7 @@ test('restore from the stored bundle succeeds and keeps every row', async ({ bro
 });
 
 test('upload round-trip restores, then only our bundles are deleted', async ({ browser }) => {
+  test.setTimeout(120_000);
   const page = await freshPage(browser);
   try {
     await login(page);
@@ -144,14 +165,16 @@ test('upload round-trip restores, then only our bundles are deleted', async ({ b
 
     // Delete asks for confirmation: accept it, or Playwright's default
     // dismiss leaves the bundle in place. Only exact names from this file
-    // are deleted — other harnesses' bundles are not ours to touch.
+    // are deleted — other harnesses' bundles are not ours to touch. Rows
+    // already gone (a retried attempt cleaned up) are skipped, not failed.
     await page.goto('/admin/backups.php');
-    for (const bundle of created) {
-      page.on('dialog', (d) => d.accept());
-      const row = page.locator('tbody tr', { has: page.locator('span.token', { hasText: bundle }) });
+    page.on('dialog', (d) => d.accept());
+    for (const bundle of [...new Set(created)]) {
+      const row = page.locator('tbody tr', { has: tokenCell(page, bundle) });
+      if ((await row.count()) === 0) continue;
       await submitAndWait(page, row.locator('button[type="submit"]'));
       await expect(page.locator('.flash.flash-ok')).toBeVisible();
-      await expect(page.locator('tbody span.token', { hasText: bundle })).toHaveCount(0);
+      await expect(tokenCell(page, bundle)).toHaveCount(0);
     }
   } finally {
     await closePage(page);

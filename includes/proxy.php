@@ -156,23 +156,37 @@ function proxy_socks5_greet(string $user): string {
 }
 
 function proxy_socks5_auth(string $user, string $pass): string {
+    // Length-prefixed wire fields (1-byte lengths): clamp, never throw.
+    // chr() of an over-long length silently wrapped the framing on some
+    // builds and throws ValueError on others — either way a 300-byte
+    // credential cannot authenticate, so keep the framing honest and let
+    // it fail at auth, not as a fatal.
+    $user = substr($user, 0, 255);
+    $pass = substr($pass, 0, 255);
     return "\x01" . chr(strlen($user)) . $user . chr(strlen($pass)) . $pass;
 }
 
 /** SOCKS5 CONNECT with a domain address (remote DNS — see the privacy rule above). */
 function proxy_socks5_connect(string $host, int $port): string {
-    return "\x05\x01\x00\x03" . chr(strlen($host)) . $host . pack('n', $port);
+    // Same clamp contract as proxy_socks5_auth: the domain length is one
+    // byte and the port is 16 bits. Over-long input fails at connect time
+    // with valid framing instead of fataling the proxy path.
+    $host = substr($host, 0, 255);
+    return "\x05\x01\x00\x03" . chr(strlen($host)) . $host . pack('n', $port & 0xFFFF);
 }
 
 /** SOCKS4 CONNECT: literal IPv4 inline, anything else in 4a form (hostname after the user field). */
 function proxy_socks4_connect(string $host, int $port, string $user): string {
-    if (filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false) {
+    // NUL bytes can never be an IPv4 literal, and on some builds they make
+    // the validators below throw instead of answering false: route straight
+    // to the 4a hostname form, which fails closed at connect time.
+    if (!str_contains($host, "\0") && filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false) {
         $ip = inet_pton($host);
         if (is_string($ip)) {
-            return "\x04\x01" . pack('n', $port) . $ip . $user . "\x00";
+            return "\x04\x01" . pack('n', $port & 0xFFFF) . $ip . $user . "\x00";
         }
     }
-    return "\x04\x01" . pack('n', $port) . "\x00\x00\x00\xff" . $user . "\x00" . $host . "\x00";
+    return "\x04\x01" . pack('n', $port & 0xFFFF) . "\x00\x00\x00\xff" . $user . "\x00" . $host . "\x00";
 }
 
 /** Status code of an HTTP response head, 0 when it is not one. */

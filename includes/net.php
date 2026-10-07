@@ -100,7 +100,9 @@ function get_client_ip(): string {
                 $raw = (string)end($chain);
             }
             $ip = trim(explode(',', $raw)[0]);
-            if (filter_var($ip, FILTER_VALIDATE_IP)) {
+            // NUL pre-check (see _cidr_valid): the header is fully
+            // attacker-controlled and must fail closed, never throw.
+            if (!str_contains($ip, "\0") && filter_var($ip, FILTER_VALIDATE_IP)) {
                 return $ip;
             }
         }
@@ -180,6 +182,12 @@ function request_is_https(): bool {
 // separate from _ip_in_cidr(): match-failure is normal operation, parse-
 // failure is an operator mistake that must be visible in the log.
 function _cidr_valid(string $cidr): bool {
+    // NUL bytes never appear in a valid IP[/bits] — and on some builds the
+    // validators below throw ValueError on them instead of answering false
+    // (an operator typo or a fuzzed header must not become a 500).
+    if (str_contains($cidr, "\0")) {
+        return false;
+    }
     if (!str_contains($cidr, '/')) {
         return filter_var($cidr, FILTER_VALIDATE_IP) !== false;
     }
@@ -200,6 +208,13 @@ function _ip_in_cidr(string $ip, string $cidr): bool {
     $norm = static function (string $addr): ?string {
         if (str_starts_with(strtolower($addr), '::ffff:') && str_contains($addr, '.')) {
             $addr = substr($addr, 7);
+        }
+        // As in _cidr_valid(): NUL bytes are never a valid address, and
+        // inet_pton() throws ValueError on them on some builds (Windows
+        // answers false) — a hostile X-Forwarded-For must fail closed here,
+        // not fatal the rate limiter that called us.
+        if (str_contains($addr, "\0")) {
+            return null;
         }
         $packed = @inet_pton($addr);
         return $packed === false ? null : $packed;

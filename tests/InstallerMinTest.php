@@ -177,7 +177,9 @@ if ($server === null) {
     T::eq('min socket engine actually used', 'sockets', $sock['via'] ?? null);
     [$code, $dl] = imn_run($work, [], ['action' => 'download', 'url' => $base . '/pkg.zip']);
     T::eq('min download size matches fixture', filesize($stub . '/pkg.zip'), $dl['size'] ?? -1);
-    [$code, $ex] = imn_run($work, [], ['action' => 'extract']);
+    // The self-built fixture is unsigned by construction: the signature
+    // gate needs the same explicit confirmation the web UI asks for.
+    [$code, $ex] = imn_run($work, [], ['action' => 'extract', 'accept_unsigned' => '1']);
     T::eq('min extract exit 0', 0, $code);
     T::ok('min setup.sql landed', is_file($work . '/setup.sql'));
     [$code, $tree2] = imn_run($work, ['action' => 'tree'], []);
