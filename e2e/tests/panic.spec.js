@@ -95,8 +95,14 @@ test('wiped lists stay empty, then fixtures come back', async ({ browser }) => {
     await expect(page.locator('tr', { hasText: 'E2EADMDELIV00001' })).toHaveCount(0);
 
     // Restore the world for every later file, then prove the app is fully
-    // functional again on the recovered rows.
+    // functional again on the recovered rows. The reseed replaces the users
+    // row out from under this context's session cookie: drop it, or the
+    // next entry lands on a stale-but-cache-valid session (admin_session_
+    // status() caches 'ok' 30 s on APCu hosts) instead of the login form.
+    // A real user hits the revoked-bounce; a dropped cookie is its
+    // deterministic equivalent without the TTL race.
     reseed();
+    await page.e2eContext.clearCookies();
     await login(page);
     await expect(page.locator('tr', { hasText: 'E2EADMDELIV00001' })).toHaveCount(1);
   } finally {
