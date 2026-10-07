@@ -111,6 +111,15 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   decrypted via the new `photo.php` endpoint (`/photo.php?file=`), which
   answers 400/404/403 without disclosing anything. A disk or backup leak no
   longer yields viewable images.
+- Backup verify/restore refuse oversized bundles fail-closed (`too_large`:
+  20k-file manifest cap, 64 MiB buffered-JSON cap, 512 MiB staged-photos
+  cap, gzip-bomb guard), so a crafted bundle that passes checksums cannot
+  exhaust memory or disk. Finished bundles leave the host only through the
+  owner-session download — never token/share URLs, which would be
+  unrevocable capabilities over the whole database.
+- Mutation probe now gates CI (`--min-msi=100`, 18/18 curated mutants
+  killed, including the two new backup-cap mutants): a weakened guard that
+  the suites do not catch fails the build instead of landing silently.
 
 ## [1.6.2] - 2026-09-28
 

@@ -5,6 +5,12 @@ require_once dirname(__DIR__) . '/includes/kernel.php';
 // Owner backup download: backups/ is web-denied on every server profile, so
 // a finished bundle leaves the host only through here — owner session,
 // strict filename, streamed. Mirrors admin/download_log.php.
+//
+// No token URLs, ever, by design: a backup IS the whole database plus the
+// photos, and a capability URL over that cannot be revoked like a session
+// can — it would leak through browser history, proxies and server logs.
+// Anyone tempted to add ?token= share links for backups: do not. Downloads
+// stay behind the owner session; move bundles off-host over scp/SFTP.
 
 start_secure_session();
 require_owner();

@@ -137,10 +137,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         }
                         $rows = backup_list();
                     } else {
-                        // Quiet on purpose (A5 backup tamperer): one code,
-                        // the detail went to the log inside the core.
-                        log_err('backup restore refused from admin: ' . ($ver['code'] ?? $res['code'] ?? '?'));
-                        $error = t('admin.backup.flash.invalid');
+                        // Quiet on purpose (A5 backup tamperer): the detail
+                        // went to the log inside the core. One exception: a
+                        // size refusal is actionable (re-create as zip, or
+                        // restore on a bigger host) and tells an attacker
+                        // nothing they did not already know — they supplied
+                        // the file — so it gets its own message.
+                        $code = (string)($ver['code'] ?? $res['code'] ?? '?');
+                        log_err('backup restore refused from admin: ' . $code);
+                        $error = $code === 'too_large'
+                            ? t('admin.backup.flash.too_large')
+                            : t('admin.backup.flash.invalid');
                     }
                 }
             }

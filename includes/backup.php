@@ -50,6 +50,18 @@ const BACKUP_TABLES = [
 ];
 const BACKUP_NAME_RE = '/^backup-\d{8}-\d{6}\.(zip|json\.gz|json)$/';
 const BACKUP_CHUNK_ROWS = 500;
+// Size caps: verify/stage/read buffer or stream attacker-shaped input, and a
+// crafted bundle that passes checksums could otherwise exhaust memory (one
+// fully-buffered JSON document) or disk (staged photos). The caps fail
+// closed with code 'too_large': this host cannot safely hold that bundle —
+// re-create it as zip (which streams) or restore it on a bigger host. The
+// numbers: 20k photos is two orders above any real uploads/; 64 MiB is the
+// largest single JSON document json_decode may hold under a 128M
+// memory_limit; 512 MiB staged photos matches the 512 MB body ceiling the
+// Docker profiles already assume.
+const BACKUP_MAX_FILES = 20000;
+const BACKUP_MAX_JSON_BYTES = 67108864;
+const BACKUP_MAX_STAGE_BYTES = 536870912;
 
 /** Where finished backups live. Web-denied on all four server profiles. */
 function backup_dir(): string {
@@ -385,7 +397,47 @@ function backup_manifest_parse(mixed $raw): ?array {
             return null;
         }
     }
+    // A manifest is small by construction (one entry per photo): tens of
+    // thousands of entries is not a backup, it is a hash-table DoS against
+    // every loop below. Refused as shape, reported as 'invalid'.
+    if (count($raw['files']) > BACKUP_MAX_FILES) {
+        return null;
+    }
     return $raw;
+}
+
+/** True when a JSON bundle is too big to buffer: checked by filesize BEFORE
+ *  any byte is read, so the check itself costs no memory. A missing size is
+ *  not "too large" — downstream verify fails it as 'invalid' instead. */
+function backup_json_too_large(string $path): bool {
+    $size = @filesize($path);
+    return $size !== false && $size > BACKUP_MAX_JSON_BYTES;
+}
+
+/** True when a bundle cannot be safely held by this host: JSON by filesize,
+ *  zip by its database.json entry size (stat, not read). Used by verify and
+ *  restore BEFORE anything is buffered or staged, so both answer 'too_large'
+ *  without touching memory or disk. */
+function backup_exceeds_caps(string $path): bool {
+    if (!is_file($path)) {
+        return false;
+    }
+    $head = (string)@file_get_contents($path, false, null, 0, 4);
+    if (str_starts_with($head, "PK\x03\x04")) {
+        if (!backup_zip_supported()) {
+            return false;
+        }
+        $zip = new ZipArchive();
+        if ($zip->open($path) !== true) {
+            return false;
+        }
+        $st = $zip->statName('database.json');
+        $zip->close();
+        // Missing is not oversized: a bundle without database.json is a
+        // shape refusal ('invalid') downstream, not a size one.
+        return $st !== false && (int)($st['size'] ?? 0) > BACKUP_MAX_JSON_BYTES;
+    }
+    return backup_json_too_large($path);
 }
 
 /**
@@ -397,6 +449,9 @@ function backup_manifest_parse(mixed $raw): ?array {
 function backup_verify(string $path): array {
     if (!is_file($path)) {
         return ['ok' => false, 'code' => 'invalid'];
+    }
+    if (backup_exceeds_caps($path)) {
+        return ['ok' => false, 'code' => 'too_large'];
     }
     try {
         $head = (string)@file_get_contents($path, false, null, 0, 4);
@@ -435,6 +490,7 @@ function backup_verify_zip(string $path): array {
         $zip->close();
         return ['ok' => false, 'code' => 'invalid'];
     }
+    $total = 0;
     foreach ($manifest['files'] as $rel => $sum) {
         $stream = $zip->getStream($rel);
         if ($stream === false) {
@@ -450,6 +506,14 @@ function backup_verify_zip(string $path): array {
                 return ['ok' => false, 'code' => 'invalid'];
             }
             hash_update($ctx, $chunk);
+            // Cumulative cap: a zip bomb (tiny on disk, huge streamed)
+            // trips here instead of filling the disk at stage time.
+            $total += strlen($chunk);
+            if ($total > BACKUP_MAX_STAGE_BYTES) {
+                fclose($stream);
+                $zip->close();
+                return ['ok' => false, 'code' => 'too_large'];
+            }
         }
         fclose($stream);
         if (hash_final($ctx) !== $sum) {
@@ -500,6 +564,11 @@ function backup_verify_json(string $path): array {
         if ($raw === '') {
             return ['ok' => false, 'code' => 'invalid'];
         }
+        // A gzip bomb is small on disk (passes the filesize gate) and huge
+        // inflated: cap the buffered document, not just the file.
+        if (strlen($raw) > BACKUP_MAX_JSON_BYTES) {
+            return ['ok' => false, 'code' => 'too_large'];
+        }
     }
     $doc = json_decode($raw, true);
     if (!is_array($doc) || !isset($doc['manifest'], $doc['db'], $doc['photos'])) {
@@ -536,6 +605,11 @@ function backup_verify_json(string $path): array {
  * @return array{ok:bool,code?:string,key_mismatch?:bool,files_partial?:bool}
  */
 function backup_restore(PDO $db, string $path, array $manifest, ?string $root = null): array {
+    // Size first: an oversized bundle is refused before a stage directory
+    // or a transaction exists, so the refusal touches neither disk nor DB.
+    if (backup_exceeds_caps($path)) {
+        return ['ok' => false, 'code' => 'too_large'];
+    }
     // Files stage first: every payload byte is checksummed in staging before
     // the database transaction opens, so a corrupt photo fails with the live
     // data untouched.
@@ -555,15 +629,16 @@ function backup_restore(PDO $db, string $path, array $manifest, ?string $root = 
         @rmdir($stage);
     };
     try {
-        $staged = backup_stage_files($path, $manifest, $stage);
+        $why = null;
+        $staged = backup_stage_files($path, $manifest, $stage, $why);
         if (!$staged) {
             $cleanup();
-            return ['ok' => false, 'code' => 'invalid'];
+            return ['ok' => false, 'code' => $why === 'too_large' ? 'too_large' : 'invalid'];
         }
-        $rows = backup_read_payload_rows($path, $manifest);
+        $rows = backup_read_payload_rows($path, $manifest, $why);
         if ($rows === null) {
             $cleanup();
-            return ['ok' => false, 'code' => 'invalid'];
+            return ['ok' => false, 'code' => $why === 'too_large' ? 'too_large' : 'invalid'];
         }
         // The database half: one transaction, DELETE (never TRUNCATE — DDL
         // would implicit-commit on MySQL and split the restore in two).
@@ -635,8 +710,10 @@ function backup_restore(PDO $db, string $path, array $manifest, ?string $root = 
     return $out;
 }
 
-/** Copy every manifest file into staging, checksumming on arrival. */
-function backup_stage_files(string $path, array $manifest, string $stage): bool {
+/** Copy every manifest file into staging, checksumming on arrival. $why
+ *  carries the refusal reason ('too_large' vs silent false) so the caller
+ *  can answer the right code without re-streaming the bundle. */
+function backup_stage_files(string $path, array $manifest, string $stage, ?string &$why = null): bool {
     $isZip = str_starts_with((string)@file_get_contents($path, false, null, 0, 4), "PK\x03\x04");
     if ($isZip) {
         if (!backup_zip_supported()) {
@@ -646,6 +723,7 @@ function backup_stage_files(string $path, array $manifest, string $stage): bool 
         if ($zip->open($path) !== true) {
             return false;
         }
+        $total = 0;
         foreach ($manifest['files'] as $rel => $sum) {
             $stream = $zip->getStream($rel);
             if ($stream === false) {
@@ -676,6 +754,17 @@ function backup_stage_files(string $path, array $manifest, string $stage): bool 
                 }
                 hash_update($ctx, $chunk);
                 fwrite($out, $chunk);
+                // Cumulative cap: staged bytes are real disk. A bundle that
+                // verified small per-entry but streams huge dies here, with
+                // the stage swept by the caller.
+                $total += strlen($chunk);
+                if ($total > BACKUP_MAX_STAGE_BYTES) {
+                    fclose($stream);
+                    fclose($out);
+                    $zip->close();
+                    $why = 'too_large';
+                    return false;
+                }
             }
             fclose($stream);
             fclose($out);
@@ -688,12 +777,20 @@ function backup_stage_files(string $path, array $manifest, string $stage): bool 
         return true;
     }
     // JSON bundle: decode from the document.
+    if (backup_json_too_large($path)) {
+        $why = 'too_large';
+        return false;
+    }
     $raw = (string)@file_get_contents($path);
     if (str_starts_with($raw, "\x1f\x8b")) {
         if (!extension_loaded('zlib')) {
             return false;
         }
         $raw = (string)@gzdecode($raw);
+        if (strlen($raw) > BACKUP_MAX_JSON_BYTES) {
+            $why = 'too_large';
+            return false;
+        }
     }
     $doc = json_decode($raw, true);
     if (!is_array($doc) || !is_array($doc['photos'] ?? null)) {
@@ -720,8 +817,9 @@ function backup_stage_files(string $path, array $manifest, string $stage): bool 
     return true;
 }
 
-/** Re-read the row payload (fail-closed: counts must still match). */
-function backup_read_payload_rows(string $path, array $manifest): ?array {
+/** Re-read the row payload (fail-closed: counts must still match). $why
+ *  carries 'too_large' the same way backup_stage_files() does. */
+function backup_read_payload_rows(string $path, array $manifest, ?string &$why = null): ?array {
     $isZip = str_starts_with((string)@file_get_contents($path, false, null, 0, 4), "PK\x03\x04");
     if ($isZip) {
         if (!backup_zip_supported()) {
@@ -729,6 +827,15 @@ function backup_read_payload_rows(string $path, array $manifest): ?array {
         }
         $zip = new ZipArchive();
         if ($zip->open($path) !== true) {
+            return null;
+        }
+        // database.json buffers fully below: gate its entry size by stat,
+        // not by reading it. (Restore already pre-checked via
+        // backup_exceeds_caps(); this guards direct callers too.)
+        $st = $zip->statName('database.json');
+        if ($st !== false && (int)($st['size'] ?? 0) > BACKUP_MAX_JSON_BYTES) {
+            $zip->close();
+            $why = 'too_large';
             return null;
         }
         $rawDb = $zip->getFromName('database.json');
@@ -740,12 +847,20 @@ function backup_read_payload_rows(string $path, array $manifest): ?array {
         $rows = json_decode($rawDb, true);
         return $rows;
     }
+    if (backup_json_too_large($path)) {
+        $why = 'too_large';
+        return null;
+    }
     $raw = (string)@file_get_contents($path);
     if (str_starts_with($raw, "\x1f\x8b")) {
         if (!extension_loaded('zlib')) {
             return null;
         }
         $raw = (string)@gzdecode($raw);
+        if (strlen($raw) > BACKUP_MAX_JSON_BYTES) {
+            $why = 'too_large';
+            return null;
+        }
     }
     $doc = json_decode($raw, true);
     if (!is_array($doc) || !is_array($doc['db'] ?? null)) {

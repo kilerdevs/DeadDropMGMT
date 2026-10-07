@@ -72,6 +72,7 @@ return [
     'admin.backup.flash.create_failed'  => 'Kopia nieudana — pełny dysk albo backups/ niezapisywalne?',
     'admin.backup.flash.invalid'        => 'To nie jest poprawna kopia — nic nie zmieniono.',
     'admin.backup.flash.restore_failed' => 'Przywrócenie nieudane — nic nie zmieniono.',
+    'admin.backup.flash.too_large'      => 'Ta kopia jest za duża dla tego hosta — nic nie zmieniono. Utwórz ją ponownie jako zip albo przywróć tam, gdzie jest więcej pamięci i miejsca na dysku.',
     'admin.backup.flash.unsupported'    => 'Kopie wymagają zapisywalnego katalogu backups/.',
     'admin.backup.flash.upload_ini'     => 'Host odrzucił wysyłkę — zwiększ upload_max_filesize i post_max_size.',
     'admin.backup.flash.upload_invalid' => 'Wysyłka nie dotarła cała — spróbuj ponownie.',

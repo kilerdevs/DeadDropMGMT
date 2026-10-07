@@ -255,6 +255,58 @@ foreach (['c1.json', 'c2.json', 'c3.json', 'c4.json', 'c5.json', 'c6.json', 'c7.
 // The JSON writer refuses an unwritable destination.
 T::eq('json bundle to a bad path fails', false, backup_write_json_bundle($tmpRoot . '/no-dir-xyz/x.json', $db, $jsonManifest, $useGz, $tmpRoot));
 
+// ── Size caps: fail closed before buffering or staging ────────────────────
+// A manifest is one entry per photo: over BACKUP_MAX_FILES valid entries is
+// a hash-table DoS, refused as shape.
+$manyFiles = $jsonManifest;
+$manyFiles['files'] = [];
+for ($i = 0; $i < BACKUP_MAX_FILES + 1; $i++) {
+    $manyFiles['files']['uploads/cap/' . $i . '.enc'] = str_repeat('a', 64);
+}
+T::eq('manifest over the file cap rejected', null, backup_manifest_parse($manyFiles));
+$edgeFiles = $jsonManifest;
+$edgeFiles['files'] = [];
+for ($i = 0; $i < BACKUP_MAX_FILES; $i++) {
+    $edgeFiles['files']['uploads/cap/' . $i . '.enc'] = str_repeat('a', 64);
+}
+T::ok('manifest at the file cap parses', is_array(backup_manifest_parse($edgeFiles)));
+unset($manyFiles, $edgeFiles);
+// A JSON bundle over BACKUP_MAX_JSON_BYTES is refused by filesize before a
+// single byte is buffered — the content below is irrelevant on purpose.
+$bigJson = $tmpRoot . '/big.json';
+$fhBig = @fopen($bigJson, 'wb');
+if ($fhBig !== false) {
+    fwrite($fhBig, '{"pad":"');
+    fseek($fhBig, BACKUP_MAX_JSON_BYTES);
+    fwrite($fhBig, 'x');
+    fclose($fhBig);
+    T::eq('oversized json verifies too_large', 'too_large', (backup_verify($bigJson)['code'] ?? ''));
+    @mkdir($tmpRoot . '/wcap', 0775, true);
+    $whyS = null;
+    T::eq('oversized json stages nothing', false, backup_stage_files($bigJson, $jsonManifest, $tmpRoot . '/wcap', $whyS));
+    T::eq('stage refusal says too_large', 'too_large', $whyS);
+    $whyR = null;
+    T::eq('oversized json reads no rows', null, backup_read_payload_rows($bigJson, $jsonManifest, $whyR));
+    T::eq('rows refusal says too_large', 'too_large', $whyR);
+    set_setting('backup_test_marker', 'after');
+    $bigRestore = backup_restore($db, $bigJson, $jsonManifest, $tmpRoot);
+    T::eq('oversized restore refuses', 'too_large', $bigRestore['code'] ?? '');
+    T::eq('live data untouched by size refusal', 'after', get_setting('backup_test_marker', ''));
+    @rmdir($tmpRoot . '/wcap');
+    @unlink($bigJson);
+} else {
+    T::ok('oversized fixture writable', false);
+}
+// A gzip bomb is small on disk (passes the filesize gate) and huge
+// inflated: the buffered-document cap catches it after gzdecode.
+if (extension_loaded('zlib')) {
+    $bombRaw = str_repeat('B', BACKUP_MAX_JSON_BYTES + 1048576);
+    file_put_contents($tmpRoot . '/bomb.json.gz', (string)gzencode($bombRaw, 9));
+    unset($bombRaw);
+    T::eq('gzip bomb verifies too_large', 'too_large', (backup_verify($tmpRoot . '/bomb.json.gz')['code'] ?? ''));
+    @unlink($tmpRoot . '/bomb.json.gz');
+}
+
 // ── Crafted zips: every structural guard (ZipArchive hosts only) ────────────
 if (backup_zip_supported()) {
     $zm = $jsonManifest;
@@ -319,6 +371,45 @@ if (backup_zip_supported()) {
     } else {
         T::ok('drift fixture decodes', false);
     }
+    // A zip bomb: tiny on disk (zeros compress), huge streamed. 130 x 4 MiB
+    // tops the 512 MiB stage cap while the physical file stays ~1 MiB.
+    // addFile (not addFromString): libzip buffers added strings until
+    // close, which would eat 520 MiB of test memory — files stream.
+    $padFile = $tmpRoot . '/pad.bin';
+    file_put_contents($padFile, str_repeat('0', 4 * 1024 * 1024));
+    $sumPad = (string)hash_file('sha256', $padFile);
+    $bm = $zm;
+    $bm['files'] = [];
+    $bomb = new ZipArchive();
+    $bomb->open($tmpRoot . '/bomb.zip', ZipArchive::CREATE | ZipArchive::OVERWRITE);
+    for ($i = 0; $i < 130; $i++) {
+        $rel = 'uploads/bomb/' . $i . '.enc';
+        $bm['files'][$rel] = $sumPad;
+        $bomb->addFile($padFile, $rel);
+    }
+    $bomb->addFromString('database.json', $dbJsonZ);
+    $bomb->addFromString('manifest.json', (string)json_encode($bm));
+    $bomb->close();
+    @unlink($padFile);
+    $bombZip = $tmpRoot . '/bomb.zip';
+    T::eq('zip bomb verifies too_large', 'too_large', (backup_verify($bombZip)['code'] ?? ''));
+    $whyB = null;
+    T::eq('zip bomb stages nothing', false, backup_stage_files($bombZip, $bm, $wstage, $whyB));
+    T::eq('bomb stage refusal says too_large', 'too_large', $whyB);
+    // A database.json over the buffer cap trips by entry size (stat, never
+    // read): 64 MiB of spaces compresses to kilobytes on disk.
+    $fatDb = str_repeat(' ', BACKUP_MAX_JSON_BYTES + 1);
+    $fatZip = $mkZip($tmpRoot . '/fatdb.zip', [
+        'manifest.json' => (string)json_encode($zm),
+        'database.json' => $fatDb,
+        'uploads/7/aaa.enc' => (string)@file_get_contents($tmpRoot . '/uploads/7/aaa.enc'),
+        'uploads/9-bbb.enc' => (string)@file_get_contents($tmpRoot . '/uploads/9-bbb.enc'),
+    ]);
+    unset($fatDb);
+    $whyF = null;
+    T::eq('fat database verifies too_large', 'too_large', (backup_verify($fatZip)['code'] ?? ''));
+    T::eq('fat database reads no rows', null, backup_read_payload_rows($fatZip, $zm, $whyF));
+    T::eq('fat database refusal says too_large', 'too_large', $whyF);
     // z4 stages its one present photo before refusing the missing one, so
     // the stage dir may be non-empty — sweep it fully.
     if (is_dir($wstage)) {
@@ -333,7 +424,7 @@ if (backup_zip_supported()) {
         @rmdir($wstage);
     }
     @unlink($tmpDbZ);
-    foreach (['z1.zip', 'z2.zip', 'z3.zip', 'z4.zip', 'z5.zip', 'z5b.zip', 'z7.zip', 'pkjunk.bin'] as $junk) {
+    foreach (['z1.zip', 'z2.zip', 'z3.zip', 'z4.zip', 'z5.zip', 'z5b.zip', 'z7.zip', 'bomb.zip', 'fatdb.zip', 'pkjunk.bin'] as $junk) {
         @unlink($tmpRoot . '/' . $junk);
     }
 }

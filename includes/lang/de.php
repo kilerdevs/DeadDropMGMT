@@ -72,6 +72,7 @@ return [
     'admin.backup.flash.create_failed'  => 'Backup fehlgeschlagen — Platte voll oder backups/ nicht schreibbar?',
     'admin.backup.flash.invalid'        => 'Kein gültiges Backup — nichts wurde geändert.',
     'admin.backup.flash.restore_failed' => 'Restore fehlgeschlagen — nichts wurde geändert.',
+    'admin.backup.flash.too_large'      => 'Dieses Backup ist zu groß für diesen Host — nichts wurde geändert. Erstelle es als Zip neu oder stelle es dort wieder her, wo mehr Speicher und Plattenplatz verfügbar sind.',
     'admin.backup.flash.unsupported'    => 'Backups brauchen ein schreibbares backups/-Verzeichnis.',
     'admin.backup.flash.upload_ini'     => 'Der Host hat den Upload abgelehnt — upload_max_filesize und post_max_size erhöhen.',
     'admin.backup.flash.upload_invalid' => 'Der Upload kam nicht intakt an — erneut versuchen.',

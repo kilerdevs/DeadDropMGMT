@@ -76,6 +76,7 @@ return [
     'admin.backup.flash.create_failed'  => 'Backup failed — disk full or backups/ not writable?',
     'admin.backup.flash.invalid'        => 'Not a valid backup — nothing was changed.',
     'admin.backup.flash.restore_failed' => 'Restore failed — nothing was changed.',
+    'admin.backup.flash.too_large'      => 'That backup is too large for this host — nothing was changed. Re-create it as zip, or restore it where more memory and disk are available.',
     'admin.backup.flash.unsupported'    => 'Backups need a writable backups/ directory.',
     'admin.backup.flash.upload_ini'     => 'The host refused the upload — raise upload_max_filesize and post_max_size.',
     'admin.backup.flash.upload_invalid' => 'That upload did not arrive intact — try again.',

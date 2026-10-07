@@ -72,6 +72,7 @@ return [
     'admin.backup.flash.create_failed'  => 'Sauvegarde impossible — disque plein ou backups/ non inscriptible ?',
     'admin.backup.flash.invalid'        => 'Sauvegarde invalide — rien n’a changé.',
     'admin.backup.flash.restore_failed' => 'Restauration impossible — rien n’a changé.',
+    'admin.backup.flash.too_large'      => 'Cette sauvegarde est trop volumineuse pour cet hôte — rien n’a changé. Recréez-la en zip, ou restaurez-la là où la mémoire et le disque sont plus généreux.',
     'admin.backup.flash.unsupported'    => 'Les sauvegardes exigent un dossier backups/ inscriptible.',
     'admin.backup.flash.upload_ini'     => 'L’hébergeur a refusé l’envoi — augmentez upload_max_filesize et post_max_size.',
     'admin.backup.flash.upload_invalid' => 'L’envoi n’est pas arrivé intact — réessayez.',

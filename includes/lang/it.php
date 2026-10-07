@@ -72,6 +72,7 @@ return [
     'admin.backup.flash.create_failed'  => 'Backup fallito — disco pieno o backups/ non scrivibile?',
     'admin.backup.flash.invalid'        => 'Backup non valido — nulla è cambiato.',
     'admin.backup.flash.restore_failed' => 'Ripristino fallito — nulla è cambiato.',
+    'admin.backup.flash.too_large'      => 'Quel backup è troppo grande per questo host — nulla è cambiato. Ricrealo come zip, oppure ripristinalo dove ci sono più memoria e disco disponibili.',
     'admin.backup.flash.unsupported'    => 'I backup richiedono una cartella backups/ scrivibile.',
     'admin.backup.flash.upload_ini'     => 'Il server ha rifiutato il caricamento — alza upload_max_filesize e post_max_size.',
     'admin.backup.flash.upload_invalid' => 'Il caricamento non è arrivato intatto — riprova.',

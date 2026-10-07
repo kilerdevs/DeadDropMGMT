@@ -72,6 +72,7 @@ return [
     'admin.backup.flash.create_failed'  => 'La copia falló — ¿disco lleno o backups/ sin escritura?',
     'admin.backup.flash.invalid'        => 'No es una copia válida — nada cambió.',
     'admin.backup.flash.restore_failed' => 'La restauración falló — nada cambió.',
+    'admin.backup.flash.too_large'      => 'Esa copia es demasiado grande para este host — nada cambió. Vuelve a crearla como zip o restáurala donde haya más memoria y disco disponibles.',
     'admin.backup.flash.unsupported'    => 'Las copias necesitan un directorio backups/ escribible.',
     'admin.backup.flash.upload_ini'     => 'El servidor rechazó la subida — aumenta upload_max_filesize y post_max_size.',
     'admin.backup.flash.upload_invalid' => 'La subida no llegó intacta — inténtalo de nuevo.',

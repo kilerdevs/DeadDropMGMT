@@ -21,10 +21,13 @@ require_once dirname(__DIR__) . '/includes/kernel.php';
 // without them (mutant KILLED) instead of staying green (SURVIVED — a real
 // test gap). Run: php tools/mutation_probe.php
 //
-// Report-only by design: exit 0 unless the harness itself breaks (a mutant
+// Report-only by default: exit 0 unless the harness itself breaks (a mutant
 // whose anchor text no longer matches means the code moved and the mutant
-// needs maintenance — exit 2). CI runs this as a non-gating job and watches
-// the score; gating (minimum MSI) only after the number proves stable.
+// needs maintenance — exit 2). Pass --min-msi=N to gate instead: exit 1
+// when the score drops below N. CI gates at 100 — the set held 16/16 across
+// repeated runs before gating, and every killer is a deterministic
+// in-process suite (no php -S, no clocks), so a SURVIVED line is a real
+// regression, not a flake.
 //
 // Mutants are CURATED, not generated, for two reasons:
 //   1. The suites are a custom harness (no PHPUnit), so infection/phpunit
@@ -190,6 +193,22 @@ $mutants = [
         'suite' => 'LoggerTest',
         'why'   => 'verdict always healthy regardless of deletions',
     ],
+    [
+        'id'    => 'backup-filecap-removed',
+        'file'  => 'includes/backup.php',
+        'old'   => 'if (count($raw[\'files\']) > BACKUP_MAX_FILES) {',
+        'new'   => 'if (count($raw[\'files\']) > PHP_INT_MAX) { // MUTANT: file-count cap never trips',
+        'suite' => 'BackupTest',
+        'why'   => 'manifest with 20k+ photo entries accepted (hash-table DoS)',
+    ],
+    [
+        'id'    => 'backup-sizegate-blinded',
+        'file'  => 'includes/backup.php',
+        'old'   => '    return $size !== false && $size > BACKUP_MAX_JSON_BYTES;',
+        'new'   => '    return false; // MUTANT: JSON size gate blind — 67 MiB bundles buffer fully',
+        'suite' => 'BackupTest',
+        'why'   => 'oversized JSON bundles buffered into memory (DoS)',
+    ],
 ];
 
 // Mutants are applied to a THROWAWAY COPY of the tree, never to the checkout
@@ -327,4 +346,17 @@ foreach ($survived as $s) {
 foreach ($harnessErrors as $e) {
     echo "  HARNESS  $e\n";
 }
-exit($harnessErrors !== [] ? 2 : 0);
+if ($harnessErrors !== []) {
+    exit(2);
+}
+$minMsi = null;
+foreach (array_slice($argv ?? [], 1) as $arg) {
+    if (is_string($arg) && preg_match('/^--min-msi=(\d+(?:\.\d+)?)$/', $arg, $m) === 1) {
+        $minMsi = (float)$m[1];
+    }
+}
+if ($minMsi !== null && $msi < $minMsi) {
+    fwrite(STDERR, "Mutation probe: MSI {$msi}% below the {$minMsi}% gate.\n");
+    exit(1);
+}
+exit(0);

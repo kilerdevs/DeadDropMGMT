@@ -72,6 +72,7 @@ return [
     'admin.backup.flash.create_failed'  => 'Бэкап не удался — диск полон или backups/ недоступна для записи?',
     'admin.backup.flash.invalid'        => 'Недействительный бэкап — ничего не изменилось.',
     'admin.backup.flash.restore_failed' => 'Восстановление не удалось — ничего не изменилось.',
+    'admin.backup.flash.too_large'      => 'Эта копия слишком велика для этого хоста — ничего не изменилось. Создайте её заново как zip или восстановите там, где больше памяти и места на диске.',
     'admin.backup.flash.unsupported'    => 'Бэкапам нужен записываемый каталог backups/.',
     'admin.backup.flash.upload_ini'     => 'Сервер отклонил загрузку — увеличьте upload_max_filesize и post_max_size.',
     'admin.backup.flash.upload_invalid' => 'Загрузка дошла битой — попробуйте ещё раз.',

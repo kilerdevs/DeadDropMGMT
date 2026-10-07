@@ -72,6 +72,7 @@ return [
     'admin.backup.flash.create_failed'  => 'Бекап не вдався — диск повний або backups/ недоступна для запису?',
     'admin.backup.flash.invalid'        => 'Недійсний бекап — нічого не змінилося.',
     'admin.backup.flash.restore_failed' => 'Відновлення не вдалося — нічого не змінилося.',
+    'admin.backup.flash.too_large'      => 'Ця копія завелика для цього хоста — нічого не змінилося. Створіть її заново як zip або відновіть там, де більше пам’яті й місця на диску.',
     'admin.backup.flash.unsupported'    => 'Бекапам потрібен записуваний каталог backups/.',
     'admin.backup.flash.upload_ini'     => 'Сервер відхилив завантаження — збільште upload_max_filesize і post_max_size.',
     'admin.backup.flash.upload_invalid' => 'Завантаження дійшло битим — спробуйте ще раз.',
