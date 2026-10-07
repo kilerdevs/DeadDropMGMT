@@ -16,11 +16,13 @@ require_once __DIR__ . '/host.php';
 // whole settings cache with a scalar — the next store read then throws a
 // TypeError that kills the entire coverage run. Outside this file the only
 // cache operation is settings_invalidate().
+/** @return ?array<string,string> key => value, null when never loaded */
 function &_settings_store(): ?array {
     static $cache = null;
     return $cache;
 }
 
+/** @return array<string,string> key => value */
 function get_settings(): array {
     $cache = &_settings_store();
     if ($cache !== null) {
@@ -149,6 +151,7 @@ function osm_proxy_enabled(): bool {
     return get_setting('osm_proxy_enabled', '1') === '1';
 }
 
+/** @return list<int> positive hour options, settings-driven with a sane default */
 function extend_hours_options(): array {
     $raw = get_setting('extend_hours_options', '24,48,72');
     $opts = [];

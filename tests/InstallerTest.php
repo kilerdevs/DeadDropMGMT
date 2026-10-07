@@ -185,6 +185,10 @@ T::eq('judge action gone', false, $gone2['ok'] ?? true);
 T::eq('download exit 0', 0, $code);
 T::eq('downloaded size matches fixture', filesize($stub . '/pkg.zip'), $dl['size'] ?? -1);
 T::ok('download reports a transport', isset($dl['via']));
+// The stub serves no .sig: the package lands UNSIGNED (sidecar 0) and the
+// response says so — a forged package would have been deleted instead.
+T::eq('unsigned stub reports signed=false', false, $dl['signed'] ?? true);
+T::eq('unsigned verdict persisted', '0', (string)@file_get_contents($work . '/.__install_dl.zip.verified'));
 [$code, $dlBad] = ix_run($work, [], ['action' => 'download', 'url' => $base . '/ping.txt']);
 T::eq('non-zip download refused', false, $dlBad['ok'] ?? true);
 T::eq('refused download keeps the good package', filesize($stub . '/pkg.zip'), @filesize($work . '/.__install_dl.zip') ?: -1);
@@ -192,7 +196,10 @@ T::eq('refused download keeps the good package', filesize($stub . '/pkg.zip'), @
 T::eq('tree reports the downloaded package', filesize($stub . '/pkg.zip'), $treeDl['pending_package'] ?? -1);
 
 // ── 4. extract (moves tree, never the running installer) ────────────────────
-[$code, $ex] = ix_run($work, [], ['action' => 'extract']);
+// Unsigned package: refused without explicit confirmation, then accepted.
+[$code, $exRefused] = ix_run($work, [], ['action' => 'extract']);
+T::eq('unsigned extract refused without confirmation', false, $exRefused['ok'] ?? true);
+[$code, $ex] = ix_run($work, [], ['action' => 'extract', 'accept_unsigned' => '1']);
 T::eq('extract exit 0', 0, $code);
 T::ok('extract placed items', ($ex['moved'] ?? 0) >= 3);
 T::ok('setup.sql landed', is_file($work . '/setup.sql'));
@@ -243,7 +250,7 @@ T::ok('download rotates the token', ($dl2['unlock'] ?? '') !== '' && $dl2['unloc
 [$code, $stale] = ix_run($work, [], ['action' => 'extract', 'unlock' => $tok]);
 T::ok('rotated-out token is dead', ($stale['ok'] ?? true) === false);
 $tok = (string)$dl2['unlock'];
-[$code, $ex2] = ix_run($work, [], ['action' => 'extract', 'keep_config' => '1', 'unlock' => $tok]);
+[$code, $ex2] = ix_run($work, [], ['action' => 'extract', 'keep_config' => '1', 'accept_unsigned' => '1', 'unlock' => $tok]);
 T::eq('unlocked: extract ok', true, $ex2['ok'] ?? false);
 T::ok('extract reports the snapshot', str_contains((string)($ex2['log'] ?? ''), 'backups/upgrade-'));
 $snap = (string)($ex2['snapshot'] ?? '');

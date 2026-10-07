@@ -43,7 +43,10 @@ function host_flag(string $name, bool $default = true): bool {
 }
 
 // Test seam: force probe answers ('exec', 'proc_open', 'curl', 'linux', 'cli').
-/** @param array<string,mixed>|null $set */
+/**
+ * @param array<string,mixed>|null $set
+ * @return array<string,mixed>
+ */
 function host_override(?array $set = null, bool $reset = false): array {
     static $o = [];
     if ($reset) {
@@ -132,6 +135,10 @@ function host_dir_writable(string $dir): bool {
 // all answer from one measurement. Consumers fill in what only they know:
 // grants (a live PDO), dirs (their own writability list), session_*,
 // server_sw/htaccess_ok. $overrides win (tests, installer-parity probes).
+/**
+ * @param array{php_version?:string,ext?:array<string,bool>,curl?:bool,sockets?:bool,zip_ext?:bool,unzip_bin?:?string,exec?:bool,proc_open?:bool,detach?:bool,putenv_ok?:bool,grants?:?string,dirs?:array<string,bool>,session_path?:string,session_writable?:bool,server_sw?:string,htaccess_ok?:bool,set_time_limit?:bool} $overrides
+ * @return array{php_version?:string,ext?:array<string,bool>,curl?:bool,sockets?:bool,zip_ext?:bool,unzip_bin?:?string,exec?:bool,proc_open?:bool,detach?:bool,putenv_ok?:bool,grants?:?string,dirs?:array<string,bool>,session_path?:string,session_writable?:bool,server_sw?:string,htaccess_ok?:bool,set_time_limit?:bool}
+ */
 function capabilities_live_env(array $overrides = []): array {
     $env = [
         'php_version' => PHP_VERSION,

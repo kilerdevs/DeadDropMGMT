@@ -35,6 +35,7 @@ function setup_row(string $id, string $label, string $status, string $detail = '
 // live host probes, so the installer, this page and the hosting doctor name
 // the same fallbacks (admin.cap.<id>). Quantitative infos (max_time) stay
 // bespoke below: they are measurements, not capabilities.
+/** @return list<array{id:string,label:string,status:string,detail:string}> */
 function setup_runtime_checks(): array {
     $eval = [];
     foreach (capabilities_evaluate(capabilities_live_env()) as $row) {
@@ -73,6 +74,7 @@ function setup_runtime_checks(): array {
 
 // Directories the app writes at runtime. Check-only: never mkdir here, so a
 // permissions problem is reported, not masked.
+/** @return list<array{id:string,label:string,status:string,detail:string}> */
 function setup_storage_checks(): array {
     $root = dirname(__DIR__);
     $out = [];
@@ -113,6 +115,7 @@ function setup_storage_checks(): array {
 // also carries its own deny file; a missing one is reported by name.
 const SETUP_DENY_FILES = ['includes/.htaccess', 'logs/.htaccess', 'tools/.htaccess', 'cron/.htaccess',
     'data/.htaccess', 'cache/.htaccess', 'backups/.htaccess'];
+/** @return array{id:string,label:string,status:string,detail:string} */
 function setup_webserver_row(string $software, ?string $root = null): array {
     $root ??= dirname(__DIR__);
     if (is_file($root . '/.htaccess') && stripos($software, 'apache') !== false) {
@@ -131,6 +134,9 @@ function setup_webserver_row(string $software, ?string $root = null): array {
 
 // Connect with the configured constants but WITHOUT get_db()'s 503: a setup
 // page that dies on a bad DB_NAME cannot diagnose a bad DB_NAME.
+/**
+ * @return array{connected:bool,error:string,pdo:?PDO,zone:?string,tables:list<string>,engines:array<string,string>,owner_exists:bool,owner_known:bool,grants:?string}
+ */
 function setup_db_probe(): array {
     try {
         $pdo = db_connect(
@@ -190,6 +196,10 @@ function setup_db_probe(): array {
 }
 
 // Rows for the Database section from a probe above.
+/**
+ * @param array{connected:bool,error:string,pdo:?PDO,zone:?string,tables:list<string>,engines:array<string,string>,owner_exists:bool,owner_known:bool,grants:?string} $probe
+ * @return list<array{id:string,label:string,status:string,detail:string}>
+ */
 function setup_db_rows(array $probe): array {
     if (!$probe['connected']) {
         return [setup_row('db', 'database', 'fail', t('admin.setupcheck.db_down', ['error' => $probe['error']]))];
@@ -263,7 +273,10 @@ function schema_statements(string $sql, bool $keepCreate = false): array {
 
 // Runs the statements with full result-set draining (setup.sql's
 // PREPARE/EXECUTE guard blocks leave live results behind otherwise).
-/** @return array{applied:int,error:string,statement:string} error empty on success */
+/**
+ * @param list<string> $statements
+ * @return array{applied:int,error:string,statement:string} error empty on success
+ */
 function schema_apply(PDO $pdo, array $statements): array {
     $applied = 0;
     foreach ($statements as $body) {

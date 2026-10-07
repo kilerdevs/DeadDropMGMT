@@ -77,7 +77,20 @@ All notable changes to DeadDropMGMT are documented here. The format follows
   verify, installer min-build — against `tests/bench-budgets.json`. The
   budgets are generous cliff gates (~100x observed, rationale documented
   per scenario), so shared-runner noise never fails the build; the JSON +
-  console report uploads as an artifact for trend reading.
+   console report uploads as an artifact for trend reading.
+- Generated mutation testing (`tools/mutation_generate.php`, zero-dependency,
+  token-based): the curated 18-mutant probe stays the merge gate
+  (`--min-msi=100`), and this asks the same question ~6,400 more times —
+  flipped comparisons and booleans, deleted negations and valued returns,
+  dead-forced branches, zeroed integers — at every eligible site in
+  `includes/*.php`, each run against the mapped fast suites in a throwaway
+  tree copy (killed = guarded line, survived = test gap or equivalent
+  mutant). Every run starts with a pristine-copy baseline that fails loudly
+  as a harness error instead of producing false kills, and killed verdicts
+  carry the failing assertion lines for triage. Wired as a nightly sharded
+  sweep (`.github/workflows/mutation-nightly.yml`, merged JSON artifact,
+  report-only by design) plus a 50-mutant seed-pinned sample on every push
+  (`mutation-sample` CI job, also report-only).
 
 ### Changed
 - Web installer (`tools/install.php`) needs less from the host: the

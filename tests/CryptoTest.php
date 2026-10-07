@@ -77,11 +77,25 @@ $pold = decrypt_location_data($gcmOld['ciphertext'], $gcmOld['iv']);
 T::ok('legacy plain string wrapped into schema',
     $pold !== false && $pold['text'] === 'ulica testowa 1' && $pold['lat'] === null);
 
-// Password hashing
+// Password hashing: Argon2id where the build offers it (PASSWORD_ARGON2ID),
+// bcrypt cost 12 where it does not. Old hashes keep verifying either way
+// and are upgraded at the next successful login.
 $h = hash_password('CorrectHorse1!');
-T::ok('bcrypt cost 12 prefix', str_starts_with($h, '$2y$12$'));
+$haveArgon = defined('PASSWORD_ARGON2ID');
+T::eq('hash follows the platform policy', $haveArgon ? 'argon2id' : 'bcrypt', (string)(password_get_info($h)['algoName'] ?? ''));
 T::ok('verify correct password', verify_password('CorrectHorse1!', $h));
 T::ok('verify wrong password rejected', !verify_password('correcthorse1!', $h));
+$legacyBcrypt = password_hash('CorrectHorse1!', PASSWORD_BCRYPT, ['cost' => 12]);
+T::ok('legacy bcrypt still verifies under either policy', verify_password('CorrectHorse1!', $legacyBcrypt));
+T::ok('fresh hash needs no upgrade', !hash_password_needs_upgrade($h));
+T::eq('stale hash flagged exactly when argon2id is available',
+    $haveArgon, hash_password_needs_upgrade($legacyBcrypt));
+$cheapBcrypt = password_hash('CorrectHorse1!', PASSWORD_BCRYPT, ['cost' => 4]);
+T::ok('cheap bcrypt always flagged', hash_password_needs_upgrade($cheapBcrypt));
+$dummy = auth_dummy_hash();
+T::ok('dummy burns (false) without throwing', password_verify('nope', $dummy) === false);
+T::eq('dummy costs what real verifies cost', $haveArgon ? 'argon2id' : 'bcrypt',
+    (string)(password_get_info($dummy)['algoName'] ?? ''));
 
 // Order capability tokens: 16 chars over the full 62-symbol alphanumeric
 // alphabet (16 × log2(62) ≈ 95.3 bits) — hex-only generation used to leave

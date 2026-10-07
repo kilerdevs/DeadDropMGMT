@@ -79,12 +79,23 @@ T::ok('multi-hop XFP: peer-written trailing https counts', request_is_https());
 putenv('DDMGMT_TRUST_PROXY=0');
 unset($_SERVER['HTTP_X_FORWARDED_PROTO']);
 
-// Multi-hop XFF behind a trusted peer: earlier entries are client-controlled
-// (the peer appends), so the last hop — the only one the client cannot forge
-// — is authoritative. Single-entry headers are untouched.
+// Multi-hop XFF behind a trusted peer walks right-to-left through
+// DDMGMT_TRUSTED_PROXIES: only the peer is trusted here, so the first
+// untrusted entry from the right (5.6.7.8) wins — not the client-spoofable
+// first entry, and not blindly the last one either (that would name a
+// proxy when the chain runs longer). Single-entry headers are untouched.
 putenv('DDMGMT_TRUST_PROXY=1');
 $_SERVER['HTTP_X_FORWARDED_FOR'] = '1.2.3.4, 5.6.7.8';
-T::eq('multi-hop XFF resolves to the peer-appended last hop', '5.6.7.8', get_client_ip());
+T::eq('multi-hop XFF resolves to first untrusted from the right', '5.6.7.8', get_client_ip());
+// client, proxy-1, proxy-2 with both proxies trusted: the walk discards
+// proxy-2 (peer), then proxy-1, and lands on the client.
+putenv('DDMGMT_TRUSTED_PROXIES=127.0.0.1, 5.6.7.8');
+T::eq('trusted chain resolves to the client', '1.2.3.4', get_client_ip());
+// Everything trusted: bottoms out at the leftmost entry (documented
+// caveat — the outer proxy must overwrite, not append).
+putenv('DDMGMT_TRUSTED_PROXIES=127.0.0.1, 1.2.3.4, 5.6.7.8');
+T::eq('all-trusted chain bottoms out leftmost', '1.2.3.4', get_client_ip());
+putenv('DDMGMT_TRUSTED_PROXIES');
 $_SERVER['HTTP_X_FORWARDED_FOR'] = '9.9.9.9';
 T::eq('single-entry XFF unchanged', '9.9.9.9', get_client_ip());
 unset($_SERVER['HTTP_X_FORWARDED_FOR']);

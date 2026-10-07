@@ -50,6 +50,7 @@ function aes_key_problem(): string {
 }
 
 // Returns array of [version => master_key_bytes], latest version first.
+/** @return array<int,string> */
 function _master_keys(): array {
     static $cache = null;
     if ($cache !== null) return $cache;
@@ -120,6 +121,7 @@ function _location_aad(string $bind): string {
     return 'deaddrop:location|' . $bind;
 }
 
+/** @return array{ciphertext:string, iv:string} */
 function encrypt_location(string $plaintext, ?string $bind = null): array {
     $key   = _location_key();
     $nonce = random_bytes(12);
@@ -163,6 +165,7 @@ function decrypt_location(string $ciphertext_b64, string $iv_hex, ?string $bind 
 
 // ── TOTP secrets (own subkey — a 2FA secret leak must not expose locations) ───
 
+/** @return array{ciphertext:string, iv:string} */
 function _seal_gcm(string $key, string $plaintext): array {
     $nonce = random_bytes(12);
     $tag   = '';
@@ -184,6 +187,7 @@ function _open_gcm(string $key, string $ciphertext_b64, string $iv_hex): string|
     );
 }
 
+/** @return array{ciphertext:string, iv:string} */
 function encrypt_secret(string $plaintext): array {
     return _seal_gcm(_totp_key(), $plaintext);
 }
@@ -199,6 +203,7 @@ function decrypt_secret(string $ciphertext_b64, string $iv_hex): string|false {
 // a blob sealed by an earlier build simply fails to open and the message is
 // lost once — nothing to migrate.
 
+/** @return array{ciphertext:string, iv:string} */
 function encrypt_flash(string $plaintext): array {
     return _seal_gcm(_flash_key(), $plaintext);
 }
@@ -214,6 +219,7 @@ function decrypt_flash(string $ciphertext_b64, string $iv_hex): string|false {
 // Storage: files on disk are encrypted; served via photo_serve() which
 // streams decrypted content. Thumbnails are also encrypted.
 
+/** @return array{ciphertext:string, iv:string} */
 function encrypt_photo(string $plaintext): array {
     return _seal_gcm(_photo_key(), $plaintext);
 }
@@ -235,7 +241,15 @@ function photo_encrypt_file(string $path): bool {
 // Decrypt a photo file to a temporary path for serving
 function photo_decrypt_to_temp(string $encrypted_path, string $tmp_path): bool {
     $meta = @json_decode(@file_get_contents($encrypted_path), true);
-    if (!is_array($meta) || !isset($meta['ct'], $meta['iv'])) return false;
+    // The envelope is attacker-reachable bytes (a planted uploads/ file
+    // decodes to MIXED: ct/iv may be arrays, ints or null). Reject
+    // non-strings here — decrypt_photo()'s string params would TypeError
+    // instead of failing closed.
+    if (!is_array($meta) || !isset($meta['ct'], $meta['iv'])
+        || !is_string($meta['ct']) || !is_string($meta['iv'])
+    ) {
+        return false;
+    }
     $data = decrypt_photo($meta['ct'], $meta['iv']);
     if ($data === false) return false;
     return @file_put_contents($tmp_path, $data) !== false;
@@ -274,6 +288,7 @@ function token_index(string $token): string {
     return hash_hmac('sha256', strtolower($token), _token_index_key());
 }
 
+/** @return array{ciphertext:string, iv:string} */
 function encrypt_token(string $token): array {
     return _seal_gcm(_token_key(), $token);
 }
@@ -296,7 +311,8 @@ function token_index_or_null(?string $token): ?string {
     return ($token === null || $token === '') ? null : token_index($token);
 }
 
-/** Display copy of a row's token, or null when it cannot be opened. */
+/** Display copy of a row's token, or null when it cannot be opened.
+ * @param array<string,mixed> $row */
 function order_token_plain(array $row): ?string {
     $ct = $row['token_enc'] ?? null;
     $iv = $row['token_iv'] ?? null;
@@ -336,6 +352,10 @@ function token_label(?string $plain, ?string $index): string {
 // ── Structured location data (JSON inside AES) ────────────────────────────────
 // Schema: {"text":"...","lat":null,"lng":null,"instructions":"","notes":""}
 
+/**
+ * @param array<string,mixed> $data
+ * @return array{ciphertext:string, iv:string}
+ */
 function encrypt_location_data(array $data, ?string $bind = null): array {
     $defaults = ['text' => '', 'lat' => null, 'lng' => null, 'instructions' => ''];
     // json_encode() answers false on invalid UTF-8 — passing that into
@@ -349,6 +369,7 @@ function encrypt_location_data(array $data, ?string $bind = null): array {
 
 // $bind: the row's token_hmac (see encrypt_location) — required to open a
 // bound value, ignored for pre-binding ones.
+/** @return array<string,mixed>|false */
 function decrypt_location_data(string $ciphertext_b64, string $iv_hex, ?string $bind = null): array|false {
     $plain = decrypt_location($ciphertext_b64, $iv_hex, $bind);
     if ($plain === false) {
@@ -366,6 +387,10 @@ function decrypt_location_data(string $ciphertext_b64, string $iv_hex, ?string $
 // Order notes live inside the encrypted location blob ('notes'). Rows
 // written before that keep them in the plaintext orders.notes column until
 // their next save — read either, encrypted copy first.
+/**
+ * @param array<string,mixed> $order
+ * @param array<string,mixed>|false $loc
+ */
 function order_notes_plain(array $order, array|false $loc): string {
     if (is_array($loc) && isset($loc['notes']) && is_string($loc['notes']) && $loc['notes'] !== '') {
         return $loc['notes'];
@@ -379,6 +404,10 @@ function order_notes_plain(array $order, array|false $loc): string {
 // ciphertext-only: someone reading session files gets the same protection the
 // database rows have, not plaintext locations.
 
+/**
+ * @param array<string,mixed> $data
+ * @return array{ct:string, iv:string}
+ */
 function seal_payload(array $data): array {
     $nonce = random_bytes(12);
     $tag   = '';
@@ -396,6 +425,10 @@ function seal_payload(array $data): array {
     return ['ct' => base64_encode($ct . $tag), 'iv' => bin2hex($nonce)];
 }
 
+/**
+ * @param array<string,mixed> $sealed
+ * @return array<string,mixed>|false
+ */
 function open_payload(array $sealed): array|false {
     if (!isset($sealed['ct'], $sealed['iv']) || strlen((string)$sealed['iv']) !== 24
         || !ctype_xdigit((string)$sealed['iv'])) {
@@ -417,9 +450,52 @@ function open_payload(array $sealed): array|false {
 }
 
 // ── Password hashing ──────────────────────────────────────────────────────────
+// Argon2id when the build offers it (PASSWORD_ARGON2ID exists since PHP 7.3
+// on Argon2-enabled builds — standard on php.net binaries, sometimes absent
+// on minimal shared-host builds), bcrypt cost 12 otherwise. Options are the
+// PHP defaults (64 MiB, 4 passes, 1 lane): interactive admin logins are rare
+// and rate-limited, so the memory-hard default is affordable, and threads
+// stay at 1 for hosts that count RSS per process. Old bcrypt hashes keep
+// verifying (password_verify() is algo-agnostic) and are upgraded
+// transparently at the next successful login — see
+// hash_password_needs_upgrade() at the admin_login() call site.
+
+/** @return array{memory_cost:int, time_cost:int, threads:int} */
+function _password_argon_opts(): array {
+    return ['memory_cost' => 65536, 'time_cost' => 4, 'threads' => 1];
+}
 
 function hash_password(string $password): string {
+    if (defined('PASSWORD_ARGON2ID')) {
+        return password_hash($password, PASSWORD_ARGON2ID, _password_argon_opts());
+    }
     return password_hash($password, PASSWORD_BCRYPT, ['cost' => 12]);
+}
+
+/** True when $hash was made under weaker/different options than today's
+ *  policy — the caller re-hashes on successful verify (opportunistic
+ *  upgrade, never a login blocker). */
+function hash_password_needs_upgrade(string $hash): bool {
+    if (defined('PASSWORD_ARGON2ID')) {
+        return password_needs_rehash($hash, PASSWORD_ARGON2ID, _password_argon_opts());
+    }
+    return password_needs_rehash($hash, PASSWORD_BCRYPT, ['cost' => 12]);
+}
+
+/** Equal-cost timing burn for unknown-user / bad-charset / empty-hash
+ *  rejections: the dummy costs what a REAL verify costs under the active
+ *  policy, so a bcrypt dummy next to argon2id accounts would itself be a
+ *  user-enumeration oracle. Argon2id dummy is minted once per process
+ *  (random salt — only the COST matters, never the value). */
+function auth_dummy_hash(): string {
+    static $argon = null;
+    if (defined('PASSWORD_ARGON2ID')) {
+        if ($argon === null) {
+            $argon = hash_password('dummy-auth-burn-value');
+        }
+        return $argon;
+    }
+    return DUMMY_AUTH_HASH;
 }
 
 function verify_password(string $password, string $hash): bool {
@@ -601,6 +677,7 @@ function _write_thumb(string $src, string $dest): bool {
     return (bool)$ok;
 }
 
+/** @param array<string,mixed> $file_entry */
 function save_uploaded_photo(array $file_entry, int $order_id, int $max_bytes = 12582912): string|false {
     if ($file_entry['error'] !== UPLOAD_ERR_OK) {
         return false;

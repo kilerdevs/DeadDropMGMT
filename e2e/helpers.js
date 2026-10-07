@@ -39,4 +39,47 @@ async function zonesSupported(page) {
   return (await page.locator('#maps-unsupported').count()) === 0;
 }
 
-module.exports = { freshPage, closePage, unlockForm, setZoneBbox, zonesSupported };
+module.exports = { freshPage, closePage, unlockForm, setZoneBbox, zonesSupported, reseed, totpCode };
+
+// Destructive specs (panic wipe, 2FA enroll) re-run the fixtures from inside
+// the spec file: global-setup runs once per suite, so without this a wipe
+// would starve every later file (workers:1 runs files serially, but order
+// alone cannot save a CI retry — the re-seed makes each file hermetic).
+// Same mechanism as global-setup: same machine, same env, repo-root paths
+// resolved from this file so `playwright test` works from any cwd.
+function reseed() {
+  const { spawnSync } = require('node:child_process');
+  const path = require('node:path');
+  const r = spawnSync(process.env.PHP_BINARY || 'php', [path.join(__dirname, 'seed.php')], {
+    stdio: 'inherit',
+    env: process.env,
+  });
+  if (r.status !== 0) {
+    throw new Error(`e2e/seed.php failed with exit ${r.status}`);
+  }
+}
+
+// RFC 6238 TOTP (SHA-1, 30 s, 6 digits) mirroring includes/totp.php, so specs
+// can complete enrollment without an authenticator app. The server accepts
+// ±1 step, so computing at submit time is always in-window; no window logic
+// here — generating a code is not verifying one.
+function totpCode(secretB32) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  const clean = String(secretB32).toUpperCase().replace(/[^A-Z2-7]/g, '');
+  let bits = '';
+  for (const c of clean) {
+    bits += alphabet.indexOf(c).toString(2).padStart(5, '0');
+  }
+  const bytes = [];
+  for (let i = 0; i + 8 <= bits.length; i += 8) {
+    bytes.push(parseInt(bits.slice(i, i + 8), 2));
+  }
+  const key = Buffer.from(bytes);
+  const msg = Buffer.alloc(8);
+  msg.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30000)));
+  const hmac = require('node:crypto').createHmac('sha1', key).update(msg).digest();
+  const offset = hmac[19] & 0x0f;
+  // 0x7F mask keeps the top bit clear: max 0x7FFFFFFF, safe in 32-bit ops.
+  const part = ((hmac[offset] & 0x7f) << 24) | (hmac[offset + 1] << 16) | (hmac[offset + 2] << 8) | hmac[offset + 3];
+  return String(part % 1000000).padStart(6, '0');
+}

@@ -140,7 +140,10 @@ function pmtiles_tile_id(int $z, int $x, int $y): int {
     return pmtiles_level_offset($z) + pmtiles_hilbert_id($z, $x, $y);
 }
 
-/** WebMercator lon/lat to tile x/y at zoom, clamped to the grid. @return array{int,int} */
+/**
+ * WebMercator lon/lat to tile x/y at zoom, clamped to the grid.
+ * @return array{int,int}
+ */
 function pmtiles_lonlat_to_xy(float $lon, float $lat, int $z): array {
     $n = 1 << $z;
     $x = (int)floor(($lon + 180.0) / 360.0 * $n);
@@ -167,7 +170,10 @@ function pmtiles_covering_count(float $minLon, float $minLat, float $maxLon, flo
     return $total;
 }
 
-/** Every tile id from z0..maxzoom covering the bbox, ascending, deduplicated. @return list<int> */
+/**
+ * Every tile id from z0..maxzoom covering the bbox, ascending, deduplicated.
+ * @return list<int>
+ */
 function pmtiles_covering_ids(float $minLon, float $minLat, float $maxLon, float $maxLat, int $maxzoom): array {
     $seen = [];
     for ($z = 0; $z <= $maxzoom; $z++) {
@@ -320,7 +326,8 @@ function pmtiles_transport_ok(): bool {
  * $warmLeaves carries raw leaf bytes from an earlier attempt ("off:len" =>
  * bytes): sizing resumes instead of restarting. $deadline (absolute,
  * microtime) aborts the walk cleanly with 'sizing timed out' (0 = none).
- * @return array{?array,string,array<string,string>} [plan-or-null, error, newly-fetched raw leaves]
+ * @param array<string,string> $warmLeaves raw leaf bytes keyed "off:len"
+ * @return array{?array{url:string,proxy:?string,bbox:list<float>,maxzoom:int,tileType:int,tileComp:int,outMaxZoom:int,meta:string,entries:list<array{int,int,int}>,spans:list<array{int,int}>,expected:int},string,array<string,string>} [plan-or-null, error, newly-fetched raw leaves]
  */
 function pmtiles_build_plan(string $url, ?string $proxy, float $minLon, float $minLat, float $maxLon, float $maxLat, int $maxzoom, int $timeout = 60, array $warmLeaves = [], float $deadline = 0.0): array {
     $noPlan = static fn(string $e): array => [null, $e, []];
@@ -543,7 +550,7 @@ function pmtiles_build_plan(string $url, ?string $proxy, float $minLon, float $m
 // Shape {url, leaves: {"off:len": base64}} — the url pins the bytes to the
 // planet build that produced them; a build change starts cold, never mixed.
 // Atomic like the plan sidecar (tmp + rename); corrupt files read as empty.
-// @return array{url:string,leaves:array<string,string>} raw bytes keyed "off:len"
+/** @return array{url:string,leaves:array<string,string>} raw bytes keyed "off:len" */
 function pmtiles_leaves_load(string $path): array {
     if (!is_file($path)) {
         return ['url' => '', 'leaves' => []];
@@ -650,7 +657,9 @@ function pmtiles_fetch_due(array $plan, string $tilesPath, float $timeBox, ?call
 // same clustered layout go-pmtiles writes.
 
 /** Encode entries (id-ascending) to a gzipped root directory. Data entries
- * carry run 1; callers may pass run 0 for leaf-directory pointers. */
+ * carry run 1; callers may pass run 0 for leaf-directory pointers.
+ * @param list<array{id:int,run?:int,len:int,off:int}> $entries
+ */
 function pmtiles_dir_encode(array $entries): string {
     $n = count($entries);
     $out = pmtiles_vint_encode($n);
@@ -879,7 +888,10 @@ function pmtiles_verify_path(string $path): bool {
         && $addr === $hdr['nAddr'];
 }
 
-/** Plan sidecar surroundings: atomic-enough for a worker file (write tmp + rename). */
+/**
+ * Plan sidecar surroundings: atomic-enough for a worker file (write tmp + rename).
+ * @param array{url:string,proxy:?string,bbox:list<float>,maxzoom:int,tileType:int,tileComp:int,outMaxZoom:int,meta:string,entries:list<array{int,int,int}>,spans:list<array{int,int}>,expected:int} $plan
+ */
 function pmtiles_plan_save(string $path, array $plan): bool {
     $tmp = $path . '.tmp';
     if (@file_put_contents($tmp, json_encode($plan, JSON_UNESCAPED_SLASHES)) === false) {
@@ -1092,7 +1104,11 @@ function pmtiles_parse_dir(string $raw, int $comp): ?array {
     return $out;
 }
 
-/** Binary search by tile id (directories are id-ascending). */
+/**
+ * Binary search by tile id (directories are id-ascending).
+ * @param list<array{id:int,run:int,len:int,off:int}> $entries
+ * @return ?array{id:int,run:int,len:int,off:int}
+ */
 function pmtiles_find_entry(array $entries, int $id): ?array {
     $lo = 0;
     $hi = count($entries) - 1;
@@ -1117,6 +1133,7 @@ function pmtiles_find_entry(array $entries, int $id): ?array {
  * at or below the wanted id and descends when that entry is a leaf (run
  * 0); a data entry below the wanted id means the tile is absent.
  * $fetchLeaf(off, len) fetches+parses one leaf directory (cached by caller).
+ * @param list<array{id:int,run:int,len:int,off:int}> $entries
  * @return ?array{id:int,run:int,len:int,off:int} data entry or null
  */
 function pmtiles_lookup_id(array $entries, callable $fetchLeaf, int $id, int $depth = 0): ?array {

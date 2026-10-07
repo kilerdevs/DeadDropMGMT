@@ -347,8 +347,9 @@ certificate (optional client cert/key: `DDMGMT_DB_SSL_CERT`, `DDMGMT_DB_SSL_KEY`
 default and only explicitly disableable via `DDMGMT_DB_SSL_VERIFY_CERT=0` — don't, outside throwaway labs).
 
 Behind a reverse proxy or CDN, set `DDMGMT_TRUST_PROXY=1` so rate limiting and the audit log see the real client address.
-Exactly **one** header is read: `DDMGMT_CLIENT_IP_HEADER`, default `X-Forwarded-For` (last hop — the one your proxy
-appended). Set it to `CF-Connecting-IP` behind Cloudflare, or `X-Real-IP` if your proxy sets only that. Other client-IP
+Exactly **one** header is read: `DDMGMT_CLIENT_IP_HEADER`, default `X-Forwarded-For` (multi-hop chains walk right-to-left
+through `DDMGMT_TRUSTED_PROXIES` — trusted entries are discarded from the right and the first untrusted address wins, so
+`client, proxy-1, proxy-2` resolves to the client when both proxies are trusted, never to a proxy). Set it to `CF-Connecting-IP` behind Cloudflare, or `X-Real-IP` if your proxy sets only that. Other client-IP
 headers are ignored, because a proxy only rewrites the header it knows and would pass a client-forged one through.
 Without the flag every header is ignored — otherwise any client could spoof its IP and sidestep the limiter.
 
@@ -584,12 +585,12 @@ Server-local files (`config.php`, `includes/`, `logs/`, `uploads/`) are never se
 | Threat | Mitigation | Protects | Against |
 |---|---|---|---|
 | SQL injection | PDO prepared statements throughout — zero string interpolation in SQL | S1–S5 | A1–A2 |
-| Password storage | bcrypt cost=12 via `password_hash()` / `password_verify()` | S5 | A4 |
+| Password storage | Argon2id where the PHP build offers it (`PASSWORD_ARGON2ID`, PHP defaults: 64 MiB / 4 passes / 1 lane), bcrypt cost=12 otherwise — one `hash_password()` policy, old hashes keep verifying and upgrade transparently at the next login; equal-cost timing burns use an adaptive dummy under the active policy | S5 | A4 |
 | Account takeover | TOTP 2FA (RFC 6238) — self-service per account, secret GCM-encrypted at rest. Passwordless accounts are claimed only with a single-use enrollment secret, never by username alone. Per-account attempt budgets on login and 2FA; password / 2FA resets end all of the account's sessions; hard 12-hour session ceiling | S5 | A1, A2 |
 | Location data at rest | Location text, pin, instructions **and order notes** travel in one AES-256-GCM (authenticated) blob, random nonce per record (notes of orders saved before this lived in a plaintext column until their next save). **Drop photos are encrypted on disk** (AES-256-GCM sealed envelopes, thumbnails included) and served decrypted via `photo.php` — they are re-encoded, EXIF-stripped files under unguessable names, deleted with the order and by panic wipe; keys are HKDF purpose-subkeys of the master key — locations, TOTP secrets, reveal payloads, one-time session messages, the order-token index and copy, drop photos (`deaddrop:photo-v1`), and the log chain each use their own (ADR-016). Legacy CBC rows and raw-master rows are rejected at runtime — migrate with `tools/migrate_cbc_to_gcm.php` then `tools/separate_keys.php`. Master key lives only in `config.php`, env (`DDMGMT_AES_KEY_HEX`) or the `/config/aes_key_hex` file — never in the DB | S1, S4 | A4 |
 | Order tokens at rest | Lookups go through `orders.token_hmac`: HMAC-SHA256 of the (lower-cased) token under its own HKDF subkey, unique-indexed. Events and the audit trail keep only that index. The admin panel's display copy is AES-256-GCM under a second subkey. A database dump therefore contains no usable token and cannot be used to test candidate tokens offline. Existing installs upgrade with `tools/migrate_order_tokens.php` (ADR-019) | S3 | A4 |
 | Pickup password guessing | Per-order budget (10 wrong passwords per window per token, from any address — a leaked link plus rotating IPs buys no more) plus a dual budget enforced together: IP-based limiter (IPv6 clients counted per /64) (**fail-closed**: if the limiter DB is down, pickup and login are denied, not waved through) **and** a per-session failure bucket (5 failures per window, its own constant — not tied to the IP attempt count) — whoever trips either is blocked; ≥64-bit generated passphrases (6 words + 4-digit + symbol), hash-only at rest, equalized-cost responses for unknown tokens | S2 | A1 |
-| Rate-limit bypass via spoofed `X-Forwarded-For` | Proxy headers are honored only when `DDMGMT_TRUST_PROXY=1` (opt-in for reverse-proxy/CDN installs) **and** the direct peer matches `DDMGMT_TRUSTED_PROXIES` (default: loopback + RFC1918); header values are validated as literal IPs and `REMOTE_ADDR` is the default source of truth | S2 | A1 |
+| Rate-limit bypass via spoofed `X-Forwarded-For` | Proxy headers are honored only when `DDMGMT_TRUST_PROXY=1` (opt-in for reverse-proxy/CDN installs) **and** the direct peer matches `DDMGMT_TRUSTED_PROXIES` (default: loopback + RFC1918); multi-hop chains walk right-to-left discarding trusted proxies, so the client address is the first untrusted hop — a proxy is never mistaken for the client; header values are validated as literal IPs and `REMOTE_ADDR` is the default source of truth | S2 | A1 |
 | Token enumeration | 16-char alphanumeric random tokens (~83 bits effective — lookups are case-insensitive, so 36 symbols per position); unknown-token answers burn the same bcrypt cost and return the same body as wrong passwords when a credential was submitted; receipt requires the delivered state atomically; expired-but-not-yet-swept orders are treated as gone | S3 | A1 |
 | Session fixation / theft | `session_regenerate_id(true)` on login; `httponly`, `samesite=Strict`, `secure` when HTTPS | S5 | A1, A2 |
 | CSRF | 32-byte random token in session (64 hex chars), `hash_equals()` on every POST — public unlock forms included; single-use rotation, with a same-origin live-token endpoint so long-lived admin pages never go stale | S5, S7 | A2 |
@@ -696,8 +697,9 @@ A zero-dependency PHP suite (no PHPUnit — each file is a standalone script), a
 | **PHP suites** — 45 | Crypto, auth, limits, state machine, maps, i18n, fail-closed branches, live-HTTP flows, web installer | `php tests/schema_loader.php && php tests/run_all.php` |
 | **Browser E2E** — 7 specs | What raw HTTP cannot see: no-JS paths, CSP-clean DOM, offline maps, mid-reveal UI | `npm ci && npx playwright install chromium && npm run e2e` |
 | **Coverage gate** | Line coverage floors over `includes/` under `pcov` | `composer install && php tests/coverage_runner.php` |
-| **Mutation probe** — 16 mutants | A tested guard versus a dead one | `php tools/mutation_probe.php` |
-| **Static analysis** | PHPStan level 5, PHP-CS-Fixer, CVE gates, SBOMs, SAST | CI |
+| **Mutation probe** — 18 mutants | A tested guard versus a dead one | `php tools/mutation_probe.php` |
+| **Generated mutation sweep** — ~6.4k mutants | Everything the suites cannot see, nightly | `php tools/mutation_generate.php --list` |
+| **Static analysis** | PHPStan level 5 (level 6 for `includes/`), PHP-CS-Fixer, CVE gates, SBOMs, SAST | CI |
 | **CI matrix** | PHP 8.2 · 8.3 · 8.4 · 8.5, plus MySQL 8 and a timezone-skew job, and all three Docker stacks | `.github/workflows/ci.yml` |
 
 The suite never touches your real database: `tests/bootstrap.php` forces `DDMGMT_DB_NAME=deaddrops_test` and points the app at TCP loopback unless you say otherwise.
@@ -752,7 +754,7 @@ Per-file pins lock in hermetic gains that were hard-won — any regression from 
 
 ### Mutation probe
 
-Line coverage cannot tell a tested guard from a dead one, so `tools/mutation_probe.php` applies a curated set of 16 logic-weakening mutants and requires the suite to kill every one:
+Line coverage cannot tell a tested guard from a dead one, so `tools/mutation_probe.php` applies a curated set of 18 logic-weakening mutants and requires the suite to kill every one (`--min-msi=100` in CI):
 
 - **CSRF:** comparison removed, token rotation removed
 - **Limiter:** fail-open status, hardcoded bucket window, skipped purge
@@ -760,8 +762,11 @@ Line coverage cannot tell a tested guard from a dead one, so `tools/mutation_pro
 - **Tokens & output:** hex-only token alphabet, unescaped translation parameters
 - **Cleanup:** sweep guard removed for preparing orders
 - **Log chain:** linkage ignored, sequence numbers dropped, checkpoint neutered, continuity check neutered
+- **Backup caps:** file-count cap removed, JSON size gate blinded
 
-It runs as a report-only CI job while the score baseline proves stable; a survived mutant is filed as a test-suite bug.
+A survived curated mutant fails the build — it is a test-suite bug, not an application bug.
+
+The curated 18 are the gate because a human vetted each one as meaningful. `tools/mutation_generate.php` asks the same question ~6,400 more times, mechanically: it tokenizes `includes/*.php`, applies small semantics-weakening edits at every eligible site (flipped comparisons and booleans, deleted negations and valued returns, dead-forced branches, zeroed integers), and runs the mapped fast suites against each one in a throwaway tree copy. Every run starts with a baseline — each mapped suite once against the pristine copy — so a red baseline fails loudly as a harness error instead of silently producing false kills. The generated set always contains equivalent mutants, so it never gates: a nightly sharded sweep (`.github/workflows/mutation-nightly.yml`, merged JSON artifact) plus a 50-mutant seed-pinned sample on every push, both report-only. A SURVIVED line there is triage fuel — either a test gap (write the assertion) or an equivalent mutant — for the nightly report, one line at a time.
 
 ---
 

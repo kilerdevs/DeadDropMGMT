@@ -71,7 +71,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     "UPDATE users SET password_hash = ?, enrollment_hash = NULL, enrollment_expires = NULL
                      WHERE id = ? AND (password_hash = '' OR password_hash IS NULL)"
                 );
-                $stmt->execute([password_hash($pw1, PASSWORD_BCRYPT, ['cost' => 12]), $pending_uid]);
+                $stmt->execute([hash_password($pw1), $pending_uid]);
 
                 if ($stmt->rowCount() === 0) {
                     unset($_SESSION['pending_setup_user_id'], $_SESSION['pending_setup_time'], $_SESSION['enrollment_flash']);

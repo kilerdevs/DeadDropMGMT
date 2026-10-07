@@ -17,6 +17,7 @@ function db_mysql_attr(string $short): int {
 
 // Pure factory so the TLS option matrix (CA only vs client certs vs verify
 // toggle) stays unit-testable without a live TLS-capable database.
+/** @return array<int,bool|int|string> PDO attribute id => option value */
 function db_options(string $ca, string $cert, string $key, bool $verify): array {
     $options = [
         PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
@@ -64,6 +65,7 @@ function db_init_session(PDO $pdo): bool {
 
 // Separate connection step so the failure path is unit-testable without a
 // live database (a refused TCP connect reproduces it exactly).
+/** @param array<int,mixed> $options PDO attribute id => option value */
 function db_connect(string $dsn, string $user, string $pass, array $options): PDO {
     $pdo = new PDO($dsn, $user, $pass, $options);
     db_init_session($pdo);

@@ -71,7 +71,10 @@ function build_info_parse(string $json): array {
     ];
 }
 
-/** Provenance of the running build (read once per request). */
+/**
+ * Provenance of the running build (read once per request).
+ * @return array{known:bool,release:bool,beta:bool,version:?string,ahead:int,commit:?string,branch:?string,dirty:bool}
+ */
 function build_info(): array {
     static $info = null;
     if ($info === null) {

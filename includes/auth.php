@@ -371,7 +371,7 @@ function admin_login(string $username, string $password): string {
     // ("ówner", full-width, zero-width joins == "owner") while hashing to a
     // fresh per-account rate-limit key — so it is a guaranteed miss here.
     if (preg_match('/^[a-zA-Z0-9_\-\.]+$/', $username) !== 1) {
-        password_verify($password, DUMMY_AUTH_HASH);
+        password_verify($password, auth_dummy_hash());
         return 'fail';
     }
     try {
@@ -392,10 +392,10 @@ function admin_login(string $username, string $password): string {
     }
 
     if (!$user) {
-        // Burn the same bcrypt cost a real account would: unknown username
+        // Burn the same cost a real account would: unknown username
         // and wrong password become indistinguishable by timing. No sleeps —
         // the hash itself IS the constant-time answer.
-        password_verify($password, DUMMY_AUTH_HASH);
+        password_verify($password, auth_dummy_hash());
         return 'fail';
     }
 
@@ -404,13 +404,13 @@ function admin_login(string $username, string $password): string {
     // Accounts awaiting first login carry no password: the enrollment secret
     // issued at account creation is the claim credential — knowing only the
     // username must never reach the setup step. Anything else just fails,
-    // after burning the same bcrypt cost as every other rejection so the
+    // after burning the same cost as every other rejection so the
     // empty-hash branch is not a timing oracle for "this account exists
     // and awaits enrollment".
     if ($hash === '') {
         $enrollment = trim(post_string('enrollment'));
         if ($password !== '' || $enrollment === '' || !enrollment_secret_valid((int)$user['id'], $enrollment)) {
-            password_verify($password, DUMMY_AUTH_HASH);
+            password_verify($password, auth_dummy_hash());
             return 'fail';
         }
         session_regenerate_id(true);
@@ -422,6 +422,20 @@ function admin_login(string $username, string $password): string {
 
     if (!password_verify($password, $hash)) {
         return 'fail';
+    }
+
+    // Opportunistic algo upgrade: a verified bcrypt (or stale-option) hash
+    // is re-hashed under the active policy right here, so the fleet
+    // migrates without a flag day. Best-effort by design — a failed UPDATE
+    // must never turn a correct password into a lockout; the old hash
+    // verifies fine next time too.
+    if (hash_password_needs_upgrade($hash)) {
+        try {
+            $up = get_db()->prepare('UPDATE users SET password_hash = ? WHERE id = ? LIMIT 1');
+            $up->execute([hash_password($password), (int)$user['id']]);
+        } catch (Throwable $e) {
+            log_warn('password_rehash_failed', ['msg' => 'verified hash could not be upgraded in place; login continues', 'err' => substr($e->getMessage(), 0, 120)]);
+        }
     }
 
     if (!empty($user['totp_enabled'])) {
@@ -534,6 +548,7 @@ function verify_csrf_readonly(mixed $token): bool {
 // session token on success, every state-changing AJAX response must hand the
 // caller its next token — otherwise the second request from a page that was
 // rendered once would fail CSRF forever.
+/** @param array<string,mixed> $payload */
 function json_out(array $payload, int $status = 200): never {
     http_response_code($status);
     header('Content-Type: application/json; charset=utf-8');
@@ -719,6 +734,7 @@ function rl_client_subject(): string {
     return inet_ntop(substr($bin, 0, 8) . str_repeat("\0", 8)) . '/64';
 }
 
+/** @return array{blocked:bool, remaining:int, count:int} */
 function rl_status(string $scope = 'public', ?string $subject = null): array {
     if (rl_scope_switchable($scope) && !rl_enabled()) {
         return ['blocked' => false, 'remaining' => 0, 'count' => 0];
@@ -817,6 +833,7 @@ function rl_status(string $scope = 'public', ?string $subject = null): array {
 // left". A second statement then reads the post-state for the verdict.
 // The returned 'blocked' verdict comes from the post-increment count of
 // that single state transition.
+/** @return array{blocked:bool, remaining:int, count:int} */
 function rl_hit(string $scope = 'public', ?int $max_override = null, ?int $window_override = null, ?string $subject = null): array {
     if (rl_scope_switchable($scope) && !rl_enabled()) {
         return ['blocked' => false, 'remaining' => 0, 'count' => 0];
@@ -990,6 +1007,7 @@ function bucket_fail(string $scope = 'public'): void {
     $_SESSION['pw_fail'][$scope] = $cur;
 }
 
+/** @return array{count:int, blocked:bool} */
 function bucket_status(string $scope = 'public', int $max = 10): array {
     $cur = $_SESSION['pw_fail'][$scope] ?? null;
     $n   = ($cur && (time() - $cur['ts']) < rl_window_seconds()) ? (int)$cur['n'] : 0;

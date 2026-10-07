@@ -120,6 +120,15 @@ hosts is spotty and bcrypt's 72-byte ceiling is irrelevant here (generated
 passphrases are ≤40 chars, admin passwords policy-checked). Revisit if
 hosting constraints change.
 
+**Update 2026-10 (revisited as promised).** `hash_password()` now prefers
+Argon2id exactly when the build offers it (`defined('PASSWORD_ARGON2ID')`
+— the spotty-availability objection dissolves into a runtime feature
+check, with bcrypt-12 as the fallback, so no host is left behind). Options
+are the PHP defaults (64 MiB / 4 passes / 1 lane); old bcrypt hashes keep
+verifying and upgrade opportunistically at the next successful login, and
+the equal-cost dummy follows the active policy so the timing-burn does not
+itself become an oracle.
+
 ## ADR-005 · TOTP defaults: SHA-1 / 6 digits / 30 s
 
 **Context.** 2FA secrets are scanned as QR codes by arbitrary authenticator

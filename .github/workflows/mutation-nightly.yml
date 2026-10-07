@@ -1,0 +1,135 @@
+name: Generated mutation sweep
+
+# Thousands-scale mutation testing, report-only by design: the generated set
+# always contains equivalent mutants, so it can never gate (that is the
+# curated probe's job in CI). This sweeps all ~6.4k generated mutants across
+# 8 shards, uploads per-shard JSON, and merges them into one report with the
+# overall MSI plus the full SURVIVED list — triage fuel, not a verdict.
+# A SURVIVED line here is either a test gap (write the assertion) or an
+# equivalent mutant (defensive default, unreachable-under-CLI arm); telling
+# the two apart is the human's job, one line at a time.
+on:
+  schedule:
+    # 02:00 UTC daily — off-peak for both the dev box's pushes and releases.
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: read # the aggregate job downloads shard artifacts via gh
+
+jobs:
+  sweep:
+    runs-on: ubuntu-24.04
+    name: sweep shard ${{ matrix.shard }} / 8
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false # one shard's harness hiccup must not hide the other seven
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      DDMGMT_DB_HOST: 127.0.0.1
+      DDMGMT_DB_PORT: '3306'
+      DDMGMT_DB_USER: root
+      DDMGMT_DB_PASS: root
+      DDMGMT_TEST_DB: deaddrops_test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: '8.3'
+          extensions: pdo_mysql, openssl, gd, fileinfo, zip
+
+      - name: Prepare config
+        run: cp config.php.example config.php
+
+      - name: Load schema
+        run: php tests/schema_loader.php
+
+      # Fixed seed (the tool default): the shard owns a STABLE mutant set, so
+      # consecutive nights are comparable mutant-for-mutant. Report-only: no
+      # --min-msi — exit is non-zero only on harness errors (red baseline,
+      # copy failure), never on SURVIVED lines.
+      - name: Run shard
+        run: |
+          set -o pipefail
+          php tools/mutation_generate.php --shard=${{ matrix.shard }}/8 \
+            --report=mutants-${{ matrix.shard }}.json | tee sweep-${{ matrix.shard }}.txt
+          grep -oP "MSI \K[\d.]+(?=%)" sweep-${{ matrix.shard }}.txt | head -1 | \
+            { read msi; echo "### Shard ${{ matrix.shard }} MSI: ${msi}%" >> $GITHUB_STEP_SUMMARY; } || true
+
+      - name: Upload shard report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sweep-shard-${{ matrix.shard }}
+          path: mutants-${{ matrix.shard }}.json
+          retention-days: 30
+
+  aggregate:
+    runs-on: ubuntu-24.04
+    name: merge sweep report
+    needs: sweep
+    # The merge must run even when a shard fails: seven shards of data still
+    # triage. Shards that errored simply contribute no report.
+    if: always()
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: '8.3'
+          extensions: pdo_mysql, openssl, gd, fileinfo, zip
+
+      # No download-artifact pin exists in-repo; gh is preinstalled and needs
+      # no new pins (GITHUB_TOKEN is already available to the job).
+      - name: Fetch shard reports
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p reports
+          for i in 0 1 2 3 4 5 6 7; do
+            gh run download ${{ github.run_id }} -n "sweep-shard-$i" --dir reports || \
+              echo "shard $i produced no report (job failed before upload)"
+          done
+          ls reports
+
+      - name: Merge and summarize
+        run: |
+          set -o pipefail
+          shopt -s nullglob
+          files=(reports/mutants-*.json)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo '### Nightly generated MSI: no shard reports to merge' >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+          php tools/mutation_generate.php --merge=mutants-all.json "${files[@]}" | tee sweep-all.txt
+          grep -oP "MSI \K[\d.]+(?=%)" sweep-all.txt | head -1 | \
+            { read msi; echo "### Nightly generated MSI: ${msi}% (report-only)" >> $GITHUB_STEP_SUMMARY; } || true
+          echo '#### Survived mutants (gaps or equivalents — triage):' >> $GITHUB_STEP_SUMMARY
+          grep -oP "^  SURVIVED \K.*" sweep-all.txt | head -100 >> $GITHUB_STEP_SUMMARY || true
+
+      - name: Upload merged report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sweep-all
+          path: mutants-all.json
+          retention-days: 30

@@ -92,6 +92,7 @@ function order_receive_atomic(string $token): bool {
 // Returns [token, files] on success, null when nothing was deleted. The
 // token is the plaintext display copy ('' if it cannot be opened): callers
 // use it for their audit entry, which re-indexes it.
+/** @return ?array{token:string,files:list<string>} null when nothing was deleted */
 function order_delete_atomic(int $id): ?array {
     $db = get_db();
     $db->beginTransaction();
@@ -218,6 +219,7 @@ function _delete_order_events(PDO $db, int $order_id, ?string $token_index): voi
 // Best-effort filesystem sweep AFTER the DB rows are gone. Filenames come
 // from our own DB column and are additionally pattern-checked before any
 // unlink, so a tampered row can never point outside uploads/<id>/<hex>.<ext>.
+/** @param array<int,mixed> $files raw filename column values (pattern-checked inside) */
 function _unlink_order_files(int $order_id, array $files): void {
     $base = dirname(__DIR__) . '/uploads/';
     foreach ($files as $fn) {

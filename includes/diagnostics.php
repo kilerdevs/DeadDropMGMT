@@ -18,7 +18,10 @@ const DIAGNOSTICS_DU_MAX_FILES = 5000;
 // two intervals means the worker is not reaching them.
 const DIAGNOSTICS_HEARTBEAT_STALE_S = 7200;
 
-/** Full snapshot: seven sections plus the collection timestamp. */
+/**
+ * Full snapshot: seven sections plus the collection timestamp.
+ * @return array{generated_at:int,system:array<string,mixed>,jobs:array<string,mixed>,logs:array<string,mixed>,traffic:array<string,mixed>,security:array<string,mixed>,data:array<string,mixed>,backups:array<string,mixed>}
+ */
 function diagnostics_collect(): array {
     return [
         'generated_at' => time(),
@@ -32,7 +35,10 @@ function diagnostics_collect(): array {
     ];
 }
 
-/** Run one section collector; a throwing source degrades, never fails. */
+/**
+ * Run one section collector; a throwing source degrades, never fails.
+ * @return array<string,mixed>
+ */
 function _diag_try(string $fn): array {
     try {
         $out = $fn();
@@ -81,6 +87,7 @@ function diagnostics_age(int $ts, ?int $now = null): string {
 
 // ── System ───────────────────────────────────────────────────────────────────
 
+/** @return array{php:string,sapi:string,memory_limit:string|false,opcache:?array<string,mixed>,disks:array<string,array{free:?int,total:?int}>,db_version:?string,db_size:?int} */
 function diagnostics_system(): array {
     $root = dirname(__DIR__);
     $disks = [];
@@ -131,6 +138,7 @@ function diagnostics_system(): array {
 
 // ── Jobs (heartbeats the operator currently cannot see anywhere) ─────────────
 
+/** @return array{pseudo_cron:bool,heartbeats:array<string,array{label:string,at:?int,age_s:?int,stale:bool}>,maps_worker_lock:?array{by:string,at:int,age_s:int},maps_engine:?string} */
 function diagnostics_jobs(): array {
     $now = time();
     $beats = [];
@@ -167,6 +175,7 @@ function diagnostics_jobs(): array {
 
 // ── Log health (sizes + tip + checkpoint age; continuity stays manual) ───────
 
+/** @return array{files:array<string,array{size:?int,mtime:?int}>,tip:?array{seq:?int,ts:?string},checkpoint:?array{tip_seq:int,at:?int}} */
 function diagnostics_logs(): array {
     $root = dirname(__DIR__);
     $files = [];
@@ -206,6 +215,7 @@ function diagnostics_logs(): array {
 
 // ── Traffic (true 24h counts from order_events + recent app-log histogram) ───
 
+/** @return array{events_24h_by_type:array<string,int>,top_ips_24h:list<array{ip:string,events:int}>,log_levels:array<string,int>,log_top_events:array<string,int>,log_sampled_lines:int} */
 function diagnostics_traffic(): array {
     $since = date('Y-m-d H:i:s', time() - 86400);
     $byType = [];
@@ -256,6 +266,7 @@ function diagnostics_traffic(): array {
 
 // ── Security (live rate-limit pressure + audit mix; IPs owner-visible) ───────
 
+/** @return array{top_blocked:list<array{ip:string,scope:string,count:int,window_start:?int}>,audit_24h_by_action:array<string,int>,audit_24h_total:int} */
 function diagnostics_security(): array {
     $blocked = [];
     $auditMix = [];
@@ -290,6 +301,7 @@ function diagnostics_security(): array {
 
 // ── Data (queue depth, photo store, zone progress, pool staleness) ───────────
 
+/** @return array{orders_by_status:array<string,int>,orders_expiring_24h:int,photos:int,uploads:array<string,mixed>,zones:list<array{name:string,status:string,pct:?float,speed_bps:?int,eta_secs:?int,error:string}>,proxy_pool:array{total:int,by_status:array<string,int>,stalest_check_s:?int}} */
 function diagnostics_data(): array {
     $orders = [];
     $expiringSoon = 0;
@@ -346,7 +358,10 @@ function diagnostics_data(): array {
     ];
 }
 
-/** Bounded recursive size walk; flags truncation instead of lying. */
+/**
+ * Bounded recursive size walk; flags truncation instead of lying.
+ * @return array{ok:true,bytes:int,files:int,truncated:bool}|array{ok:false,error:string}
+ */
 function _diag_dir_usage(string $dir): array {
     $bytes = 0;
     $files = 0;
@@ -374,6 +389,7 @@ function _diag_dir_usage(string $dir): array {
 // ── Backups (freshness is the metric: a backup system with no recent bundle ─
 // ── is how dead hosts happen) ───────────────────────────────────────────────
 
+/** @return array{count:int,total_bytes:int,latest:?array{name:string,format:string,size:int,mtime:int},zip_supported:bool} */
 function diagnostics_backups(): array {
     $list = backup_list();
     $latest = $list[0] ?? null;

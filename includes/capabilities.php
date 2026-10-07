@@ -86,7 +86,10 @@ function capability_definitions(): array {
 //   dirs: array<string,bool> label => writable | session_path: string,
 //   session_writable: bool | server_sw: string, htaccess_ok: bool
 //
-// @return list<array{id:string,label:string,state:string,required:bool,soft:string,fallback:string,note:string}>
+/**
+ * @param array{php_version?:string,ext?:array<string,bool>,curl?:bool,sockets?:bool,zip_ext?:bool,unzip_bin?:?string,exec?:bool,proc_open?:bool,detach?:bool,putenv_ok?:bool,grants?:?string,dirs?:array<string,bool>,session_path?:string,session_writable?:bool,server_sw?:string,htaccess_ok?:bool,set_time_limit?:bool} $env
+ * @return list<array{id:string,label:string,state:string,required:bool,soft:string,fallback:string,note:string}>
+ */
 function capabilities_evaluate(array $env): array {
     $ext = $env['ext'] ?? [];
     $ex = static fn(string $e): bool => (bool)($ext[$e] ?? false);
@@ -221,7 +224,10 @@ function capabilities_find_unzip(): ?string {
 // One evaluated row by id (unknown ids answer null). Convenience over
 // capabilities_evaluate() for consumers that own the rest of their table
 // (the setup schema section, the installer's dbtest step).
-/** @return ?array{id:string,label:string,state:string,required:bool,soft:string,fallback:string,note:string} */
+/**
+ * @param array{php_version?:string,ext?:array<string,bool>,curl?:bool,sockets?:bool,zip_ext?:bool,unzip_bin?:?string,exec?:bool,proc_open?:bool,detach?:bool,putenv_ok?:bool,grants?:?string,dirs?:array<string,bool>,session_path?:string,session_writable?:bool,server_sw?:string,htaccess_ok?:bool,set_time_limit?:bool} $env
+ * @return ?array{id:string,label:string,state:string,required:bool,soft:string,fallback:string,note:string}
+ */
 function capability_row(string $id, array $env): ?array {
     foreach (capabilities_evaluate($env) as $row) {
         if ($row['id'] === $id) {
@@ -234,6 +240,9 @@ function capability_row(string $id, array $env): ?array {
 // Installer / setup-check word for an evaluated row: ok stays ok, a covered
 // degradation renders with its soft severity, and only a required capability
 // with no fallback renders fail.
+/**
+ * @param array{id:string,label:string,state:string,required:bool,soft:string,fallback:string,note:string} $row
+ */
 function capabilities_consumer_status(array $row): string {
     if ($row['state'] === 'ok') {
         return 'ok';

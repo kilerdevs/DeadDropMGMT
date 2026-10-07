@@ -8,6 +8,13 @@ declare(strict_types=1);
 const INST_VERSION = '1.0.0';
 const INST_MASTER_ZIP = 'https://github.com/kilerdevs/DeadDropMGMT/archive/refs/heads/master.zip';
 const INST_TAGS_API = 'https://api.github.com/repos/kilerdevs/DeadDropMGMT/tags';
+const INST_RELEASES_API = 'https://api.github.com/repos/kilerdevs/DeadDropMGMT/releases?per_page=15';
+// Release-signing trust anchor: Ed25519 PUBLIC key (base64), the .pub half
+// of tools/release.key. Signed release assets (<pkg>.zip + <pkg>.zip.sig)
+// verify against this; rotating the maintainer key means changing this AND
+// rebuilding tools/install.min.php. Unsigned packages (master.zip, manual
+// uploads) still install but need explicit confirmation at extract.
+const INST_RELEASE_PUB = 'iamXKsDLd5SoyHPs53LRgrkoBeV/KtFnyEEncYR+0iI=';
 const INST_TABLES = ['users','orders','order_photos','osm_proxies','map_zones','order_events','rate_limits','audit_log','settings','log_checkpoints'];
 const INST_DIRS = ['logs','cache','cache/osm_tiles','cache/sessions','tiles','data/maps','uploads'];
 // Runtime-data dirs: an upgrade merges the release's files (.htaccess) into
@@ -157,8 +164,28 @@ function inst_gate(string $action, string $given): ?string {
 // follows symlinks. Returns ok/snapshot/files; extract aborts unless ok.
 function ix_snap_skip(): array {
     [$zip, $src] = dl_paths();
-    return array_merge([basename(__FILE__), INST_UNLOCK, basename((string)$zip), basename((string)$src), 'backups', 'config.php'], INST_KEEP);
+    return array_merge([basename(__FILE__), INST_UNLOCK, basename((string)$zip), basename((string)$zip) . '.verified', basename((string)$zip) . '.part', basename((string)$src), 'backups', 'config.php'], INST_KEEP);
 }
+// Release signatures: <zip-url>.sig next to the package (Ed25519, base64
+// detached). Returns 'signed', 'unsigned' (no .sig published, or sodium
+// missing on this host so nothing could be proven), or 'forged' (a .sig IS
+// published but does not verify — the package is refused outright).
+// Malformed .sig bodies count as forged, never as unsigned: a
+// published-but-broken signature must fail loudly, not degrade into a
+// confirm-click.
+function ix_release_sig_state(string $zipUrl, string $zipPath): string {
+    if (!function_exists('sodium_crypto_sign_verify_detached')) return 'unsigned';
+    $r = http_fetch($zipUrl . '.sig', 'GET', null, 15);
+    if (isset($r['error']) || $r[0] !== 200) return 'unsigned';
+    $pub = base64_decode(INST_RELEASE_PUB, true);
+    $sig = base64_decode(trim((string)$r[2]), true);
+    if (!is_string($pub) || strlen($pub) !== 32 || !is_string($sig) || strlen($sig) !== 64) return 'forged';
+    $data = @file_get_contents($zipPath);
+    if (!is_string($data)) return 'forged';
+    return sodium_crypto_sign_verify_detached($sig, $data, $pub) ? 'signed' : 'forged';
+}
+/** Sidecar remembering the download verdict for the extract gate. */
+function ix_verified_path(): string { [$zip] = dl_paths(); return $zip . '.verified'; }
 function ix_snapshot_needed(): bool {
     $skip = ix_snap_skip();
     foreach ((array)@scandir(base()) as $e) {
@@ -949,10 +976,34 @@ if ($action !== '') {
         if ($r[0] !== 200) jer('version source answered HTTP ' . $r[0] . ' — paste a zip URL manually.');
         $tags = json_decode($r[2], true);
         if (!is_array($tags)) jer('version source returned garbage — paste a zip URL manually.');
+        // Signed release assets win over zipballs: for every GitHub Release
+        // carrying a .zip asset, the picker offers the ASSET (whose .sig
+        // sibling the download step verifies) instead of the auto-built
+        // archive (which can never be signed). Best-effort — a releases-API
+        // failure only costs the signed labels, never the version list.
+        $assets = [];
+        $rr = http_fetch(INST_RELEASES_API, 'GET', null, 15);
+        if (!isset($rr['error']) && $rr[0] === 200) {
+            $rels = json_decode($rr[2], true);
+            if (is_array($rels)) {
+                foreach ($rels as $rel) {
+                    if (!is_array($rel) || !isset($rel['tag_name']) || !is_array($rel['assets'] ?? null)) continue;
+                    foreach ($rel['assets'] as $a) {
+                        $u = (string)($a['browser_download_url'] ?? '');
+                        if ($u !== '' && str_ends_with(strtolower($u), '.zip') && !str_ends_with(strtolower($u), '.zip.sig')) {
+                            $assets[(string)$rel['tag_name']] = $u;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
         $out = [];
         foreach ($tags as $t) {
             if (!isset($t['name'], $t['zipball_url'])) continue;
-            $out[] = ['tag' => (string)$t['name'], 'zip' => (string)$t['zipball_url']];
+            $tag = (string)$t['name'];
+            $signed = isset($assets[$tag]);
+            $out[] = ['tag' => $tag, 'zip' => $signed ? $assets[$tag] : (string)$t['zipball_url'], 'signed' => $signed];
             if (count($out) >= 15) break;
         }
         jout(['ok' => true, 'tags' => $out, 'via' => $r['via'] ?? '?']);
@@ -966,6 +1017,7 @@ if ($action !== '') {
             'has_config' => inst_installed(), 'locked' => inst_installed() && !inst_unlocked(),
             'unlock_present' => is_file(base() . '/' . INST_UNLOCK), 'armed' => inst_armed(),
             'pending_package' => is_file($zip) ? (int)@filesize($zip) : 0,
+            'pending_signed' => is_file($zip) && trim((string)@file_get_contents($zip . '.verified')) === '1',
             'snapshot' => ix_snapshot_latest()]);
     }
     if ($action === 'download') {
@@ -993,10 +1045,23 @@ if ($action !== '') {
             @unlink($tmp);
             jer('cannot store download — directory not writable?');
         }
+        // Release signature: <url>.sig verified against the embedded key.
+        // 'forged' deletes the package and aborts — a published-but-bad
+        // signature is an attack, not a warning case. 'unsigned' (no .sig
+        // published — master.zip never has one — or no sodium here)
+        // proceeds, but the extract step will ask for explicit confirmation.
+        $sigState = ix_release_sig_state($url, $zip);
+        @file_put_contents(ix_verified_path(), $sigState === 'signed' ? '1' : '0');
+        if ($sigState === 'forged') {
+            @unlink($zip);
+            @unlink(ix_verified_path());
+            jer('the release signature does NOT verify — package deleted. Do not retry this URL; fetch it yourself and check with php tools/sign_release.php verify.');
+        }
         $size = filesize($zip);
         jout(['ok' => true, 'size' => $size, 'total' => $size, 'done' => true, 'via' => $r['via'] ?? '?',
-            'unlock' => inst_rotate(),
-            'log' => 'download complete: ' . number_format($size) . ' B']);
+            'unlock' => inst_rotate(), 'signed' => $sigState === 'signed',
+            'log' => 'download complete: ' . number_format($size) . ' B'
+                . ($sigState === 'signed' ? ' — release signature VERIFIED (Ed25519)' : ' — NO release signature (extract will ask for confirmation)')]);
     }
     // Probe any URL directly: powers the connection check (and
     // the test-suite). Reports transport used, status, size, latency.
@@ -1019,6 +1084,9 @@ if ($action !== '') {
         if (empty($_FILES['zip']['tmp_name']) || !is_uploaded_file($_FILES['zip']['tmp_name'])) jer('no file received');
         [$zip] = dl_paths();
         if (!@move_uploaded_file($_FILES['zip']['tmp_name'], $zip)) jer('cannot store upload — directory not writable?');
+        // Operator-supplied bytes: nothing to verify against (no URL, no
+        // .sig sidecar) — the extract gate treats uploads as unsigned.
+        @file_put_contents(ix_verified_path(), '0');
         if ($useZip) {
             $z = new ZipArchive();
             if ($z->open($zip) !== true) { @unlink($zip); jer('not a valid zip archive'); }
@@ -1032,8 +1100,8 @@ if ($action !== '') {
             $n = count($names);
         }
         jout(['ok' => true, 'size' => filesize($zip), 'files' => $n,
-            'unlock' => inst_rotate(),
-            'log' => 'upload received: ' . number_format((int)filesize($zip)) . ' B, ' . $n . ' entries']);
+            'unlock' => inst_rotate(), 'signed' => false,
+            'log' => 'upload received: ' . number_format((int)filesize($zip)) . ' B, ' . $n . ' entries (unsigned — extract will ask for confirmation)']);
     }
     if ($action === 'extract') {
         $useZip = class_exists('ZipArchive');
@@ -1041,6 +1109,15 @@ if ($action !== '') {
         if (!$useZip && $ubin === null) jer('ZipArchive missing — enable the zip extension.');
         [$zip, $src] = dl_paths();
         if (!is_file($zip)) jer('no package yet — download or upload the release zip first');
+        // Unsigned packages (no .sig published, manual uploads, resumed
+        // pre-signature downloads) extract only with explicit confirmation:
+        // a forged package never reaches this branch — download already
+        // refused it. The flag travels in the POST because the sidecar only
+        // records the verdict, never the operator's consent.
+        $verified = trim((string)@file_get_contents(ix_verified_path()));
+        if ($verified !== '1' && (string)($_POST['accept_unsigned'] ?? '') !== '1') {
+            jer('package is NOT signature-verified — confirm you fetched it yourself from a trusted release (re-submit with accept_unsigned=1)');
+        }
         @mkdir($src, 0755, true);
         if ($useZip) {
             $z = new ZipArchive();
@@ -1466,6 +1543,7 @@ code{
 var $ = function(id){ return document.getElementById(id); };
 var UTOK = "";
 var HASCFG = false;
+var DL_SIGNED = false; // last download/upload verdict: extract confirms when false
 var step = 0;
 function stamp(){
   var d = new Date();
@@ -1557,7 +1635,8 @@ function loadTree(){
           : " (no config.php yet).")
         + " You may skip straight to extraction or setup.</p>"
       : '<p class="hint">No app files here yet — download the release package below.</p>';
-    if (r.pending_package) h += '<p class="hint">A downloaded package (' + Math.round(r.pending_package / 1024) + ' KB) is waiting — resume with Extract below.</p>';
+    if (r.pending_package) h += '<p class="hint">A downloaded package (' + Math.round(r.pending_package / 1024) + ' KB'
+      + (r.pending_signed ? ', signature VERIFIED' : ', NOT signature-verified') + ') is waiting — resume with Extract below.</p>';
     if (r.snapshot) h += '<p class="hint">Pre-upgrade snapshot <code>backups/' + r.snapshot + '</code> exists — rollback is available.</p>';
     h += lockNote(r);
     $("treeinfo").innerHTML = h;
@@ -1587,7 +1666,7 @@ function loadTags(){
       r.tags.forEach(function(t, j){
         var o = document.createElement("option");
         o.value = t.zip;
-        o.textContent = t.tag + (j === 0 ? " (latest)" : "");
+        o.textContent = t.tag + (j === 0 ? " (latest)" : "") + (t.signed ? " (signed)" : "");
         s.appendChild(o);
       });
       var m = document.createElement("option");
@@ -1609,6 +1688,7 @@ $("fup").onchange = function(){
   f.append("zip", $("fup").files[0]);
   api("upload", null, f).then(function(r){
     if (!r.ok){ log("upload failed: " + r.error, "fail"); return; }
+    DL_SIGNED = false;
     log(r.log, "ok");
     $("dtxt").textContent = "upload complete: " + r.size + " B";
     $("dlbtns").classList.remove("hidden");
@@ -1626,6 +1706,9 @@ $("bdl").onclick = function(){
   api("download", {url:url}).then(function(r){
     $("bdl").disabled = false;
     if (!r.ok){ $("dtxt").textContent = "failed"; log("download failed: " + r.error, "fail"); return; }
+    DL_SIGNED = !!r.signed;
+    if (DL_SIGNED) log("release signature VERIFIED against the embedded maintainer key", "ok");
+    else log("no release signature for this package — Extract will ask for explicit confirmation", "warn");
     $("dbar").style.width = "100%";
     $("dtxt").textContent = Math.round(r.size / 1024) + " KB";
     log(r.log + " via " + (r.via || "?"), "ok");
@@ -1633,9 +1716,14 @@ $("bdl").onclick = function(){
   });
 };
 $("bex").onclick = function(){
+  var accept = "";
+  if (!DL_SIGNED){
+    if (!confirm("This package is NOT signature-verified (no .sig published, manual upload, or unverifiable here). Extract it anyway?")) return;
+    accept = "1";
+  }
   log("extracting (snapshotting first when upgrading)…", "info");
   $("bex").disabled = true;
-  api("extract", {keep_config:$("keepcfg").checked ? "1" : ""}).then(function(r){
+  api("extract", {keep_config:$("keepcfg").checked ? "1" : "", accept_unsigned:accept}).then(function(r){
     $("bex").disabled = false;
     if (!r.ok){ log("extract failed: " + r.error, "fail"); return; }
     log(r.log, "ok");

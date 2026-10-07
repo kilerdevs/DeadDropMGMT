@@ -85,7 +85,8 @@ function backup_zip_supported(): bool {
     return class_exists('ZipArchive');
 }
 
-/** Newest first. Strict names only — staging debris never lists. */
+/** Newest first. Strict names only — staging debris never lists.
+ * @return list<array{name:string, format:string, size:int, mtime:int}> */
 function backup_list(): array {
     $out = [];
     foreach (glob_list(backup_dir() . '/backup-*') as $path) {
@@ -122,7 +123,8 @@ function backup_config_crc(): string {
 }
 
 /** Chunked row reads: flat memory even for a long audit_log, and the shared
- *  PDO handle keeps its buffered-query mode untouched. */
+ *  PDO handle keeps its buffered-query mode untouched.
+ * @return list<array<string,mixed>> */
 function backup_read_table_chunk(PDO $db, string $table, int $offset, int $limit): array {
     $stmt = $db->prepare('SELECT * FROM `' . $table . '` LIMIT ' . $limit . ' OFFSET ' . $offset);
     $stmt->execute();
@@ -134,7 +136,8 @@ function backup_table_count(PDO $db, string $table): int {
 }
 
 /** Every encrypted photo file under uploads/, as app-relative paths with
- *  sha256. Dot-directories (staging, pseudo-cron locks) are never payload. */
+ *  sha256. Dot-directories (staging, pseudo-cron locks) are never payload.
+ * @return array<string,string> */
 function backup_photo_files(?string $root = null): array {
     $base = backup_uploads_dir($root);
     $files = [];
@@ -294,7 +297,8 @@ function backup_write_database_json(PDO $db, string $path): bool {
 
 /** Fallback bundle: manifest + rows + base64 photos in one JSON document,
  *  gzipped when zlib exists. Base64 runs on 3-byte-multiple chunks so the
- *  stream never holds a whole photo. */
+ *  stream never holds a whole photo.
+ * @param array{backup:int, created_utc:string, app:string, format:string, encoding:string, key_fp:string, config_crc:string, db:array<string,int>, files:array<string,string>} $manifest */
 function backup_write_json_bundle(string $dest, PDO $db, array $manifest, bool $useGz, ?string $root): bool {
     $tmpDb = backup_dir() . '/.database-' . bin2hex(random_bytes(8)) . '.json';
     if (!backup_write_database_json($db, $tmpDb)) {
@@ -353,7 +357,8 @@ function backup_write_json_bundle(string $dest, PDO $db, array $manifest, bool $
     return $close();
 }
 
-/** Strict manifest shape check. Anything off-spec is not a backup. */
+/** Strict manifest shape check. Anything off-spec is not a backup.
+ * @return array{backup:int, created_utc:string, app:string, format:string, encoding:string, key_fp:string, config_crc:string, db:array<string,int>, files:array<string,string>}|null */
 function backup_manifest_parse(mixed $raw): ?array {
     if (!is_array($raw)) {
         return null;
@@ -444,7 +449,7 @@ function backup_exceeds_caps(string $path): bool {
  * Verify a backup file without changing anything. Recomputes every sha256,
  * rechecks row counts, flags a rotated key as a non-fatal warning.
  *
- * @return array{ok:bool,manifest?:array,key_mismatch?:bool,code?:string}
+ * @return array{ok:bool, manifest?:array{backup:int, created_utc:string, app:string, format:string, encoding:string, key_fp:string, config_crc:string, db:array<string,int>, files:array<string,string>}, key_mismatch?:bool, code?:string}
  */
 function backup_verify(string $path): array {
     if (!is_file($path)) {
@@ -467,6 +472,7 @@ function backup_verify(string $path): array {
     return ['ok' => false, 'code' => 'invalid'];
 }
 
+/** @return array{ok:bool, manifest?:array{backup:int, created_utc:string, app:string, format:string, encoding:string, key_fp:string, config_crc:string, db:array<string,int>, files:array<string,string>}, key_mismatch?:bool, code?:string} */
 function backup_verify_zip(string $path): array {
     if (!backup_zip_supported()) {
         return ['ok' => false, 'code' => 'invalid'];
@@ -525,7 +531,8 @@ function backup_verify_zip(string $path): array {
     return ['ok' => true, 'manifest' => $manifest, 'key_mismatch' => $manifest['key_fp'] !== backup_key_fingerprint()];
 }
 
-/** database.json must hold exactly the manifest's tables and counts. */
+/** database.json must hold exactly the manifest's tables and counts.
+ * @param array{backup:int, created_utc:string, app:string, format:string, encoding:string, key_fp:string, config_crc:string, db:array<string,int>, files:array<string,string>} $manifest */
 function backup_database_matches(string $rawDb, array $manifest): bool {
     $db = json_decode($rawDb, true);
     if (!is_array($db)) {
@@ -551,6 +558,7 @@ function backup_database_matches(string $rawDb, array $manifest): bool {
     return true;
 }
 
+/** @return array{ok:bool, manifest?:array{backup:int, created_utc:string, app:string, format:string, encoding:string, key_fp:string, config_crc:string, db:array<string,int>, files:array<string,string>}, key_mismatch?:bool, code?:string} */
 function backup_verify_json(string $path): array {
     $raw = (string)@file_get_contents($path);
     if ($raw === '') {
@@ -602,6 +610,7 @@ function backup_verify_json(string $path): array {
  * caller re-verifies cheaply by reusing the same manifest — the file is
  * re-read entry by entry, so a swap between verify and restore still fails.
  *
+ * @param array{backup:int, created_utc:string, app:string, format:string, encoding:string, key_fp:string, config_crc:string, db:array<string,int>, files:array<string,string>} $manifest
  * @return array{ok:bool,code?:string,key_mismatch?:bool,files_partial?:bool}
  */
 function backup_restore(PDO $db, string $path, array $manifest, ?string $root = null): array {
@@ -712,7 +721,8 @@ function backup_restore(PDO $db, string $path, array $manifest, ?string $root = 
 
 /** Copy every manifest file into staging, checksumming on arrival. $why
  *  carries the refusal reason ('too_large' vs silent false) so the caller
- *  can answer the right code without re-streaming the bundle. */
+ *  can answer the right code without re-streaming the bundle.
+ * @param array{backup:int, created_utc:string, app:string, format:string, encoding:string, key_fp:string, config_crc:string, db:array<string,int>, files:array<string,string>} $manifest */
 function backup_stage_files(string $path, array $manifest, string $stage, ?string &$why = null): bool {
     $isZip = str_starts_with((string)@file_get_contents($path, false, null, 0, 4), "PK\x03\x04");
     if ($isZip) {
@@ -818,7 +828,9 @@ function backup_stage_files(string $path, array $manifest, string $stage, ?strin
 }
 
 /** Re-read the row payload (fail-closed: counts must still match). $why
- *  carries 'too_large' the same way backup_stage_files() does. */
+ *  carries 'too_large' the same way backup_stage_files() does.
+ * @param array{backup:int, created_utc:string, app:string, format:string, encoding:string, key_fp:string, config_crc:string, db:array<string,int>, files:array<string,string>} $manifest
+ * @return array<string, list<array<string,mixed>>>|null */
 function backup_read_payload_rows(string $path, array $manifest, ?string &$why = null): ?array {
     $isZip = str_starts_with((string)@file_get_contents($path, false, null, 0, 4), "PK\x03\x04");
     if ($isZip) {
@@ -843,7 +855,7 @@ function backup_read_payload_rows(string $path, array $manifest, ?string &$why =
         if (!is_string($rawDb) || !backup_database_matches($rawDb, $manifest)) {
             return null;
         }
-        /** @var array $rows */
+        /** @var array<string, list<array<string,mixed>>> $rows */
         $rows = json_decode($rawDb, true);
         return $rows;
     }
@@ -873,7 +885,8 @@ function backup_read_payload_rows(string $path, array $manifest, ?string &$why =
 }
 
 /** Move staged files into uploads/, deleting orphans. Best-effort past the
- *  DB commit: returns false when anything did not land, never throws. */
+ *  DB commit: returns false when anything did not land, never throws.
+ * @param array{backup:int, created_utc:string, app:string, format:string, encoding:string, key_fp:string, config_crc:string, db:array<string,int>, files:array<string,string>} $manifest */
 function backup_publish_staged(string $stage, array $manifest, ?string $root): bool {
     $base = backup_uploads_dir($root);
     $ok = true;

@@ -220,6 +220,11 @@ jobs:
             https://github.com/phpstan/phpstan/releases/download/2.2.9/phpstan.phar
           echo "42af2954326f2f6f0c39e12eb0e1229b9e037297e2caec9a5db11d44e4f6cce1  phpstan.phar" | sha256sum -c -
           php phpstan.phar analyse --no-progress
+          # includes/ runs STRICTER (level 6): every array carries key/value
+          # types, so a shape drift fails the build instead of hiding in
+          # mixed. The rest of the tree stays at level 5 by design (see
+          # phpstan.neon) — one config, two passes, no drift between them.
+          php phpstan.phar analyse --no-progress --level=6 includes
 
   # Automated formatting gate: the tree must already conform to
   # .php-cs-fixer.php — the fixer runs read-only (--dry-run) and any
@@ -340,22 +345,21 @@ jobs:
           path: coverage-html
           retention-days: 14
 
-  # Mutation probe (REPORT-ONLY trial): tools/mutation_probe.php applies
-  # curated logic-weakening mutants to the security-critical library code and
-  # requires the suite to kill every one — line coverage alone cannot show
-  # that a guard is actually tested. Report-only while the MSI baseline
-  # proves stable across PHP/DB variance: the probe exits nonzero only when
-  # its own anchors break (maintenance signal), never on a survived mutant,
-  # and continue-on-error is belt-and-braces so a slow run cannot block the
-  # build. Gate (minimum MSI) only after the number earns it. Needs the DB
-  # because the killer suites are the DB-backed in-process ones; no coverage
-  # driver, no Composer tooling — the probe is dependency-free like the app.
+  # Mutation probe (MSI GATE): tools/mutation_probe.php applies curated
+  # logic-weakening mutants to the security-critical library code and
+  # requires the suite to kill every one (--min-msi=100) — line coverage
+  # alone cannot show that a guard is actually tested. The score held 100%
+  # across repeated runs before gating, and every killer is a deterministic
+  # in-process suite, so a survived mutant is a real regression, not a
+  # flake. Needs the DB because the killer suites are the DB-backed
+  # in-process ones; no coverage driver, no Composer tooling — the probe is
+  # dependency-free like the app.
   mutation:
     runs-on: ubuntu-24.04
-    name: Mutation probe (report-only)
-    # Report-only signal, not a merge gate: dev pushes and the weekly sweep
-    # are enough to watch the MSI trend; PRs and release builds skip it.
-    if: github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')
+    name: Mutation probe (MSI gate)
+    # A merge gate everywhere code changes: dev and master pushes, PRs, and
+    # the weekly sweep.
+    if: github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request'
     services:
       mariadb:
         image: mariadb:11
@@ -402,6 +406,66 @@ jobs:
         with:
           name: mutation-report
           path: mutation.txt
+          retention-days: 14
+
+  # Generated mutation sampler (REPORT-ONLY): tools/mutation_generate.php
+  # enumerates ~6.4k token-level mutants across includes/ and runs a
+  # seed-pinned sample of 50 against the fast suites. Never gates: generated
+  # sets always contain equivalent mutants, so a SURVIVED line is triage fuel
+  # for the nightly sweep, not a verdict. The seed is the run number, so every
+  # push samples a different slice (breadth over time); the logged seed plus
+  # the mutant IDs in the artifact make any sample reproducible via
+  # --seed/--only. Harness errors (red baseline, copy failure) DO fail.
+  mutation-sample:
+    runs-on: ubuntu-24.04
+    name: Generated mutation sample (report-only)
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      DDMGMT_DB_HOST: 127.0.0.1
+      DDMGMT_DB_PORT: '3306'
+      DDMGMT_DB_USER: root
+      DDMGMT_DB_PASS: root
+      DDMGMT_TEST_DB: deaddrops_test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: '8.3'
+          extensions: pdo_mysql, openssl, gd, fileinfo, zip
+
+      - name: Prepare config
+        run: cp config.php.example config.php
+
+      - name: Load schema
+        run: php tests/schema_loader.php
+
+      - name: Run sampled mutants
+        run: |
+          set -o pipefail
+          php tools/mutation_generate.php --budget=50 --seed=${{ github.run_number }} \
+            --report=mutation-sample.json | tee mutation-sample.txt
+          grep -oP "MSI \K[\d.]+(?=%)" mutation-sample.txt | head -1 | \
+            { read msi; echo "### Sampled mutants MSI: ${msi}% (report-only, seed ${{ github.run_number }})" >> $GITHUB_STEP_SUMMARY; } || true
+
+      - name: Upload sample report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutation-sample
+          path: mutation-sample.json
           retention-days: 14
 
   # Benchmarks (CLIFF-DETECTOR gate): tools/bench.php seeds 10k marker rows

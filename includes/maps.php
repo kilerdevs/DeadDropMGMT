@@ -219,7 +219,10 @@ function maps_covering_zones(float $lat, float $lng): array {
 // street names where the two overlap (the zone list still warns about the
 // shared tiles). Dark theme, tuned for contrast: a road hierarchy with
 // casings, buildings under the roads, and street/place/POI labels.
-/** @param array<int,array{id:string,file:string}> $zones */
+/**
+ * @param array<int,array{id:string,file:string}> $zones
+ * @return array{version:int,glyphs:string,sources:array<string,array<string,mixed>>,layers:list<array<string,mixed>>}
+ */
 function maps_style(array $zones): array {
     $style = [
         'version' => 8,
@@ -286,7 +289,10 @@ function maps_num(float $v): int|float {
     return floor($v) === $v ? (int)$v : $v;
 }
 
-/** Data-driven width: a `match` on kind_detail per zoom stop, interpolated. */
+/**
+ * Data-driven width: a `match` on kind_detail per zoom stop, interpolated.
+ * @return list<mixed>
+ */
 function maps_road_width(float $extra = 0.0): array {
     $expr = ['interpolate', ['exponential', 1.4], ['zoom']];
     foreach (MAPS_ROAD_ZOOM_SCALE as $zoom => $scale) {
@@ -302,6 +308,7 @@ function maps_road_width(float $extra = 0.0): array {
     return $expr;
 }
 
+/** @return list<mixed> */
 function maps_road_color(): array {
     $match = ['match', ['get', 'kind_detail']];
     foreach (MAPS_ROAD_CLASSES as $detail => [$color]) {
@@ -314,7 +321,10 @@ function maps_road_color(): array {
 
 // Membership filter. to-string turns a missing property into '' — a bare
 // null needle would make the whole filter error out and drop the feature.
-/** @param array<int,string> $values */
+/**
+ * @param array<int,string> $values
+ * @return list<mixed>
+ */
 function maps_in(string $prop, array $values): array {
     return ['in', ['to-string', ['get', $prop]], ['literal', $values]];
 }
@@ -470,7 +480,10 @@ const MAPS_POI_TIER_C = ['restaurant', 'cafe', 'fast_food', 'bar', 'pub', 'conve
     'doctors', 'pharmacy', 'dentist', 'kindergarten', 'bank', 'car_repair', 'bakery', 'hairdresser',
     'post_office'];
 
-/** Category colour for a POI kind: health, transit, education, nature, shops & food, civic, culture. */
+/**
+ * Category colour for a POI kind: health, transit, education, nature, shops & food, civic, culture.
+ * @return list<mixed>
+ */
 function maps_poi_color(): array {
     return ['match', ['get', 'kind'],
         ['hospital', 'clinic', 'doctors', 'pharmacy', 'dentist'], '#e5787a',
@@ -764,7 +777,11 @@ function maps_cli_runner(?callable $fn = null, bool $clear = false): ?callable {
     return $runner;
 }
 
-/** @return array{bool,string} [ok, output-or-error] */
+/**
+ * @param list<string> $args
+ * @param array<string,string>|null $env
+ * @return array{bool,string} [ok, output-or-error]
+ */
 function maps_cli_exec(array $args, ?array $env = null, ?callable $onChunk = null): array {
     $runner = maps_cli_runner();
     if ($runner !== null) {
@@ -1213,6 +1230,7 @@ function maps_zone_retry(int $id): bool {
 // the cache whenever it sizes. Unknown cache ('') means unknown freshness:
 // not stale. A NULL row key (pre-freshness rows) never equals a known
 // build, so it reads stale — the safe direction (re-download, not silence).
+/** @param array<string,mixed> $row */
 function maps_zone_is_stale(array $row): bool {
     if (($row['status'] ?? '') !== 'ready') {
         return false;
@@ -1390,7 +1408,10 @@ function maps_disk_ok(int $needBytes): bool {
 
 // Fraction of $b covered by $a (0–1): the UI warns on overlapping zones
 // because each zone file carries its own copy of shared tiles.
-/** @param array{min_lon:float,min_lat:float,max_lon:float,max_lat:float} $a $b */
+/**
+ * @param array{min_lon:float,min_lat:float,max_lon:float,max_lat:float} $a
+ * @param array{min_lon:float,min_lat:float,max_lon:float,max_lat:float} $b
+ */
 function maps_overlap_frac(array $a, array $b): float {
     $w = max(0.0, min($a['max_lon'], $b['max_lon']) - max($a['min_lon'], $b['min_lon']));
     $h = max(0.0, min($a['max_lat'], $b['max_lat']) - max($a['min_lat'], $b['min_lat']));
@@ -1619,7 +1640,10 @@ function maps_planet_url(string $build): string {
     return MAPS_PLANET_FILE_URL . $build . '.pmtiles';
 }
 
-/** One zone row by id, or null. @return ?array<string,mixed> */
+/**
+ * One zone row by id, or null.
+ * @return ?array<string,mixed>
+ */
 function maps_zone_get(int $id): ?array {
     try {
         $st = get_db()->prepare('SELECT * FROM map_zones WHERE id = ? LIMIT 1');
@@ -1658,7 +1682,10 @@ function maps_kick_worker(): bool {
 // worker's successor) always sees the truth. $timeBox 0 runs to completion
 // (worker, inline queue request); >0 donates one resumable slice (status
 // poll) and returns 'more' while spans remain.
-// @return array{string,string} [done|more|failed, error]
+/**
+ * @param array<string,mixed> $zone
+ * @return array{0:string,1:string} [done|more|failed, error]
+ */
 function maps_process_php(array $zone, int $timeBox): array {
     $id = (int)$zone['id'];
     $db = get_db();
@@ -1922,7 +1949,10 @@ function maps_php_inline(int $id): void {
 
 // Full pipeline for one zone. Every state change hits the DB so the UI (and
 // a killed worker's successor) always sees the truth.
-/** @return array{bool,string} [ok, error] */
+/**
+ * @param array<string,mixed> $zone
+ * @return array{bool,string} [ok, error]
+ */
 function maps_process_one(array $zone): array {
     $id = (int)$zone['id'];
     $db = get_db();

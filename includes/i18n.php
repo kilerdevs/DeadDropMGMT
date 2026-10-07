@@ -2,10 +2,12 @@
 declare(strict_types=1);
 require_once __DIR__ . '/settings.php';
 
+/** @return list<string> */
 function i18n_supported_langs(): array {
     return ['pl', 'en', 'de', 'ru', 'fr', 'es', 'uk', 'it'];
 }
 
+/** @return array<string,string> */
 function i18n_lang_names(): array {
     return [
         'pl' => 'Polski', 'en' => 'English', 'de' => 'Deutsch', 'ru' => 'Русский',
@@ -13,6 +15,7 @@ function i18n_lang_names(): array {
     ];
 }
 
+/** @return array<string,string> */
 function i18n_load(string $lang): array {
     static $cache = [];
     if (isset($cache[$lang])) return $cache[$lang];
@@ -110,6 +113,7 @@ function i18n_handle_public_lang_param(): void {
     ]);
 }
 
+/** @param array<string,mixed> $params */
 function t(string $key, array $params = []): string {
     // CONTRACT: the return value is fully HTML-safe (static trusted text +
     // escaped params) — echo it raw. Never htmlspecialchars() t()/tn() output
@@ -143,6 +147,7 @@ function plural_category(int $n, ?string $lang = null): string {
     return $n === 1 ? 'one' : 'other';
 }
 
+/** @param array<string,mixed> $params */
 function tn(string $key, int $n, array $params = []): string {
     $lang    = current_lang();
     $cat     = plural_category($n, $lang);

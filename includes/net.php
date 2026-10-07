@@ -65,22 +65,39 @@ function get_client_ip(): string {
         }
         if (!empty($_SERVER[$key])) {
             $raw = trim((string)$_SERVER[$key]);
-            // Multi-hop XFF: a proxy that APPENDS leaves earlier entries
-            // client-controlled, so "first entry" is then attacker-chosen.
-            // The peer (trusted — checked above) appends its entry LAST,
-            // so the last hop is the only one the client cannot forge:
-            // under an overwriting proxy there is a single entry anyway
-            // (first == last), under an appending proxy the last entry is
-            // what the peer actually saw. Single-entry headers are
-            // untouched by this.
-            if ($key === 'HTTP_X_FORWARDED_FOR' && str_contains($raw, ',')) {
-                static $multihop_warned = false;
-                if (!$multihop_warned) {
-                    $multihop_warned = true;
-                    log_warn('xff_multihop', ['msg' => 'X-Forwarded-For carries multiple hops; last entry used (peer-appended) — verify the proxy appends rather than passing client input through']);
-                }
+            // Multi-hop XFF walks RIGHT to LEFT through the trusted set:
+            // chain = header entries + the TCP peer, then discard trusted
+            // entries from the right and take the first untrusted one. The
+            // peer itself is trusted (checked above), so it always pops
+            // first and the walk starts at the header's last entry. Why not
+            // "last entry", the old rule: in client, proxy-1, proxy-2 the
+            // last header entry is proxy-1 — a proxy, not the client — so
+            // rate limiting keyed on it shares one budget across every
+            // client behind it, and audit logs name a proxy instead of the
+            // actor. Why not "first entry": under an appending proxy every
+            // entry left of the peer's own is client-controlled. The walk
+            // takes proxy-1 when only proxy-2 is trusted, and the client
+            // when both are. When EVERYTHING is trusted the walk bottoms
+            // out at the leftmost entry — asserted by the outermost trusted
+            // proxy, still spoofable if that proxy appends rather than
+            // overwrites, so outer proxies must overwrite (same caveat as
+            // nginx real_ip_recursive). Garbage entries are never trusted,
+            // so the walk stops at them and the literal-IP check below
+            // falls back to the peer: fail-closed.
+            if ($key === 'HTTP_X_FORWARDED_FOR') {
                 $hops = array_map('trim', explode(',', $raw));
-                $raw  = end($hops);
+                if (count($hops) > 1) {
+                    static $multihop_warned = false;
+                    if (!$multihop_warned) {
+                        $multihop_warned = true;
+                        log_warn('xff_multihop', ['msg' => 'X-Forwarded-For carries multiple hops; walking right-to-left through DDMGMT_TRUSTED_PROXIES — outer proxies must overwrite, not append, client input']);
+                    }
+                }
+                $chain = [...$hops, $peer];
+                while (count($chain) > 1 && _proxy_peer_trusted((string)end($chain))) {
+                    array_pop($chain);
+                }
+                $raw = (string)end($chain);
             }
             $ip = trim(explode(',', $raw)[0]);
             if (filter_var($ip, FILTER_VALIDATE_IP)) {
@@ -134,10 +151,12 @@ function _proxy_peer_trusted(string $peer): bool {
 // reaching the app directly could flip the scheme, planting a "secure" cookie
 // over plain HTTP that the browser then refuses to send back. Without proxy
 // trust PHP's own view wins.
-// A multi-hop list follows the same rule as X-Forwarded-For in get_client_ip():
-// the LAST entry is the one the trusted peer wrote, so it is the only one the
-// client cannot forge; earlier entries may be client input passed through by
-// an appending proxy.
+// A multi-hop list keeps the LAST entry: the scheme is not an address, so
+// there is no trusted set to walk — the last entry is the one the trusted
+// peer wrote closest to the app, and earlier entries may be client input
+// passed through by an appending proxy. Deployments whose outer proxy
+// appends rather than overwrites must point the header at it via a single
+// entry (the proxy overwriting is the only safe shape here).
 function request_is_https(): bool {
     if (_proxy_peer_trusted((string)($_SERVER['REMOTE_ADDR'] ?? '0.0.0.0'))) {
         $hops  = explode(',', (string)($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? ''));

@@ -60,7 +60,7 @@ if ($action === 'create_courier') {
         } else {
             get_db()->prepare(
                 'INSERT INTO users (username, password_hash, role) VALUES (?, ?, "courier")'
-            )->execute([$username, password_hash($password, PASSWORD_BCRYPT, ['cost' => 12])]);
+            )->execute([$username, hash_password($password)]);
             audit('courier_create', null, null, $username);
             $_SESSION['flash']    = t('admin.users.flash.courier_created', ['username' => $username]);
             $_SESSION['flash_ok'] = true;
@@ -147,7 +147,7 @@ if ($action === 'change_password') {
         $db   = get_db();
         $stmt = $db->prepare('UPDATE users SET password_hash = ? WHERE id = ?');
         $stmt->execute([
-            password_hash($password, PASSWORD_BCRYPT, ['cost' => 12]),
+            hash_password($password),
             $uid,
         ]);
         // A stale/typo'd user_id must not report success while changing

@@ -17,6 +17,9 @@ require_once dirname(__DIR__) . '/includes/db.php';
 //    never reports success it did not achieve: files_failed > 0 means the
 //    caller must surface that and allow a retry.
 //  - Re-running is always safe: missing rows/files are simply skipped.
+/**
+ * @return array{orders:int,photos:int,events:int,audit:int,files:int,files_failed:int,tiles:int}
+ */
 function do_panic_wipe(): array {
     $db = get_db();
 
@@ -100,6 +103,7 @@ function do_panic_wipe(): array {
 // Empties the tile cache (the directory itself stays — tile_proxy.php
 // recreates subdirectories on demand). Counted apart from photo files so the
 // photo report keeps its meaning; failures still land in files_failed.
+/** @param array{orders:int,photos:int,events:int,audit:int,files:int,files_failed:int,tiles:int} $report */
 function _panic_wipe_tile_cache(string $dir, array &$report): void {
     if (!is_dir($dir) || is_link($dir)) {
         return;
@@ -121,6 +125,7 @@ function _panic_wipe_tile_cache(string $dir, array &$report): void {
 
 // Recursive sweep: only one level was walked before, so a nested directory
 // under uploads/<id>/ survived (with @rmdir then failing silently on top).
+/** @param array{orders:int,photos:int,events:int,audit:int,files:int,files_failed:int,tiles:int} $report */
 function _panic_sweep_dir(string $dir, array &$report): void {
     foreach (glob_list($dir . '/*') as $f) {
         if (is_dir($f) && !is_link($f)) {
@@ -132,6 +137,9 @@ function _panic_sweep_dir(string $dir, array &$report): void {
     }
 }
 
+/**
+ * @param array{orders:int,photos:int,events:int,audit:int,files:int,files_failed:int,tiles:int} $report
+ */
 function _panic_unlink(string $path, array &$report): void {
     // is_file() is false for symlinks — but those must still be removed
     // (overwrite_and_unlink() unlinks them without following).

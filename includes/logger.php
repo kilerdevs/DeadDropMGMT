@@ -78,6 +78,10 @@ function _log_req_id(): string {
 // [GENESIS, 0]; content without any parseable entry → ['', 0] (the writer
 // refuses to append — anchoring to nothing would fork the chain).
 // Records predating sequence numbers report seq 0; the writer counts.
+/**
+ * @param resource $fh
+ * @return array{0:string,1:int}
+ */
 function _log_tail_tip($fh): array {
     fseek($fh, 0, SEEK_END);
     $size = ftell($fh);
@@ -117,6 +121,7 @@ function _log_tail_tip($fh): array {
     return ['', 0];
 }
 
+/** @param resource $fh */
 function _log_last_hash($fh): string {
     return _log_tail_tip($fh)[0];
 }
@@ -124,6 +129,7 @@ function _log_last_hash($fh): string {
 // Count entries (non-blank lines) from the start. Runs only when the tip
 // predates sequence numbers — at most once per legacy generation, since
 // every new write lands sequenced and tips carry seq from then on.
+/** @param resource $fh */
 function _log_count_entries($fh): int {
     rewind($fh);
     $n = 0;
@@ -137,6 +143,7 @@ function _log_count_entries($fh): int {
 
 // Tip [hash, seq] of the rotated generation, or [GENESIS, 0] when there is
 // none to continue (missing, unreadable or unparseable).
+/** @return array{0:string,1:int} */
 function _log_rot_tip(string $rotPath): array {
     if (!is_file($rotPath)) {
         return [APP_LOG_GENESIS, 0];
@@ -184,6 +191,7 @@ function _log_rotate_if_needed(string $path): void {
     }
 }
 
+/** @param array<string,mixed> $ctx */
 function app_log(string $level, string $event, array $ctx = []): bool {
     // No usable key, no chain: refuse BEFORE touching the file (an empty
     // app.log used to appear, and hex2bin() warnings flooded error.log on
@@ -325,10 +333,12 @@ function log_err(string $message): void {
     app_log('error', 'php_error', ['msg' => $message]);
 }
 
+/** @param array<string,mixed> $ctx */
 function log_warn(string $event, array $ctx = []): void {
     app_log('warn', $event, $ctx);
 }
 
+/** @param array<string,mixed> $ctx */
 function log_info(string $event, array $ctx = []): void {
     app_log('info', $event, $ctx);
 }
@@ -337,6 +347,7 @@ function log_info(string $event, array $ctx = []): void {
 // unreadable, and count(false) is a TypeError on PHP 8+. Every directory
 // listing in the codebase goes through here so the next sweep/delete/probe
 // cannot reintroduce that crash by reaching for glob() directly.
+/** @return list<string> */
 function glob_list(string $pattern, int $flags = 0): array {
     $hits = glob($pattern, $flags);
     return $hits === false ? [] : $hits;
@@ -347,6 +358,7 @@ function glob_list(string $pattern, int $flags = 0): array {
 // message, then every extra context field as key=value. The chain fields
 // (prev/hash/seq), the timestamp and the level are shown in their own
 // columns or not at all. Everything is untrusted text — the caller escapes.
+/** @param array<string,mixed> $rec */
 function log_entry_summary(array $rec): string {
     $skip = ['ts' => 1, 'level' => 1, 'event' => 1, 'msg' => 1, 'req' => 1, 'prev' => 1, 'seq' => 1, 'hash' => 1];
     $parts = [];
@@ -439,7 +451,10 @@ function log_recent_entries(int $limit = 200, ?string $path = null): array {
 // connection) grows it without bound, and Settings used to file() the whole
 // thing into memory. Viewers read only the tail; the hourly cleanup trims it.
 
-/** Last $maxLines lines within the last $maxBytes. @return array{0:list<string>,1:bool} [lines oldest-first, cut] */
+/**
+ * Last $maxLines lines within the last $maxBytes.
+ * @return array{0:list<string>,1:bool} [lines oldest-first, cut]
+ */
 function log_tail_lines(string $path, int $maxBytes = 262144, int $maxLines = 500): array {
     clearstatcache(true, $path); // a stale cached size (PHP 8.2) would read an appended log as empty
     $size = @filesize($path);
@@ -499,7 +514,7 @@ function error_log_trim(?string $path = null, int $max = 5242880, int $keep = 10
 // ── Chain verification ────────────────────────────────────────────────────────
 // Returns [valid(bool), checked(int), broken_line(int|null), reason(string|null)]
 // broken_line is the 1-based file line of the first bad entry.
-
+/** @return array{0:bool,1:int,2:?int,3:?string} */
 function verify_log_chain(?string $path = null): array {
     $path = $path ?? APP_LOG_PATH;
     $rot = $path . '.1';
@@ -539,6 +554,7 @@ function verify_log_chain(?string $path = null): array {
 // $legacyGenesis: a live file written before cross-file linking starts at
 // GENESIS even though a rotated generation exists — still accepted.
 // Returns [valid, checked, broken_line, reason, tip_hash].
+/** @return array{0:bool,1:int,2:?int,3:?string,4:?string} */
 function _verify_log_file(string $path, ?string $prev, bool $legacyGenesis = false): array {
     $fh = @fopen($path, 'r');
     if ($fh === false) {
@@ -622,6 +638,7 @@ function log_checkpoint_write(): void {
 // worth anchoring (missing/empty file, unreadable handle, broken tail,
 // genesis-only file). Factored out so every no-anchor branch is directly
 // testable on scratch paths.
+/** @return ?array{0:string,1:int} */
 function _log_checkpoint_tip(string $path): ?array {
     if (!is_file($path) || filesize($path) === 0) {
         return null;
@@ -653,6 +670,7 @@ function _log_checkpoint_tip(string $path): ?array {
 //               entry is newer than the anchor)
 //   none      — no anchor yet (fresh install / table missing)
 //   error     — checkpoint store unreadable for another reason
+/** @return array{status:string,detail:string,checkpoint_seq?:int,checkpoint_at?:string,entries?:int,tip_seq?:?int} */
 function verify_log_continuity(?string $path = null): array {
     $path = $path ?? APP_LOG_PATH;
     try {
