@@ -17,6 +17,7 @@ require_once __DIR__ . '/settings.php';
 // - Discovery pulls candidate lists from Proxifly's free-proxy-list (GitHub,
 //   MIT-licensed, regularly refreshed) — see proxy_discover().
 
+/** @return list<array<string,mixed>> */
 function osm_proxy_pool(): array {
     try {
         $stmt = get_db()->query(
@@ -182,7 +183,9 @@ function proxy_status_code(string $head): int {
     return 0;
 }
 
-/** Split a buffer at the end of the HTTP head. @return ?array{string,string} [head, rest] */
+/** Split a buffer at the end of the HTTP head.
+ * @return ?array{0:string,1:string} [head, rest]
+ */
 function proxy_head_split(string $buf): ?array {
     $i = strpos($buf, "\r\n\r\n");
     if ($i === false) return null;
@@ -199,6 +202,9 @@ function proxy_head_split(string $buf): ?array {
 const PROXY_CHUNK_LINE_MAX = 4096;
 const PROXY_CHUNK_MAX      = 8388608; // 8 MiB
 
+/** One step of a chunked body: [decoded new bytes, still-unparsed buffer, done].
+ * @return ?array{0:string,1:string,2:bool} Null means corrupt framing.
+ */
 function proxy_chunked_feed(string $buf): ?array {
     $out = '';
     while (true) {
@@ -214,6 +220,10 @@ function proxy_chunked_feed(string $buf): ?array {
         $buf = substr($buf, $i + 2);
         if ($size === 0) return [$out, '', true]; // trailers ignored: nothing after the body is trusted
         if (strlen($buf) < $size + 2) return [$out, $line . "\r\n" . $buf, false];
+        // The two bytes after a chunk are part of the framing, not the
+        // payload: without this check `5\r\nhelloXX…` would silently eat
+        // the XX and desync from proxy_chunked_push (which rejects it).
+        if (substr($buf, $size, 2) !== "\r\n") return null;
         $out .= substr($buf, 0, $size);
         $buf = substr($buf, $size + 2);
     }
@@ -226,11 +236,14 @@ function proxy_chunked_feed(string $buf): ?array {
 // Payload bytes emit as they arrive (completion still waits for the chunk's
 // trailing CRLF); a corrupt frame fails the whole response either way, so
 // early emission never smuggles bytes past the caller's checks.
+/** @return array{buf:string,off:int,size:?int,done:bool} */
 function proxy_chunked_state(): array {
     return ['buf' => '', 'off' => 0, 'size' => null, 'done' => false];
 }
 
-/** @return ?array{string,bool} [newly-decoded bytes, done] (null = corrupt framing) */
+/** @param array<string,mixed> $st
+ * @return ?array{0:string,1:bool} [newly-decoded bytes, done] (null = corrupt framing)
+ */
 function proxy_chunked_push(array &$st, string $more): ?array {
     $st['buf'] .= $more;
     $out = '';
@@ -294,6 +307,7 @@ function proxy_chunked_push(array &$st, string $more): ?array {
 // Response header lines (without the status line) as name => value, names
 // lowercased; repeated headers keep the first — Content-Length games between
 // duplicates fail closed downstream via the exact-length checks.
+/** @return array<string,string> */
 function proxy_head_fields(string $head): array {
     $fields = [];
     $lines = explode("\r\n", $head);
@@ -404,6 +418,7 @@ function proxy_enable_tls(mixed $sock, int $secs = 5): bool {
 // proxy (peer_name drives both SNI and certificate verification), so point
 // it at the target first — otherwise every tunnelled handshake verifies the
 // target's certificate against the proxy's name and fails.
+/** @param array{host:string,dial:string,port:int,tls:bool,path:string} $t */
 function proxy_target_tls(mixed $sock, array $t, ?string $caFile, int $secs = 5): bool {
     $ssl = [
         'peer_name' => $t['host'],
@@ -434,7 +449,10 @@ function proxy_ssl_context(string $peerHost, ?string $caFile): mixed {
 // Returns [socket, isForwardProxy] or null. TLS to the target is enabled by
 // the caller for tunnels (direct TLS connects with the tls:// wrapper,
 // which handshakes inside the connect timeout).
-/** @return ?array{mixed,bool} */
+/** @param array{scheme:string,host:string,dial:string,port:int,user:string,pass:string}|null $px
+ * @param array{host:string,dial:string,port:int,tls:bool,path:string} $t
+ * @return ?array{mixed,bool}
+ */
 function proxy_sock_open(?array $px, array $t, float $deadline, ?string $caFile): ?array {
     if (!function_exists('stream_socket_client')) return null;
     $left = static function () use ($deadline): float {
@@ -565,8 +583,10 @@ function proxy_sock_open(?array $px, array $t, float $deadline, ?string $caFile)
 // detect over-long answers. $sink receives body chunks for callers that
 // stream to disk (no cap then, no body kept). $caFile pins the CA bundle
 // (tests); null uses the system default. Never throws.
-// @return array{code:int,headers:list<string>,body:string,bytes:int,truncated:bool}
 // code 0 means the transport itself failed.
+/** @param list<string> $headers
+ * @return array{code:int,headers:list<string>,body:string,bytes:int,truncated:bool}
+ */
 function proxy_request_streams(string $method, string $url, array $headers = [], ?string $proxy = null, int $timeout = 5, int $maxBytes = 2097152, int $maxRedirects = 3, ?callable $sink = null, ?string $caFile = null): array {
     $fail = ['code' => 0, 'headers' => [], 'body' => '', 'bytes' => 0, 'truncated' => false];
     try {
@@ -854,6 +874,7 @@ function osm_is_png(string $data): bool {
     return str_starts_with($data, "\x89PNG\r\n\x1a\n");
 }
 
+/** @param array<string,mixed>|null $prev */
 function osm_proxy_mark(int $id, bool $ok, ?int $latency_ms = null, ?array $prev = null): void {
     try {
         // One tile miss used to UPDATE on every attempt: skip the write when
@@ -889,6 +910,7 @@ function osm_proxy_mark(int $id, bool $ok, ?int $latency_ms = null, ?array $prev
 // Bounded: at most $max entries per pass, oldest-unchecked first, one
 // parallel probe round with short timeouts. Never throws; an empty pool is
 // one cheap SELECT, no network.
+/** @return array<string,bool> */
 function osm_proxy_revalidate_stale(int $max = 3, int $stale_days = 7, ?string $probe_url = null): array {
     try {
         $db = get_db();
@@ -929,6 +951,7 @@ function osm_proxy_revalidate_stale(int $max = 3, int $stale_days = 7, ?string $
 // instead of re-probing. A changed pool (heal/discovery swapped members)
 // clears the trip implicitly through the fingerprint; any success clears it
 // explicitly. Shared through the settings table so all FPM workers see it.
+/** @param list<array<string,mixed>> $pool */
 function osm_pool_circuit_fp(array $pool): string {
     $ids = [];
     foreach ($pool as $px) {
@@ -938,6 +961,7 @@ function osm_pool_circuit_fp(array $pool): string {
     return implode(',', $ids);
 }
 
+/** @param list<array<string,mixed>> $pool */
 function osm_pool_circuit_open(array $pool): bool {
     if ((int)get_setting('pool_down_until', '0') <= time()) {
         return false;
@@ -945,6 +969,7 @@ function osm_pool_circuit_open(array $pool): bool {
     return get_setting('pool_down_fp', '') === osm_pool_circuit_fp($pool);
 }
 
+/** @param list<array<string,mixed>> $pool */
 function osm_pool_circuit_trip(array $pool, int $secs = 60): void {
     set_setting('pool_down_until', (string)(time() + $secs));
     set_setting('pool_down_fp', osm_pool_circuit_fp($pool));
@@ -1177,6 +1202,9 @@ function osm_place_label(mixed $addr): string {
 // func_num_args() distinguishes an explicit osm_last_via_stage(null)
 // ("consume") from a parameterless read — the previous !== null check made
 // the consume call a silent no-op, so stale badge info survived the flush.
+/** @param array{via:?string,failed:bool,attempts:int,skipped:list<string>,latency_ms?:int}|null $info
+ * @return array{via:?string,failed:bool,attempts:int,skipped:list<string>,latency_ms?:int}|null
+ */
 function osm_last_via_stage(?array $info = null): ?array {
     static $staged = null;
     if (func_num_args() > 0) {
@@ -1187,6 +1215,7 @@ function osm_last_via_stage(?array $info = null): ?array {
 
 // Stash badge info for the current request; flushed to the session later by
 // osm_last_via_flush() once the caller has released the session lock.
+/** @param array{via:?string,failed:bool,attempts:int,skipped:list<string>,latency_ms?:int} $info */
 function osm_last_via_set(array $info): void {
     osm_last_via_stage($info);
 }
@@ -1269,6 +1298,7 @@ function proxy_public_ip(): ?string {
 // clean answer must not accept the proxy. Unreachable judges are skipped;
 // when none are reachable the answer is false (could not verify — maximum
 // security means reject). $judges override exists for tests.
+/** @param list<string>|null $judges */
 function proxy_judge_anonymous(string $pxUrl, string $ourIp, int $timeout_s = 6, ?array $judges = null): bool {
     $got = [];
     foreach ($judges ?? PROXY_ANONYMITY_JUDGES as $judge) {
@@ -1304,8 +1334,9 @@ function proxy_judge_bodies_verdict(array $got, string $ourIp): bool {
 // [0, '']. curl_multi is the fast path (bodies via multi_getcontent);
 // without cURL the same jobs run sequentially through the streams
 // transport. Never throws.
-// @param list<array{k:string,url:string,proxy:?string}> $jobs
-/** @return array<string,array{int,string}> */
+/** @param list<array{k:string,url:string,proxy:?string}> $jobs
+ * @return array<string,array{int,string}>
+ */
 function proxy_multi_fetch(array $jobs, int $timeout_s, int $maxBytes = 65536): array {
     $out = [];
     foreach ($jobs as $j) {
@@ -1365,6 +1396,9 @@ function proxy_multi_fetch(array $jobs, int $timeout_s, int $maxBytes = 65536): 
 // The 9 proxy lists in one parallel round (direct — list downloads never
 // touch the pool, so privacy is unchanged). Returns [url => body|false].
 // Without cURL the same downloads run sequentially through the fetcher.
+/** @param list<string> $urls
+ * @return array<string,string|false>
+ */
 function proxy_fetch_lists_parallel(array $urls, int $timeout_s): array {
     $jobs = [];
     foreach ($urls as $u) {
@@ -1395,6 +1429,7 @@ function proxy_fetch_lists_parallel(array $urls, int $timeout_s): array {
 // anonymity round only runs while time is left, and unrated HTTP proxies that
 // could not be judged in time are dropped — the same fail-closed rule as when
 // the judge is unreachable. Null = the unbounded CLI/button behaviour.
+/** @return list<array{url:string,latency_ms:int,source:string}> */
 function proxy_discover(int $max_test = 400, int $timeout_s = 4, ?float $budget_s = null): array {
     $started   = microtime(true);
     $remaining = static fn(): float => $budget_s === null ? INF : $budget_s - (microtime(true) - $started);
@@ -1522,6 +1557,11 @@ function proxy_discover(int $max_test = 400, int $timeout_s = 4, ?float $budget_
 //     we cannot learn our own IP we cannot prove a proxy hides it)
 // This function is where the "array === false" bug lived: the entire anonymity
 // round silently never ran. ProxyTest pins the decision table.
+/** @param array<string,array{url:string,latency_ms:int,source:string}> $working
+ * @param array<string,array{rated:bool,source:string}> $candidates
+ * @param array<string,bool> $judged
+ * @return list<array{url:string,latency_ms:int,source:string}>
+ */
 function proxy_filter_anonymity(array $working, array $candidates, ?string $our_ip, array $judged): array {
     return array_values(array_filter($working, static fn(array $p): bool =>
         ($candidates[$p['url']]['rated'] ?? false) !== false
@@ -1534,6 +1574,9 @@ function proxy_filter_anonymity(array $working, array $candidates, ?string $our_
 // Returns [proxyUrl => [httpCode, totalMs]]. $head controls HEAD vs GET.
 // curl_multi is the fast path; without cURL the sockets below probe with
 // concurrent connects and sequential handshakes under the same budgets.
+/** @param list<string> $proxies
+ * @return array<string,array{int,int}>
+ */
 function proxy_multi_probe(array $proxies, string $url, int $timeout_s, int $connect_s, bool $head = true): array {
     if (!host_has_curl()) {
         return proxy_multi_probe_streams($proxies, $url, $timeout_s, $connect_s, $head);
@@ -1581,7 +1624,9 @@ function proxy_multi_probe(array $proxies, string $url, int $timeout_s, int $con
 // in-flight TLS handshake is bounded by its own short stream timeout).
 // Same contract as proxy_multi_probe: every input URL gets [code, ms],
 // failures are [0, 0]. Never throws.
-/** @return array<string,array{int,int}> */
+/** @param list<string> $proxies
+ * @return array<string,array{int,int}>
+ */
 function proxy_multi_probe_streams(array $proxies, string $url, int $timeout_s, int $connect_s, bool $head = true): array {
     $out = [];
     foreach ($proxies as $u) {
@@ -1706,6 +1751,10 @@ function proxy_multi_probe_streams(array $proxies, string $url, int $timeout_s, 
 // like proxy_sock_open, or null. The socket is parked blocking: the TLS
 // handshake below runs its own blocking exchange, and the select-driven
 // readers work on blocking sockets too.
+/** @param array{scheme:string,host:string,dial:string,port:int,user:string,pass:string} $px
+ * @param array{host:string,dial:string,port:int,tls:bool,path:string} $t
+ * @return ?array{mixed,bool}
+ */
 function proxy_sock_open_from(mixed $s, array $px, array $t, float $deadline): ?array {
     @stream_set_blocking($s, true);
     $scheme = $px['scheme'];

@@ -454,6 +454,7 @@ $fzAssert = static function (string $name, array $bad) use (&$fzCases): void {
         // mapped ::ffff:a.b.c.d counts as the v4 host itself — never as a
         // v6 address. The differential checks the bit-compare, not the
         // policy, so the reference applies the policy identically.
+        try {
         if (str_starts_with(strtolower($ip), '::ffff:') && str_contains($ip, '.')) {
             $ip = substr($ip, 7);
         }
@@ -480,6 +481,11 @@ $fzAssert = static function (string $name, array $bad) use (&$fzCases): void {
             }
         }
         return true;
+        } catch (Throwable $e) {
+            // inet_pton() throws ValueError on null bytes on some builds
+            // (others return false): unparseable either way.
+            return false;
+        }
     };
     $randIp = static function () use ($fzBytes): string {
         switch (mt_rand(0, 4)) {
@@ -521,14 +527,20 @@ $fzAssert = static function (string $name, array $bad) use (&$fzCases): void {
             continue;
         }
         // _cidr_valid must agree with "parses as IP[/bits]" (reference:
-        // inet_pton + digit bits in family range).
+        // inet_pton + digit bits in family range). inet_pton() throws
+        // ValueError on null bytes on some builds (others return false):
+        // unparseable either way, so the oracle treats a throw as false.
         $refV = false;
+        try {
         if (!str_contains($cidr, '/')) {
             $refV = @inet_pton($cidr) !== false;
         } else {
             [$nn, $bb] = explode('/', $cidr, 2);
             $pp = @inet_pton($nn);
             $refV = is_string($pp) && ctype_digit($bb) && (int)$bb >= 0 && (int)$bb <= strlen($pp) * 8;
+        }
+        } catch (Throwable $e) {
+            $refV = false;
         }
         if ((bool)$v !== $refV) {
             $bad[] = "valid-disagree: $cidr";

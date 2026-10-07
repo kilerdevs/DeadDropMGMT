@@ -90,7 +90,9 @@ if (($nozipById['zip']['status'] ?? 'fail') === 'warn' && class_exists('ZipArchi
     $z->addFromString('fallback-pkg/includes/kernel.php', '<?php // marker');
     $z->addFromString('fallback-pkg/config.php.example', '<?php // marker');
     $z->close();
-    [$code, $fex] = ixl_run($work, [], ['action' => 'extract'], ['-n']);
+    // The self-built fixture is unsigned by construction: the signature
+    // gate needs the same explicit confirmation the web UI asks for.
+    [$code, $fex] = ixl_run($work, [], ['action' => 'extract', 'accept_unsigned' => '1'], ['-n']);
     T::eq('CLI-fallback extract exits 0', 0, $code);
     T::eq('CLI-fallback extract ok', true, $fex['ok'] ?? false);
     T::ok('CLI-fallback placed files', is_file($work . '/setup.sql') && is_file($work . '/includes/kernel.php'));
