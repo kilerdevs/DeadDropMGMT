@@ -10,7 +10,16 @@ async function freshPage(browser, options = {}) {
 }
 
 async function closePage(page) {
-  await page.e2eContext.close();
+  // Tolerant teardown: on loaded CI runners Chromium occasionally drops a
+  // context (crash/OOM) after the test body already passed — failing the
+  // test on cleanup then hides a green result and buys nothing (the browser
+  // exits with the suite; contexts are per-test). Body failures are
+  // recorded before finally runs, so swallowing here never masks them.
+  try {
+    await page.e2eContext.close();
+  } catch (e) {
+    // Context already gone — nothing left to clean up.
+  }
 }
 
 // The unlock form on / is one of two GET forms — scope by its token field.
