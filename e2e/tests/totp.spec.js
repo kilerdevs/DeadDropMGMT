@@ -20,7 +20,12 @@ function twofaForm(page, action) {
 
 async function passwordLogin(page) {
   await page.goto('/admin/index.php');
+  // A pre-existing session here means 2FA state leaked between tests —
+  // fail loudly instead of hanging on a form that will never render.
+  // (No orders-URL check: after enroll the password step lands on the
+  // challenge, which the caller asserts.)
   const form = loginForm(page);
+  await expect(form, 'login form must render').toBeVisible({ timeout: 15000 });
   await form.locator('input[name="username"]').fill('e2e_owner');
   await form.locator('input[name="password"]').fill('E2eOwnerPass1!');
   await form.locator('button[type="submit"]').click();

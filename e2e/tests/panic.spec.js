@@ -16,8 +16,16 @@ const { test, expect } = require('@playwright/test');
 const { freshPage, closePage, reseed } = require('../helpers');
 
 async function login(page) {
-  await page.goto('/admin/index.php');
+  const resp = await page.goto('/admin/index.php');
+  // Fail fast and loud instead of hanging a whole test budget: a missing
+  // form means the session is unexpectedly alive (stale login after a
+  // wipe/logout — a session-lifecycle bug worth screaming about), the
+  // bootstrap form showed (users table gone), or a white-screen 500.
+  // The trace then shows the actual page instead of a bare timeout.
+  expect(resp && resp.ok(), 'index.php must answer 2xx, not a white-screen 500').toBe(true);
+  await expect(page, 'must be logged out at login entry, not redirected inside').not.toHaveURL(/admin\/orders\.php/, { timeout: 15000 });
   const form = page.locator('form[action="/admin/login.php"]');
+  await expect(form, 'login form must render').toBeVisible({ timeout: 15000 });
   await form.locator('input[name="username"]').fill('e2e_owner');
   await form.locator('input[name="password"]').fill('E2eOwnerPass1!');
   await form.locator('button[type="submit"]').click();
