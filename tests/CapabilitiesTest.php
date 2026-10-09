@@ -29,6 +29,13 @@ foreach ($defs as $d) {
     T::ok("fallback key resolves: {$d['fallback']}",
         t($d['fallback'], ['v' => '8.2.0', 'bin' => '/usr/bin/unzip', 'dirs' => 'logs/']) !== $d['fallback']);
 }
+// Registry snapshot: ids, labels, probes, fallbacks and required flags are
+// pinned — a flipped required flag or renamed fallback would silently move
+// a hostile-host gate. Regenerate on intentional registry changes:
+//   php -r "require 'tests/bootstrap.php'; echo hash('sha256', json_encode(capability_definitions(), JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES)), PHP_EOL;"
+T::eq('registry matches the snapshot',
+    'fe960aacb6c1716814257c031c836656c9833a054d64c76239dfc58fe9bf2cd0',
+    hash('sha256', (string)json_encode($defs, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)));
 // statuses the consumers render are a closed set
 foreach (capabilities_evaluate([]) as $r) {
     T::ok("empty env evaluates safely: {$r['id']}", in_array($r['state'], ['ok', 'limited', 'missing'], true));
@@ -79,6 +86,14 @@ T::eq('hostile: env limited (info)', ['limited', 'info'], $st['env']);
 T::eq('hostile: db_create limited (info, never blocking)', ['limited', 'info'], $st['db_create']);
 T::eq('hostile: set_time_limit limited (warn)', ['limited', 'warn'], $st['set_time_limit']);
 T::eq('hostile: dirs missing→fail, naming uploads/', ['missing', 'fail'], $st['dirs']);
+// Apache without htaccess proof is limited, not ok (a weakened check would
+// bless rewrites that were never verified).
+$noHtaccess = capabilities_evaluate(['server_sw' => 'Apache/2.4', 'htaccess_ok' => false]);
+foreach ($noHtaccess as $r) {
+    if ($r['id'] === 'htaccess') {
+        T::eq('apache without htaccess proof is limited', 'limited', $r['state']);
+    }
+}
 // openssl with cURL present is purely informational
 $withCurl = capabilities_evaluate(['curl' => true, 'ext' => ['openssl' => false]]);
 foreach ($withCurl as $r) {
@@ -94,6 +109,14 @@ $zipBin = capability_row('zip', ['zip_ext' => false, 'unzip_bin' => '/usr/bin/un
 T::eq('zip via binary is limited', 'limited', $zipBin['state'] ?? null);
 T::eq('zip via binary names the binary', '/usr/bin/unzip', $zipBin['note'] ?? null);
 T::eq('unknown capability id answers null', null, capability_row('nope', []));
+// Runtime label suffixes: versions named, the unzip binary named only while
+// it carries the load (a flipped state check would credit it while the
+// extension serves, or hide it while it does).
+T::eq('zip-ok names no binary', 'ZipArchive / unzip', setup_runtime_label('zip', ['id' => 'zip', 'label' => 'ZipArchive / unzip', 'state' => 'ok', 'note' => ''])[0]);
+T::eq('zip-limited names the binary', ['ZipArchive / unzip via unzip binary', ['bin' => '/usr/bin/unzip']],
+    setup_runtime_label('zip', ['id' => 'zip', 'label' => 'ZipArchive / unzip', 'state' => 'limited', 'note' => '/usr/bin/unzip']));
+T::eq('php names its version', ['PHP ' . PHP_VERSION, ['v' => PHP_VERSION]],
+    setup_runtime_label('php', ['id' => 'php', 'label' => 'PHP', 'state' => 'ok', 'note' => '']));
 
 // ── SHOW GRANTS parser: conservative by design ──────────────────────────────
 T::ok('root ALL PRIVILEGES can create', capabilities_grants_allow_create("GRANT ALL PRIVILEGES ON *.* TO 'root'@'localhost'"));
@@ -247,6 +270,38 @@ try {
 } finally {
     $tDown2();
 }
+
+// ── 5. fast setup_check unit tests (the sampler's designated killer for
+// setup_check.php runs this suite, not the slow schema-reloading one) ───
+$dbCap = get_db();
+T::eq('trivial statements apply', ['applied' => 2, 'error' => '', 'statement' => ''],
+    schema_apply($dbCap, ['SELECT 1', 'SELECT 2']));
+$badApply = schema_apply($dbCap, ['SELECT 1', 'GARBAGE SYNTAX (((']);
+T::eq('one statement applied before the failure', 1, $badApply['applied'] ?? -1);
+T::ok('failure names the error', ($badApply['error'] ?? '') !== '');
+T::ok('...and the offending statement', str_contains((string)($badApply['statement'] ?? ''), 'GARBAGE'));
+
+// unzip discovery through a fabricated PATH: only proc_open/exec qualify,
+// and the binary found is the one named.
+$uzDir = sys_get_temp_dir() . '/ddmgmt_unzip_' . getmypid();
+@mkdir($uzDir, 0770, true);
+$uzExe = 'unzip' . (DIRECTORY_SEPARATOR === '\\' ? '.exe' : '');
+file_put_contents($uzDir . '/' . $uzExe, 'fake');
+$oldPath = getenv('PATH');
+putenv('PATH=' . $uzDir . PATH_SEPARATOR . (string)$oldPath);
+T::eq('fabricated unzip found on PATH', $uzDir . DIRECTORY_SEPARATOR . $uzExe, capabilities_find_unzip());
+putenv('PATH=' . (string)$oldPath);
+@unlink($uzDir . '/' . $uzExe);
+@rmdir($uzDir);
+
+// Webserver row off Apache: warn with the nginx-snippet pointer (a deleted
+// return would answer null and break the setup page shape).
+$wsTmp = sys_get_temp_dir() . '/ddmgmt_ws_' . getmypid();
+@mkdir($wsTmp, 0770, true);
+$wsRow = setup_webserver_row('cli-server', $wsTmp);
+T::eq('non-apache warns', 'warn', $wsRow['status'] ?? null);
+T::ok('...pointing at the nginx snippet', str_contains($wsRow['detail'] ?? '', 'ginx'));
+@rmdir($wsTmp);
 
 $teardown();
 exit(T::done());

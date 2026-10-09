@@ -71,6 +71,7 @@ $loaded = diagnostics_collect();
 $tr = $loaded['traffic'] ?? [];
 T::ok('24h lookup count covers the probes', ($tr['events_24h_by_type']['lookup'] ?? 0) >= 2);
 T::ok('top ip surfaces', count(array_filter($tr['top_ips_24h'] ?? [], static fn(array $r): bool => $r['ip'] === '198.51.100.7')) === 1);
+T::ok('top events list the probes', count($tr['log_top_events'] ?? []) >= 1);
 T::ok('log histogram counts the probe line', ($tr['log_levels']['error'] ?? 0) >= 1);
 T::ok('histogram is labeled by sample size', ($tr['log_sampled_lines'] ?? 0) >= 1);
 

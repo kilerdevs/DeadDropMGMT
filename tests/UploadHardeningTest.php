@@ -144,6 +144,32 @@ $huge['size'] = 101 * 1024 * 1024;
 $huge['tmp_name'] = $tmpdir . '/does-not-exist.jpg';
 T::ok('oversize rejected pre-sniff', save_uploaded_photo($huge, 910011, 1024) === false);
 
+// The hard ceiling is 100 MB, not 1 MB: a multi-megabyte photo uploads
+// fine (a zeroed literal here would refuse every real-world photo).
+$big2m = "$tmpdir/two-mb.jpg";
+if (function_exists('imagecreatetruecolor')) {
+    mt_srand(1234); // deterministic fixture size across runs/hosts
+    $noisy2 = imagecreatetruecolor(1600, 1200);
+    for ($ny2 = 0; $ny2 < 1200; $ny2 += 2) {
+        for ($nx2 = 0; $nx2 < 1600; $nx2 += 2) {
+            $cc = imagecolorallocate($noisy2, mt_rand(0, 255), mt_rand(0, 255), mt_rand(0, 255));
+            imagefilledrectangle($noisy2, $nx2, $ny2, $nx2 + 1, $ny2 + 1, $cc);
+        }
+    }
+    imagejpeg($noisy2, $big2m, 90);
+    $noisy2 = null;
+    $big2mSize = filesize($big2m);
+    if ($big2mSize > 1048576 && $big2mSize < 104857600) {
+        $oid2m = 910021;
+        _uh_track($oid2m);
+        T::ok('multi-megabyte photo under the ceiling uploads', save_uploaded_photo(_uh_entry($big2m), $oid2m, 12 * 1024 * 1024) !== false);
+    } else {
+        T::ok('two-megabyte fixture sized as planned', false);
+    }
+} else {
+    T::ok('multi-megabyte upload needs GD — skipped here', true);
+}
+
 // 9b ── grid thumbnails: a second small JPEG per photo, cleaned with it
     $big = "$tmpdir/grid.jpg";
     $img = imagecreatetruecolor(1200, 800);

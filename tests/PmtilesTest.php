@@ -29,6 +29,10 @@ T::ok('covering holds z0 + Warsaw z1 tile', in_array(0, $ids, true) && in_array(
 $sorted = $ids;
 sort($sorted, SORT_NUMERIC);
 T::ok('covering ascending deduplicated', $ids === $sorted && count($ids) === count(array_unique($ids)));
+// OOM guard: a continent at high zoom trips the covering ceiling instead of
+// building a quarter-million-entry plan.
+T::ok('covering count trips the ceiling',
+    pmtiles_covering_count(-180.0, -85.0, 180.0, 85.0, 14) > PMTILES_COVERING_MAX);
 
 // Directory codec round-trip, contiguous (zero-compressed) and gapped offsets.
 $entries = [
@@ -245,6 +249,54 @@ T::ok('nothing published on failure', !is_file($tmp2 . '/o.pmtiles'));
 T::eq('zero length short-circuits', ['', ''], pmtiles_http_range('http://127.0.0.1:9/x', 0, 0, null));
 [$body, $err] = pmtiles_http_range('http://127.0.0.1:9/x', -1, 10, null);
 T::ok('negative offset fails', $body === null && $err !== '');
+T::eq('refused host fails as data, never throws',
+    [null, 'request failed'], pmtiles_range_stream('http://127.0.0.1:9/x', 0, 10, null, 5));
+
+// ── Range body classification (pure — the transports only fetch) ──────────
+T::eq('exact 206 carries the body', ['0123456789', ''], pmtiles_classify_range(206, '0123456789', 0, 10));
+T::eq('short 206 names itself', [null, 'short range body'], pmtiles_classify_range(206, '01234', 0, 10));
+T::eq('200 to offset 0 keeps the head', ['01234', ''], pmtiles_classify_range(200, '0123456789EXTRA', 0, 5));
+T::eq('short 200 names itself', [null, 'short body'], pmtiles_classify_range(200, '01', 0, 5));
+T::eq('200 past offset 0 is not a range', [null, 'HTTP 200'], pmtiles_classify_range(200, '0123456789', 100, 10));
+T::eq('other statuses name themselves', [null, 'HTTP 404'], pmtiles_classify_range(404, 'nope', 0, 10));
+
+// ── Root-directory size gate (exact boundary — the spec fits header + root
+// in the first 16 KiB, so the cap itself is still a legal archive) ───────
+T::ok('zero root length rejected', !pmtiles_root_len_ok(0));
+T::ok('unit root length accepted', pmtiles_root_len_ok(1));
+T::ok('cap itself accepted', pmtiles_root_len_ok(PMTILES_ROOT_MAX));
+T::ok('past the cap rejected', !pmtiles_root_len_ok(PMTILES_ROOT_MAX + 1));
+
+// ── Leaf sidecar round-trip (span cap guards the decode, not honest data) ─
+$leavesTmp = sys_get_temp_dir() . '/ddmgmt_leaves_' . getmypid() . '.json';
+T::ok('leaves save', pmtiles_leaves_save($leavesTmp, 'http://example.com/p.pmtiles', ['0:10' => '0123456789']));
+$loaded = pmtiles_leaves_load($leavesTmp);
+T::eq('leaves load keeps the url', 'http://example.com/p.pmtiles', $loaded['url'] ?? null);
+T::eq('honest leaves survive the cap', ['0:10' => '0123456789'], $loaded['leaves'] ?? null);
+@unlink($leavesTmp);
+T::eq('missing sidecar loads empty', ['url' => '', 'leaves' => []],
+    pmtiles_leaves_load(sys_get_temp_dir() . '/ddmgmt_no_such_leaves.json'));
+
+// ── Fetch accounting starts at zero: an empty plan is already done ────────
+$emptyPlan = ['url' => 'http://127.0.0.1:9/p.pmtiles', 'proxy' => null, 'bbox' => [0.0, 0.0, 1.0, 1.0],
+    'maxzoom' => 0, 'tileType' => 1, 'tileComp' => 2, 'outMaxZoom' => 0, 'meta' => '{}',
+    'entries' => [], 'spans' => [], 'expected' => 0];
+$fetchTmp = sys_get_temp_dir() . '/ddmgmt_fetch_' . getmypid() . '.tiles';
+@unlink($fetchTmp);
+T::eq('empty plan fetches nothing', ['done', '', 0], pmtiles_fetch_due($emptyPlan, $fetchTmp, 5));
+@unlink($fetchTmp);
+
+// ── Plan validation rejects non-integer span bounds ───────────────────────
+$spanPlan = ['url' => 'http://example.com/p.pmtiles', 'proxy' => null, 'bbox' => [0.0, 0.0, 1.0, 1.0],
+    'maxzoom' => 5, 'tileType' => 1, 'tileComp' => 2, 'outMaxZoom' => 5, 'meta' => '{}',
+    'entries' => [[7, 0, 10]], 'spans' => [[0, 10]], 'expected' => 10];
+T::ok('well-formed plan validates', pmtiles_plan_validate($spanPlan) !== null);
+$floatSpan = $spanPlan;
+$floatSpan['spans'] = [[0, 10.5]];
+T::ok('float span bound rejected', pmtiles_plan_validate($floatSpan) === null);
+$backSpan = $spanPlan;
+$backSpan['spans'] = [[10, 10]];
+T::ok('empty span rejected', pmtiles_plan_validate($backSpan) === null);
 
 // ── Proxy usability matrix ──────────────────────────────────────────────────
 T::ok('direct always usable', pmtiles_proxy_usable(null));

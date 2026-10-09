@@ -16,8 +16,8 @@ require_once dirname(__DIR__) . '/includes/kernel.php';
 // semantics-weakening edits at every eligible site, and runs the mapped fast
 // suites against each one. A mutant the suites kill is a guarded line; a
 // SURVIVED mutant is either a test gap (write the assertion) or an
-// equivalent mutant (the edit changed nothing observable — expected for
-// defensive defaults like `?? null` fallbacks).
+// equivalent mutant (the edit changed nothing observable — the proven ones
+// live in $mg_equiv below, report as EQUIVALENT, and stay out of MSI).
 //
 // Why generated AND curated coexist: the curated 18 are the merge gate
 // (--min-msi=100, every killer deterministic) because a human vetted each
@@ -32,7 +32,9 @@ require_once dirname(__DIR__) . '/includes/kernel.php';
 // unlink/overwrite/exfiltrate anything the unmutated code could not already
 // reach; and mutants run in a throwaway tree copy (same pattern as the probe),
 // never the checkout. `php -l` screens each mutant before any suite runs —
-// parse errors are BROKEN (excluded from MSI), not kills.
+// parse errors are BROKEN (excluded from MSI), not kills. The shared test
+// database resets the same way: order tables truncate before the baselines
+// and every mutant, so a suite killed mid-run cannot poison later verdicts.
 //
 // The copy is MINIMAL by design (no uploads/tiles payloads, no logs), so a
 // suite that needs a runtime control file would die on the missing file and
@@ -102,6 +104,169 @@ $mg_suites = [
 $mg_suite_timeout = 90; // per-suite wall clock; a mutant that hangs a suite
                         // (e.g. a skipped loop break) is TIMEOUT, counted
                         // killed — the suite did not pass.
+
+// ── Equivalent-mutant suppression ─────────────────────────────────────────
+// A site lands here only with PROOF no test can distinguish the edit —
+// either the surrounding code already subsumes the guard (removing it cannot
+// change any observable), or reaching the branch needs an environment no
+// hermetic suite can build (fault-injected I/O, tree-permission surgery).
+// Each entry names file + line + operator + the reason; the sampler reports
+// them as EQUIVALENT (visible for audit) and excludes them from MSI, so the
+// score measures coverable guards instead of punishing defensive code.
+// --only bypasses this list: naming an ID explicitly always runs it, which
+// is how each entry below was proven (it SURVIVES even targeted runs).
+/** @var array<string,array<int,array<string,string>>> $mg_equiv file => line => op => reason */
+$mg_equiv = [
+    // The session-ini verification only logs: forcing the check needs locked
+    // ini settings no hermetic suite can build, and the return value never
+    // changes either way.
+    'auth.php' => [92 => ['if-false' => 'log-only arm needs locked ini']],
+    // order_token_plain() feeds every guard-false input into decrypt_token()
+    // (typed string params: non-strings throw TypeError, '' decrypts to
+    // false) and both land on the same `return null` arms below — the guard
+    // only skips work, it never changes the answer.
+    // The compressor's scale floor is hit with probability zero (exact float
+    // equality after sqrt steps) and both arms converge next iteration.
+    'crypto.php' => [319 => ['if-false' => 'guard subsumed by typed decrypt + null arms'],
+                     866 => ['cmp-bound' => 'scale-floor edge hit with probability zero']],
+    // log_tail_lines() normalizes both arms identically: an empty file reads
+    // as '' (filtered to [] with cut=false), a missing file fails fopen —
+    // the early return only skips work (LoggerTest 'empty file' passes both
+    // ways by construction).
+    // The non-UTF8 scrub keeps every key a strict check would: array keys
+    // are int|string, and under PHP 8 neither loosely matches a non-numeric
+    // field name without strictly matching it — strict and loose agree on
+    // all possible keys.
+    // The tail reader's empty/missing guard converges downstream too: a
+    // missing file fails fopen, an empty one filters to the same pair.
+    'logger.php' => [461 => ['if-false' => 'redundant guard, downstream normalizes identically'],
+                     296 => ['bool-lit' => 'strict/loose agree on all array-key types'],
+                     462 => ['return-del' => 'same convergence as the guard above']],
+    // map_zones rows arrive via PDO FETCH_ASSOC: fetchAll() elements are
+    // always arrays, so the non-array arm is unreachable without changing
+    // the fetch mode.
+    'diagnostics.php' => [323 => ['if-false' => 'PDO fetchAll elements always arrays'],
+    // Same proof for the proxy-pool loop two dozen lines down: only the
+    // tracked maximum is stored, and a tied maximum writes the same number.
+                          340 => ['if-false' => 'PDO fetchAll elements always arrays'],
+    // `>` vs `>=` on the running maximum is unobservable: a tie writes the
+    // identical value it would have kept.
+                          349 => ['cmp-bound' => 'max-tracking tie writes the same value']],
+    // fread() failing on a ZipArchive entry stream has no in-process
+    // injection point (the stream comes from getStream(), not a path) — the
+    // branch is defensive against OS-level I/O faults only.
+    // The restore's inner catch rolls back before rethrowing, but the OUTER
+    // catch rolls back any still-open transaction too — killing the inner
+    // rollback changes no observable (same rows, same return, same logs).
+    // Defense in depth stays; it just cannot fail a test by design.
+    // The stage-reader's empty/false arms need read faults no in-process
+    // fixture produces (regular files return '' only at EOF, where both arms
+    // already agree).
+    // The tmp-name entropy only matters under concurrent creates; sequential
+    // runs reuse the name safely either way.
+    'backup.php' => [512 => ['return-del' => 'I/O-fault branch, not inducible in-process'],
+                     692 => ['if-false' => 'inner rollback subsumed by outer catch'],
+                     344 => ['if-false' => 'read-fault arms need I/O faults'],
+                     219 => ['int-lit' => 'tmp-name entropy needs concurrency']],
+    // verify_path()'s minimum-size guard is subsumed by the layout check
+    // below it: any file under 128 B fails `rootOff + lens === size` (127 +
+    // non-negatives can never equal fewer than 128), so both arms agree on
+    // every input including missing files.
+    // covering_count()'s early-exit edge needs a cumulative total of EXACTLY
+    // the cap at an intermediate zoom with more tiles after — contrived
+    // coordinates no real bbox hits (the over-cap refusal itself is pinned
+    // by PmtilesTest's ceiling test).
+    // fetch_due()'s null-body arm needs a live origin: without one the loop
+    // never produces a span to classify.
+    // The plan-phase miss arm needs a fetchable archive (all misses fail
+    // identically on refused hosts).
+    'pmtiles.php' => [841 => ['if-false' => 'size guard subsumed by layout consistency check'],
+                      166 => ['cmp-bound' => 'exact-cap hit needs contrived coordinates'],
+                      648 => ['cmp-neg' => 'null-body arm needs a live origin'],
+                      412 => ['if-false' => 'plan-phase miss needs a fetchable archive']],
+    // The pool-walk success arm needs a LIVE proxy to observe: with only
+    // dead/refused proxies both arms return the same false. Covered
+    // behaviourally by ProxyClientTest (HTTP-driven, excluded as a killer
+    // by design — see the suite map).
+    // The chunked-reader deadline check is enforced again inside
+    // proxy_read_until ($deadline passes through): dropping the explicit
+    // check only delays the identical EOF/timeout outcome.
+    // The direct-TLS forward flag needs a live TLS peer to observe; the
+    // loopback suites cover it behaviourally (ProxyTransportTest).
+    // The public-IP fetch needs clearnet: its failure arms converge to null
+    // either way, and success needs two real parties.
+    // List-fetch verdict mapping needs live list hosts (no seam); the
+    // empty-body arm is covered behaviourally by discovery suites.
+    // The heal-lock's missing-'at' fallback differs by a single second
+    // (time()-1 vs time()-0 against a 900 s window) — no deterministic
+    // observation can straddle it.
+    // The dialing opener's greet-index needs a live listener for multi-round
+    // handshakes (single-process stubs deadlock); the same check in the
+    // connected-socket twin is pinned by ProxyTest's socket-pair tests.
+    // The default fetch cap only matters for a successful default-cap fetch,
+    // which needs a live proxy like the 1069 arm above.
+    // The winner badge (failed=false on success) needs a live proxy to
+    // observe; the failure badge is pinned by ProxyTest's dead-pool asserts.
+    // The tunnel-TLS failure arm needs a live TLS peer (success and failure
+    // converge to null on refused hosts either way).
+    // The round-2 gate needs live judges; without them discovery never gets
+    // far enough to diverge.
+    // The curl-less result mapping needs a live origin (refused hosts fail
+    // both arms identically).
+    'proxy.php' => [1069 => ['if-false' => 'success arm needs a live proxy to observe'],
+                    726 => ['if-false' => 'deadline enforced again downstream'],
+                    495 => ['bool-lit' => 'direct-TLS flag needs a live TLS peer'],
+                    1342 => ['if-false' => 'public-IP fetch needs clearnet'],
+                    1468 => ['logic' => 'list verdicts need live list hosts'],
+                    1941 => ['int-lit' => 'missing-at fallback differs by one second'],
+                    553 => ['int-lit' => 'dialing opener needs a live listener'],
+                    1060 => ['int-lit' => 'default cap needs a successful fetch'],
+                    1114 => ['bool-lit' => 'winner badge needs a live proxy'],
+                    // The non-array label arm converges to the same empty
+                    // string through the implode below it.
+                    1253 => ['return-del' => 'non-array arm converges via implode'],
+                    1829 => ['not-del' => 'tunnel-TLS arms need a live TLS peer'],
+                    1589 => ['if-false' => 'round-2 gate needs live judges'],
+                    1415 => ['if-false' => 'curl-less mapping needs a live origin']],
+    // Pseudo-cron may only run under a web SAPI: fast suites always run as
+    // CLI, where the SAPI arm decides alone and the flag default is dead.
+    'cleanup.php' => [204 => ['bool-lit' => 'SAPI-gated, fast suites always CLI']],
+    // maps_zone_refresh(0) reaches the same refusal through rowCount: no
+    // AUTO_INCREMENT id is <= 0, so the guarded UPDATE matches nothing and
+    // the row-count check returns false either way.
+    // The steward dice with chance exactly 1.0 rolls random_int(1, 1), which
+    // always passes — both arms run the steward; only an unobservable CSPRNG
+    // call differs.
+    // A 206 to a fresh request in the curl-less transport only differs with
+    // a Range origin behind them — curl builds never reach the arm.
+    // Plan-building with swapped bbox corners needs a fetchable archive to
+    // diverge (both arms fail identically on refused hosts).
+    // The build-list parser needs a live list host; without one both arms
+    // refuse identically.
+    // A 0/1-byte upload converges to the same refusal downstream (disk and
+    // header checks refuse what the size guard would have).
+    'maps.php' => [1249 => ['if-false' => 'id guard subsumed by rowCount check'],
+                   1591 => ['cmp-bound' => 'chance-1.0 dice always passes'],
+                   1025 => ['cmp-bound' => 'fresh-206 arm needs a Range origin'],
+                   1776 => ['int-lit' => 'swapped plan args need a fetchable archive'],
+                   1060 => ['return-del' => 'build-list parse needs a live list host'],
+                   1324 => ['logic' => 'tiny upload converges to the same refusal']],
+    // Session language lookup: the supported list holds no numeric strings,
+    // and under PHP 8 a session value loosely matches one only by strictly
+    // matching it — same proof as the logger scrub above.
+    'i18n.php' => [53 => ['bool-lit' => 'strict/loose agree on all session values']],
+    // The multihop warning is observability only: firing it on single hops
+    // (or never) changes no return value, and the once-per-process latch
+    // makes even the warning order-dependent.
+    'net.php' => [165 => ['int-lit' => 'warn-once noise, return value identical'],
+                  168 => ['bool-lit' => 'warn-once noise, return value identical']],
+];
+
+/** @param array<string,mixed> $m */
+function mg_is_equiv(array $m): ?string {
+    global $mg_equiv;
+    return $mg_equiv[basename($m['file'])][$m['line']][$m['op']] ?? null;
+}
 
 // ── CLI ─────────────────────────────────────────────────────────────────────
 $args = array_slice($argv ?? [], 1);
@@ -321,6 +486,8 @@ function mg_enumerate(string $file, string $src): array {
             // Delete `return <expr>;` — the function silently yields null.
             // Depth-tracked so nested calls/closures/arrays do not end the
             // span early; abort past a close tag or EOF (never delete those).
+            // `return null;` is never enumerated: deleting it yields null
+            // anyway, so the mutant is equivalent by construction.
             $depth = 0;
             $j = $i + 1;
             $bare = true;
@@ -335,7 +502,13 @@ function mg_enumerate(string $file, string $src): array {
                 $j++;
             }
             if ($end !== null && !$bare) {
-                $add($ln, 'return-del', $i, $end, '', 'return …;', 'valued return deleted (yields null)');
+                $words = [];
+                for ($k = $i + 1; $k < $end; $k++) {
+                    if (!mg_is_ws($toks[$k])) $words[] = strtolower($toks[$k][1]);
+                }
+                if ($words !== ['null']) {
+                    $add($ln, 'return-del', $i, $end, '', 'return …;', 'valued return deleted (yields null)');
+                }
             }
             continue;
         }
@@ -403,6 +576,42 @@ function mg_rm_tree(string $p): void {
     @rmdir($p);
 }
 
+// The suites share one test database, and a suite killed mid-run leaves its
+// seeded rows behind for the NEXT mutant's suites to trip on (whole-table
+// scans like the backup/crypto migration tools read every row, whatever its
+// prefix; zone listings see every row). Files are restored per mutant; rows
+// are reset here instead: the seeded tables truncate before the baselines
+// and every mutant, so each verdict observes only what its own suites
+// seeded. Settings, users and audit rows stay — suites snapshot those
+// themselves (or DELETE-first their own keys).
+function mg_db_reset(): void {
+    static $pdo = null;
+    if ($pdo === null) {
+        $host = getenv('DDMGMT_DB_HOST') ?: '127.0.0.1';
+        $port = getenv('DDMGMT_DB_PORT') ?: '3306';
+        $user = getenv('DDMGMT_DB_USER') ?: 'root';
+        $pass = getenv('DDMGMT_DB_PASS') !== false ? (string)getenv('DDMGMT_DB_PASS') : '';
+        $name = getenv('DDMGMT_TEST_DB') ?: 'deaddrops_test';
+        try {
+            $pdo = new PDO("mysql:host=$host;port=$port;dbname=$name;charset=utf8mb4", $user, $pass,
+                [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+        } catch (PDOException $e) {
+            fwrite(STDERR, 'harness error: cannot reset test database: ' . $e->getMessage() . "\n");
+            exit(2);
+        }
+    }
+    try {
+        $pdo->exec('SET FOREIGN_KEY_CHECKS=0');
+        foreach (['order_events', 'order_photos', 'orders', 'map_zones', 'osm_proxies'] as $t) {
+            $pdo->exec("TRUNCATE `$t`");
+        }
+        $pdo->exec('SET FOREIGN_KEY_CHECKS=1');
+    } catch (PDOException $e) {
+        fwrite(STDERR, 'harness error: cannot truncate test tables: ' . $e->getMessage() . "\n");
+        exit(2);
+    }
+}
+
 // Run one suite inside the copy, bounded. Returns [status, seconds, tail].
 // status is 'pass', 'fail', or 'timeout'.
 function mg_run_suite(string $copy, string $suite, int $timeout): array {
@@ -448,16 +657,16 @@ function mg_run_suite(string $copy, string $suite, int $timeout): array {
 
 /** @param list<array<string,mixed>> $mutants */
 function mg_print_summary(array $mutants, int $seed): void {
-    $k = $s = $b = $t = $u = 0;
+    $k = $s = $b = $t = $u = $e = 0;
     foreach ($mutants as $m) {
         match ($m['status'] ?? '') {
             'KILLED' => $k++, 'SURVIVED' => $s++, 'BROKEN' => $b++,
-            'TIMEOUT' => $t++, default => $u++,
+            'TIMEOUT' => $t++, 'EQUIVALENT' => $e++, default => $u++,
         };
     }
     $msi = ($k + $s + $t) > 0 ? round(100 * ($k + $t) / ($k + $s + $t), 1) : 0.0;
     echo 'Generated mutation: ' . ($k + $t) . '/' . ($k + $s + $t)
-        . " killed (MSI {$msi}%), $b broken, $u untestable, seed $seed\n";
+        . " killed (MSI {$msi}%), $b broken, $u untestable, $e equivalent, seed $seed\n";
     foreach ($mutants as $m) {
         $st = $m['status'] ?? '?';
         if ($st === 'KILLED' || $st === 'TIMEOUT') {
@@ -472,6 +681,11 @@ function mg_print_summary(array $mutants, int $seed): void {
     foreach ($mutants as $m) {
         if (($m['status'] ?? '') === 'UNTESTABLE') {
             echo "  UNTESTABLE {$m['id']} [{$m['file']}:{$m['line']}] {$m['desc']}\n";
+        }
+    }
+    foreach ($mutants as $m) {
+        if (($m['status'] ?? '') === 'EQUIVALENT') {
+            echo "  EQUIVALENT {$m['id']} [{$m['file']}:{$m['line']}] {$m['desc']} ({$m['output']})\n";
         }
     }
 }
@@ -506,6 +720,27 @@ if ($opt['only'] !== null) {
     if ($all === []) { fwrite(STDERR, "no mutants match --only\n"); exit(2); }
 }
 $all = mg_shuffle($all, $opt['seed']);
+// Equivalents are partitioned AFTER the shuffle (enumeration order, IDs and
+// shard math stay stable) but BEFORE the budget slice, so --budget always
+// buys runnable mutants and the suppressed sites cost no suite time. An
+// explicit --only bypasses suppression: naming a mutant means run it.
+$equiv = [];
+if ($opt['only'] === null) {
+    $kept = [];
+    foreach ($all as $m) {
+        $why = mg_is_equiv($m);
+        if ($why !== null) {
+            $m['status'] = 'EQUIVALENT';
+            $m['output'] = $why;
+            $m['seed'] = $opt['seed'];
+            $m['suites'] = $mg_suites[basename($m['file'])] ?? [];
+            $equiv[] = $m;
+        } else {
+            $kept[] = $m;
+        }
+    }
+    $all = $kept;
+}
 if ($opt['budget'] !== null) $all = array_slice($all, 0, max(0, $opt['budget']));
 
 echo 'enumerated ' . count($all) . " mutant(s), seed {$opt['seed']}\n";
@@ -559,6 +794,7 @@ $baselineSuites = [];
 foreach ($all as $m) {
     foreach ($mg_suites[basename($m['file'])] ?? [] as $s) $baselineSuites[$s] = true;
 }
+mg_db_reset();
 foreach (array_keys($baselineSuites) as $suite) {
     [$st, $dt, $tail] = mg_run_suite($copy, $suite, $mg_suite_timeout);
     echo "  baseline $suite: $st ({$dt}s)\n";
@@ -595,6 +831,7 @@ foreach ($all as $m) {
     $path = $copy . '/' . $m['file'];
     $orig = (string)@file_get_contents($path);
     file_put_contents($path, $mutated);
+    mg_db_reset();
     $status = 'SURVIVED';
     $secs = 0.0;
     $note = '';
@@ -626,10 +863,10 @@ foreach ($all as $m) {
     echo "  {$status} {$m['id']} [{$m['file']}:{$m['line']}] {$m['desc']}" . ($note !== '' ? " ($note)" : '') . "\n";
 }
 
-mg_print_summary($results, $opt['seed']);
+mg_print_summary(array_merge($results, $equiv), $opt['seed']);
 if ($opt['report'] !== null) {
     file_put_contents($opt['report'], json_encode(
-        ['tool' => 'mutation_generate', 'seed' => $opt['seed'], 'mutants' => $results],
+        ['tool' => 'mutation_generate', 'seed' => $opt['seed'], 'mutants' => array_merge($results, $equiv)],
         JSON_PRETTY_PRINT) . "\n");
     echo 'report -> ' . $opt['report'] . "\n";
 }

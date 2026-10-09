@@ -218,4 +218,11 @@ ob_start();
 pseudo_cron_finish_response($base);
 T::eq('elsewhere it flushes the output buffers it owns, not the ones below', $base, ob_get_level());
 
+// Staging-expiry boundary (one hour, exact): the sweep reaps strictly older
+// stages, never the edge itself.
+$swNow = 1000000;
+T::ok('fresh stage kept', !cleanup_staging_expired($swNow - 10, $swNow));
+T::ok('edge of the hour kept', !cleanup_staging_expired($swNow - 3600, $swNow));
+T::ok('past the hour reaped', cleanup_staging_expired($swNow - 3601, $swNow));
+
 exit(T::done());

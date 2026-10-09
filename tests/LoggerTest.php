@@ -10,6 +10,13 @@ require_once __DIR__ . '/bootstrap.php';
 
 $db = get_db();
 
+// Hermeticity: a mutation-sampler run can die mid-suite (killed mutant) and
+// leave this suite's rows behind — including rows a mutant inserted through
+// a weakened early-return. Purge our own prefixes first so absence asserts
+// (disabled analytics, failed audit) observe this run only.
+$db->exec("DELETE FROM order_events WHERE event_type IN ('t_disabled_event','t_anon_terminal','t_enabled_event','t_event_fail')");
+$db->exec("DELETE FROM audit_log WHERE action IN ('t_audit_action','t_audit_fail')");
+
 /** Build one chain record exactly like app_log() does: prev first, then
  *  HMAC over the JSON of everything-but-hash. */
 function mk_chain_rec(string $prev, array $rec): array {
@@ -135,6 +142,18 @@ write_chain($p, [$r1, $r2, $rec]);
 [$valid] = verify_log_chain($p);
 T::ok('legacy-HMAC entry still verifies', $valid === true);
 
+// The legacy key is 32 BINARY bytes (raw_output), not 64 hex chars: history
+// written by older releases verifies only under the exact same bytes, so the
+// format is pinned, not just round-tripped.
+T::eq('legacy key is 32 binary bytes', 32, strlen(_log_key_legacy()));
+// Golden pre-separation entry under the test key: recomputed with any other
+// key bytes (e.g. a hex-vs-binary mix-up) this hash stops verifying.
+$golden = '{"ts":"2026-08-26T00:00:01.000Z","level":"info","event":"golden_legacy","msg":"compat pin","prev":"' . APP_LOG_GENESIS . '","hash":"8c49e21cf50270fad5b9479bbd064c8e59c95aa5979fc6706b0cd6df71e7c57f"}';
+$gp = $tmpDir . '/golden.log';
+file_put_contents($gp, $golden . "\n");
+T::eq('golden legacy entry verifies', [true, 1, null, null], verify_log_chain($gp));
+@unlink($gp);
+
 @unlink($p);
 
 // Rotation: oversized log moves to .1, destroying any previous generation
@@ -152,7 +171,45 @@ T::ok('small log not rotated', is_file($rot) && !is_file($rot . '.1'));
 @unlink($rot);
 @rmdir($tmpDir);
 
-// Live writer END-TO-END: three real appends must form a verifiable chain.
+// Entry summaries join event + message and cap runaway fields: an empty
+// summary would hide the entry from the viewer entirely.
+$sumRec = ['event' => 't_sum', 'msg' => 'hello world', 'extra' => str_repeat('z', 500)];
+$sum = log_entry_summary($sumRec);
+T::ok('summary keeps event and message', str_contains($sum, 't_sum') && str_contains($sum, 'hello world'));
+T::ok('summary is capped', strlen($sum) <= 400 + 3);
+T::ok('empty record summarizes empty', log_entry_summary([]) === '');
+
+// The viewer passes valid levels through and normalizes anything else to
+// info — a flipped check would relabel every warn as info and leak raw
+// garbage levels into the page.
+$lvlTmp = $tmpDir . '/levels.log';
+$warnRec = mk_chain_rec($genesis, ['ts' => '2026-08-26T00:00:05.000Z', 'level' => 'warn', 'event' => 't_warn', 'msg' => 'x']);
+$junkRec = ['ts' => '2026-08-26T00:00:06.000Z', 'level' => '!!!', 'event' => 't_junk', 'msg' => 'y', 'prev' => $warnRec['hash']];
+$junkPayload = json_encode(array_diff_key($junkRec, ['hash' => 1]), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+$junkRec['hash'] = hash_hmac('sha256', (string)$junkPayload, _log_key());
+write_chain($lvlTmp, [$warnRec, $junkRec]);
+$lvlViewed = log_recent_entries(10, $lvlTmp);
+$lvlLevels = array_column($lvlViewed['entries'] ?? [], 'level', 'text');
+T::ok('valid level passes through', in_array('warn', $lvlLevels, true));
+T::ok('garbage level normalizes to info', in_array('info', $lvlLevels, true));
+@unlink($lvlTmp);
+
+// Unencodable base fields (INF/NAN floats survive substitution) are refused
+// loudly instead of appending a blank line the verifier would skip.
+T::ok('INF message refused', app_log('info', 'logger_test_inf', ['msg' => INF]) === false);
+// Raw lines display verbatim (a shifted slice would eat the first byte).
+$rawTmp = $tmpDir . '/raw.log';
+file_put_contents($rawTmp, "raw-line\n");
+$rawViewed = log_recent_entries(10, $rawTmp);
+T::eq('raw line verbatim', ['raw-line'], array_column($rawViewed['entries'] ?? [], 'text'));
+@unlink($rawTmp);
+// A window starting one byte in drops the partial first line (a dead shift
+// would leak half a line into the viewer).
+$cutTmp = $tmpDir . '/cut.log';
+file_put_contents($cutTmp, "ab\ncd\nef\n");
+$cutTail = log_tail_lines($cutTmp, 8);
+T::eq('one-byte window drops the partial line', [['cd', 'ef'], true], [$cutTail[0], $cutTail[1]]);
+@unlink($cutTmp);
 // This exact sequence caught the ftell-at-zero bug where every entry anchored
 // to GENESIS and each write overwrote the file from byte zero.
 $live = APP_LOG_PATH;

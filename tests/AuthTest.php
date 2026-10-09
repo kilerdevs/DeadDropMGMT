@@ -24,6 +24,34 @@ T::eq('user id stored', $ownerId, current_user_id());
 T::eq('user name stored', 't_auth_owner', current_user_name());
 T::ok('login_time stamped', isset($_SESSION['login_time']) && abs(time() - $_SESSION['login_time']) < 5);
 
+// Sliding inactivity expiry (pure predicate — require_admin() exits, so the
+// comparison itself is unit-tested here, not through the guard).
+$now = 1000000;
+T::ok('fresh login not expired', !admin_login_expired(3600, $now - 10, $now));
+T::ok('exact window edge not expired', !admin_login_expired(3600, $now - 3600, $now));
+T::ok('past the window expired', admin_login_expired(3600, $now - 3601, $now));
+T::ok('disabled timeout never expires', !admin_login_expired(0, $now - 999999, $now));
+T::ok('missing stamp never expires here', !admin_login_expired(3600, null, $now));
+T::ok('non-integer stamp never expires here', !admin_login_expired(3600, 'yesterday', $now));
+
+// Missing-table detection answers by SQLSTATE, not by message wording: a
+// 42S02 with an unfamiliar message is still "no table yet" (fresh-install
+// fallback), while any other failure fails closed.
+$missingCode = new class('unfamiliar driver message') extends PDOException {
+    /** @var int|string */
+    protected $code = '42S02';
+};
+T::ok('42S02 by code is a missing table', _db_table_missing($missingCode));
+T::ok('other failures are not', !_db_table_missing(new PDOException('Connection lost')));
+
+// Absolute lifetime (12 h wall clock, not sliding): the edge itself still
+// belongs to the session; one second past it does not.
+$abs = ADMIN_SESSION_ABSOLUTE_SECONDS;
+T::ok('newborn session alive', !admin_session_absolute_expired($now, $now));
+T::ok('edge of lifetime alive', !admin_session_absolute_expired($now - $abs, $now));
+T::ok('past lifetime expired', admin_session_absolute_expired($now - $abs - 1, $now));
+T::ok('unstamped session never expires here (caller stamps it)', !admin_session_absolute_expired(0, $now));
+
 // Failed logins leave no session
 $_SESSION = [];
 T::eq('wrong password returns fail', 'fail', admin_login('t_auth_owner', 'wrong-password'));

@@ -125,6 +125,28 @@ function current_user_name(): string {
 
 // ── Access guards ─────────────────────────────────────────────────────────────
 
+// Sliding inactivity expiry as a pure predicate (require_admin() exits, so
+// the comparison itself would otherwise be untestable in-process): expired
+// only when a timeout is configured AND a login stamp exists AND the window
+// has passed. A missing or non-integer stamp never expires here — the
+// absolute-lifetime check below stamps such sessions instead.
+function admin_login_expired(int $timeout, mixed $loginTime, int $now): bool {
+    if ($timeout <= 0 || !is_int($loginTime)) {
+        return false;
+    }
+    return ($now - $loginTime) > $timeout;
+}
+
+// Absolute session lifetime as a pure predicate (same reason as above): a
+// non-positive birth never expires here — the caller stamps such sessions
+// instead of killing them.
+function admin_session_absolute_expired(int $born, int $now): bool {
+    if ($born <= 0) {
+        return false;
+    }
+    return ($now - $born) > ADMIN_SESSION_ABSOLUTE_SECONDS;
+}
+
 function require_admin(): void {
     start_secure_session();
     if (!is_admin_logged_in()) {
@@ -133,7 +155,7 @@ function require_admin(): void {
     }
     require_once dirname(__DIR__) . '/includes/settings.php';
     $timeout = admin_session_seconds();
-    if ($timeout > 0 && isset($_SESSION['login_time']) && (time() - $_SESSION['login_time']) > $timeout) {
+    if (admin_login_expired($timeout, $_SESSION['login_time'] ?? null, time())) {
         admin_logout();
         header('Location: /admin/index.php?timeout=1');
         exit;
@@ -143,7 +165,7 @@ function require_admin(): void {
     $born = (int)($_SESSION['login_at'] ?? 0);
     if ($born <= 0) {
         $_SESSION['login_at'] = time();
-    } elseif ((time() - $born) > ADMIN_SESSION_ABSOLUTE_SECONDS) {
+    } elseif (admin_session_absolute_expired($born, time())) {
         admin_logout();
         header('Location: /admin/index.php?timeout=1');
         exit;

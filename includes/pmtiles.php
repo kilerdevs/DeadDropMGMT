@@ -256,10 +256,7 @@ function pmtiles_range_curl(string $url, int $off, int $len, ?string $proxy, int
         CURLOPT_PROGRESSFUNCTION => static function ($ch, $dlTotal, $dlNow) use ($cap): int {
             return $dlNow > $cap ? 1 : 0;
         },
-    ]);
-    if ($proxy !== null) {
-        curl_setopt($ch, CURLOPT_PROXY, proxy_curl_url($proxy));
-    }
+    ] + proxy_curl_opts($proxy));
     $body = curl_exec($ch);
     $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
     $err = curl_error($ch);
@@ -267,13 +264,7 @@ function pmtiles_range_curl(string $url, int $off, int $len, ?string $proxy, int
     if (!is_string($body)) {
         return [null, $err !== '' ? $err : 'request failed'];
     }
-    if ($code === 206) {
-        return strlen($body) === $len ? [$body, ''] : [null, 'short range body'];
-    }
-    if ($code === 200 && $off === 0) {
-        return strlen($body) >= $len ? [substr($body, 0, $len), ''] : [null, 'short body'];
-    }
-    return [null, 'HTTP ' . $code];
+    return pmtiles_classify_range($code, $body, $off, $len);
 }
 
 /** @return array{?string,string} */
@@ -283,13 +274,10 @@ function pmtiles_range_stream(string $url, int $off, int $len, ?string $proxy, i
     // anything longer is the caller's exact-length check below.
     $res = proxy_request_streams('GET', $url,
         ['Range: bytes=' . $off . '-' . ($off + $len - 1)], $proxy, $timeout, $len);
-    if ($res['code'] === 206) {
-        return strlen($res['body']) === $len ? [$res['body'], ''] : [null, 'short range body'];
+    if ($res['code'] === 0) {
+        return [null, 'request failed'];
     }
-    if ($res['code'] === 200 && $off === 0) {
-        return strlen($res['body']) >= $len ? [substr($res['body'], 0, $len), ''] : [null, 'short body'];
-    }
-    return [null, $res['code'] === 0 ? 'request failed' : 'HTTP ' . $res['code']];
+    return pmtiles_classify_range((int)$res['code'], (string)$res['body'], $off, $len);
 }
 
 // Whether the pure-PHP engine can run here at all: directory math needs
@@ -312,6 +300,30 @@ function pmtiles_transport_ok(): bool {
 // Sidecar JSON shape: {url,proxy,bbox:[4],maxzoom,tileType,tileComp,
 // outMaxZoom,meta:string(base64),entries:[[tileId,srcOff,srcLen]... by src
 // offset],spans:[[start,end]...],expected:int}.
+
+// Root-directory size gate as a named predicate: the spec keeps header +
+// root inside the first 16 KiB, so a bigger claim is a hostile or broken
+// upstream. Exact boundary (PMTILES_ROOT_MAX itself still fits) is pinned
+// by PmtilesTest — an off-by-one here admits corrupt archives or rejects
+// full-but-legal ones.
+function pmtiles_root_len_ok(int $rootLen): bool {
+    return $rootLen > 0 && $rootLen <= PMTILES_ROOT_MAX;
+}
+
+// Classify a RECEIVED range body: 206 must carry exactly the asked bytes, a
+// 200 to offset 0 keeps its first $len bytes, anything else names the
+// status. Pure so the 206/exact-length contract is unit-testable — the
+// transports only fetch, they never interpret.
+/** @return array{?string,string} [body-or-null, error] */
+function pmtiles_classify_range(int $code, string $body, int $off, int $len): array {
+    if ($code === 206) {
+        return strlen($body) === $len ? [$body, ''] : [null, 'short range body'];
+    }
+    if ($code === 200 && $off === 0) {
+        return strlen($body) >= $len ? [substr($body, 0, $len), ''] : [null, 'short body'];
+    }
+    return [null, 'HTTP ' . $code];
+}
 
 /**
  * Walk the planet directories for the bbox tiles.
@@ -341,7 +353,7 @@ function pmtiles_build_plan(string $url, ?string $proxy, float $minLon, float $m
     }
     // The spec keeps header + root directory inside the first 16 KiB; a
     // bigger claim is a hostile or broken upstream, never a real archive.
-    if ($hdr['rootLen'] <= 0 || $hdr['rootLen'] > PMTILES_ROOT_MAX) {
+    if (!pmtiles_root_len_ok($hdr['rootLen'])) {
         return $noPlan('bad root directory');
     }
     [$rootRaw, $err] = pmtiles_http_range($url, $hdr['rootOff'], $hdr['rootLen'], $proxy, $timeout);

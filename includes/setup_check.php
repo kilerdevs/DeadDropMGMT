@@ -28,6 +28,30 @@ function setup_row(string $id, string $label, string $status, string $detail = '
     return ['id' => $id, 'label' => $label, 'status' => $status, 'detail' => $detail];
 }
 
+// Version/binary suffixes for runtime labels as a pure function: php names
+// its version, extensions theirs, and zip names the fallback binary only
+// when the binary is actually the fallback (limited state). Unit-tested in
+// CapabilitiesTest — a flipped state check would credit the binary while
+// the extension serves, or hide it while it carries the load.
+/**
+ * @param array{id:string,label:string,state:string,note:string} $row
+ * @return array{0:string,1:array<string,string>} [label, template params]
+ */
+function setup_runtime_label(string $id, array $row): array {
+    $label = $row['label'];
+    $params = [];
+    if ($id === 'php') {
+        $label .= ' ' . PHP_VERSION;
+        $params = ['v' => PHP_VERSION];
+    } elseif (str_starts_with($id, 'pdo_') || in_array($id, ['mbstring', 'zlib', 'openssl', 'curl'], true)) {
+        $label .= ' ' . (string)phpversion($id === 'curl' ? 'curl' : $id);
+    } elseif ($id === 'zip' && $row['state'] === 'limited') {
+        $label .= ' via unzip binary';
+        $params = ['bin' => $row['note']];
+    }
+    return [$label, $params];
+}
+
 // ── Runtime: PHP, extensions, functions ─────────────────────────────────────
 
 // PHP version, required extensions, transports, and process control — no DB
@@ -46,17 +70,7 @@ function setup_runtime_checks(): array {
               'zip', 'exec', 'proc_open', 'jobs', 'env', 'set_time_limit'] as $id) {
         $row = $eval[$id];
         $status = capabilities_consumer_status($row);
-        $label = $row['label'];
-        $params = [];
-        if ($id === 'php') {
-            $label .= ' ' . PHP_VERSION;
-            $params = ['v' => PHP_VERSION];
-        } elseif (str_starts_with($id, 'pdo_') || in_array($id, ['mbstring', 'zlib', 'openssl', 'curl'], true)) {
-            $label .= ' ' . (string)phpversion($id === 'curl' ? 'curl' : $id);
-        } elseif ($id === 'zip' && $row['state'] === 'limited') {
-            $label .= ' via unzip binary';
-            $params = ['bin' => $row['note']];
-        }
+        [$label, $params] = setup_runtime_label($id, $row);
         $detail = $status === 'ok' ? '' : t($row['fallback'], $params);
         // Row ids are the historic ones (ext_<name> for extensions, bare
         // capability name otherwise) — tests and the doctor rely on them.

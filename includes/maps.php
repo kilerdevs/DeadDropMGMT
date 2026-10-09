@@ -930,6 +930,23 @@ function maps_ensure_cli(bool $viaProxy, ?string $proxy): array {
 // cURL first when present; the shared proxy transport otherwise (same resume
 // semantics, every proxy scheme).
 /** @return array{bool,string} [ok, error] */
+// Resume outcome as a pure decision: a 200 to a resume request means the
+// server ignored Range (the appended full body is corruption — restart from
+// zero); a 200 fresh or a 206 to a resume is success; anything else falls
+// through to the failure cleanup below. Unit-tested in MapsTest — a flipped
+// comparison here would bless corruption as success or redownload good
+// resumes forever.
+/** @return 'restart'|'ok'|'continue' */
+function maps_fetch_resume_outcome(bool $ok, int $code, int $have): string {
+    if ($ok && $code === 200 && $have > 0) {
+        return 'restart';
+    }
+    if ($ok && ($code === 200 || ($have > 0 && $code === 206))) {
+        return 'ok';
+    }
+    return 'continue';
+}
+
 function maps_fetch_file(string $url, string $dest, ?string $proxy): array {
     if (!host_has_curl()) {
         return maps_fetch_file_streams($url, $dest, $proxy);
@@ -953,15 +970,14 @@ function maps_fetch_file(string $url, string $dest, ?string $proxy): array {
     if ($have > 0) {
         curl_setopt($ch, CURLOPT_RANGE, $have . '-');
     }
-    if ($proxy !== null) {
-        curl_setopt($ch, CURLOPT_PROXY, proxy_curl_url($proxy));
-    }
+    curl_setopt_array($ch, proxy_curl_opts($proxy));
     $ok = curl_exec($ch);
     $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $err = curl_error($ch);
     unset($ch); // PHP 8.5 deprecates curl_close(); the handle frees on scope exit
     fclose($fh);
-    if ($ok && $code === 200 && $have > 0) {
+    $resume = maps_fetch_resume_outcome((bool)$ok, $code, $have);
+    if ($resume === 'restart') {
         // The server ignored Range: the full body was just APPENDED to the
         // partial file, and that concatenation is corruption — never a
         // success. Drop it so the next attempt restarts from zero (this is
@@ -969,7 +985,7 @@ function maps_fetch_file(string $url, string $dest, ?string $proxy): array {
         @unlink($dest);
         return [false, 'server ignored resume; restarting from zero'];
     }
-    if ($ok && ($code === 200 || ($have > 0 && $code === 206))) {
+    if ($resume === 'ok') {
         return [true, ''];
     }
     // A fresh (non-resume) attempt that failed must not leave its partial
@@ -1686,6 +1702,14 @@ function maps_kick_worker(): bool {
  * @param array<string,mixed> $zone
  * @return array{0:string,1:string} [done|more|failed, error]
  */
+// Sizing deadline as a pure value: a positive time box ends at phase start
+// plus budget, zero/negative means unbounded (0.0). The edge (exactly 0)
+// is unbounded — a dead comparison here would time out every worker-path
+// sizing run before its first request.
+function maps_size_deadline(float $phase0, float $timeBox): float {
+    return $timeBox > 0 ? $phase0 + $timeBox : 0.0;
+}
+
 function maps_process_php(array $zone, int $timeBox): array {
     $id = (int)$zone['id'];
     $db = get_db();
@@ -1747,7 +1771,7 @@ function maps_process_php(array $zone, int $timeBox): array {
         // next slice resumes from the sidecar — instead of dying mid-walk
         // past max_execution_time and stalling the queue. Unbounded (0) for
         // the worker/inline path, which has no slice to yield to.
-        $sizeDeadline = $timeBox > 0 ? $phase0 + $timeBox : 0.0;
+        $sizeDeadline = maps_size_deadline($phase0, $timeBox);
         [$plan, $perr, $newLeaves] = pmtiles_build_plan(
             $planet, $proxy, $bbox[0], $bbox[1], $bbox[2], $bbox[3], $maxzoom,
             $sizeTimeout, $warm, $sizeDeadline);

@@ -123,6 +123,15 @@ for ($i = 0; $i < 300; $i++) {
     $seen[$pp] = true;
 }
 T::ok('passphrases do not repeat in 300 draws', count($seen) >= 295);
+// The numeric suffix spans the full 0000–9999 range: a collapsed range
+// (always 0000) would cost ~13 bits of the promised entropy.
+$nums = [];
+for ($i = 0; $i < 50; $i++) {
+    $nums[] = (int)substr(generate_passphrase(), -5, 4);
+}
+T::ok('numeric suffix varies across draws', count(array_unique($nums)) > 1);
+T::throws('location data rejects invalid UTF-8 with a loud error, not a TypeError',
+    static fn() => encrypt_location_data(['text' => "\xff\xfe invalid"]), RuntimeException::class);
 
 // Entropy budget pinned in code: exactly 256 unique words →
 // 6·log2(256) + log2(10000) + log2(10) ≈ 64.61 bits ≥ the promised 64.
@@ -132,6 +141,17 @@ preg_match_all("/'([a-z]+)'/", $m[1], $w);
 $list = $w[1];
 T::eq('word list is exactly 256 words', 256, count($list));
 T::eq('word list has no duplicates', 256, count(array_unique($list)));
+// Every dictionary word is reachable: a range starting at 1 would silently
+// drop the first word (asserted over 1000 draws — 6000 picks — so a missing
+// word fails deterministically, not statistically).
+$wordsSeen = [];
+for ($i = 0; $i < 1000; $i++) {
+    $ppw = generate_passphrase();
+    if (preg_match('/^([A-Z][a-z]+)/', $ppw, $wm)) {
+        $wordsSeen[strtolower($wm[1])] = true;
+    }
+}
+T::ok('first dictionary word reachable', isset($wordsSeen[$list[0]]));
 $bits = 6 * log(count(array_unique($list)), 2) + log(10000, 2) + log(10, 2);
 T::ok(sprintf('passphrase entropy %.2f bits >= 64', $bits), $bits >= 64.0);
 
@@ -351,6 +371,46 @@ if (function_exists('imagecreatetruecolor')) {
     T::ok('alpha PNG downscales with transparency intact',
         _compress_image($ptd . '/alpha.png', $ptd . '/alpha.out.png', 'image/png', 12582912)
         && getimagesize($ptd . '/alpha.out.png')[0] === 2560);
+    $alphaOut = imagecreatefrompng($ptd . '/alpha.out.png');
+    $alphaPx = imagecolorat($alphaOut, 0, 0);
+    T::ok('downscaled alpha stays transparent', (($alphaPx >> 24) & 127) === 127);
+    $alphaOut = null;
+
+    // Noisy semi-transparent PNG over a tight byte budget: the compressor
+    // must resample (not just re-encode), and the resampled output keeps
+    // its alpha channel instead of flattening to opaque.
+    $noisy = imagecreatetruecolor(600, 600);
+    imagealphablending($noisy, false);
+    imagesavealpha($noisy, true);
+    for ($ny = 0; $ny < 600; $ny += 10) {
+        for ($nx = 0; $nx < 600; $nx += 10) {
+            $c = imagecolorallocatealpha($noisy, ($nx * 7 + $ny * 13) % 256, ($nx * 3 + $ny) % 256, ($nx + $ny * 11) % 256, 64);
+            imagefilledrectangle($noisy, $nx, $ny, $nx + 9, $ny + 9, $c);
+        }
+    }
+    imagepng($noisy, $ptd . '/noisy.png');
+    $noisy = null;
+    T::ok('noisy alpha PNG shrinks to budget',
+        _compress_image($ptd . '/noisy.png', $ptd . '/noisy.out.png', 'image/png', 60000) !== false);
+    $noisyOut = imagecreatefrompng($ptd . '/noisy.out.png');
+    $noisyPx = imagecolorat($noisyOut, 5, 5);
+    T::ok('resampled output keeps its alpha', ((($noisyPx >> 24) & 127) > 0));
+    $noisyOut = null;
+
+    // The pixel ceiling multiplies width BY height: a tall 100x5000 strip is
+    // half a megapixel (accepted), even though height alone squared is not.
+    $tall = imagecreatetruecolor(100, 5000);
+    imagefill($tall, 0, 0, imagecolorallocate($tall, 90, 10, 200));
+    imagejpeg($tall, $ptd . '/tall.jpg', 80);
+    $tall = null;
+    $tallEntry = ['name' => 'tall.jpg', 'type' => 'image/jpeg', 'tmp_name' => $ptd . '/tall.jpg',
+        'error' => UPLOAD_ERR_OK, 'size' => filesize($ptd . '/tall.jpg')];
+    $tallRel = save_uploaded_photo($tallEntry, 0);
+    T::ok('tall strip passes the pixel ceiling', $tallRel !== false);
+    if (is_string($tallRel)) {
+        @unlink(dirname(__DIR__) . '/uploads/' . $tallRel);
+        @rmdir(dirname(__DIR__) . '/uploads/0');
+    }
 
     // A file squatting where the order dir should be fails the upload closed.
     $ublock = dirname(__DIR__) . '/uploads/29515';

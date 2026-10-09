@@ -99,6 +99,24 @@ T::eq('path traversal rejected', null, backup_manifest_parse($traversal));
 $dotfile = $good;
 $dotfile['files'] = ['uploads/.restore-x/y' => str_repeat('a', 64)];
 T::eq('dot paths rejected', null, backup_manifest_parse($dotfile));
+T::eq('scalar manifest rejected', null, backup_manifest_parse('not-a-manifest'));
+T::eq('integer manifest rejected', null, backup_manifest_parse(42));
+T::eq('null manifest rejected', null, backup_manifest_parse(null));
+
+// Refusal-code mapping (shared by the stage and payload failure arms): an
+// oversized payload stays 'too_large', anything else (null included) is
+// 'invalid'. A swapped mapping would misreport corrupt bundles.
+T::eq('oversize maps to too_large', 'too_large', backup_refusal_code('too_large'));
+T::eq('other reasons map to invalid', 'invalid', backup_refusal_code('corrupt'));
+T::eq('missing reason maps to invalid', 'invalid', backup_refusal_code(null));
+
+// Size gate answers false for junk wearing a zip header (the open below can
+// only fail the same way the early return already did).
+$garbageZip = $tmpRoot . '/garbage.zip';
+file_put_contents($garbageZip, "PK\x03\x04" . str_repeat('x', 100));
+T::ok('unopenable zip is not oversized', backup_exceeds_caps($garbageZip) === false);
+T::ok('missing path is not oversized', backup_exceeds_caps($tmpRoot . '/nope.zip') === false);
+@unlink($garbageZip);
 
 // ── Restore round-trip: marker moves, then comes back ──────────────────────
 set_setting('backup_test_marker', 'after');
@@ -114,6 +132,29 @@ $restored2 = backup_restore($db, $path, $good, $tmpRoot);
 T::eq('second restore ok', true, $restored2['ok'] ?? false);
 T::ok('orphan pruned', !is_file($tmpRoot . '/uploads/orphan.enc'));
 T::ok('no staging leftovers', count(glob($tmpRoot . '/uploads/.restore-*')) === 0);
+// A clean restore reports no partial files (the flag exists only for the
+// best-effort photo publish past the DB commit).
+T::ok('clean restore reports no partial files', !isset($restored2['files_partial']));
+// Nested orphan trees go too: files unlink first (child-first walk), then
+// the emptied directories themselves are removed.
+@mkdir($tmpRoot . '/uploads/7/nested/deep', 0775, true);
+file_put_contents($tmpRoot . '/uploads/7/nested/deep/orphan.enc', 'x');
+@mkdir($tmpRoot . '/uploads/emptydir', 0775, true);
+$restored3 = backup_restore($db, $path, $good, $tmpRoot);
+T::eq('restore with nested orphans ok', true, $restored3['ok'] ?? false);
+T::ok('nested orphan file pruned', !is_file($tmpRoot . '/uploads/7/nested/deep/orphan.enc'));
+T::ok('emptied orphan dirs removed',
+    !is_dir($tmpRoot . '/uploads/7/nested') && !is_dir($tmpRoot . '/uploads/emptydir'));
+T::ok('...and still no partial-files flag', !isset($restored3['files_partial']));
+// A destination that cannot be written marks the restore partial: squat a
+// file where the photo directory should be and the staged move must fail.
+@unlink($tmpRoot . '/uploads/7/aaa.enc');
+@rmdir($tmpRoot . '/uploads/7');
+file_put_contents($tmpRoot . '/uploads/7', 'squatter');
+$restoredBlocked = backup_restore($db, $path, $good, $tmpRoot);
+T::eq('blocked destination still restores the rows', true, $restoredBlocked['ok'] ?? false);
+T::ok('...but reports partial files', isset($restoredBlocked['files_partial']));
+@unlink($tmpRoot . '/uploads/7');
 
 // ── Restore of a tampered bundle changes nothing ───────────────────────────
 copy($path, $tampered);
@@ -291,6 +332,7 @@ if ($fhBig !== false) {
     set_setting('backup_test_marker', 'after');
     $bigRestore = backup_restore($db, $bigJson, $jsonManifest, $tmpRoot);
     T::eq('oversized restore refuses', 'too_large', $bigRestore['code'] ?? '');
+    T::eq('...with ok false', false, $bigRestore['ok'] ?? true);
     T::eq('live data untouched by size refusal', 'after', get_setting('backup_test_marker', ''));
     @rmdir($tmpRoot . '/wcap');
     @unlink($bigJson);

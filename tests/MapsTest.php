@@ -71,6 +71,19 @@ T::ok('style labels streets, places and POIs',
 // Roads must paint over buildings, or the map turns into grey blobs.
 T::ok('buildings paint under the roads',
     array_search('buildings_zone_7', $layerIds, true) < array_search('road_casing_zone_7', $layerIds, true));
+// Golden pins on generated style literals: a drifted zoom gate or text-size
+// stop silently changes what owners see at street level.
+$byId = array_column($one['layers'], null, 'id');
+T::eq('house numbers appear at street level', 17, $byId['housenumber_zone_7']['minzoom'] ?? null);
+T::eq('estate labels grow to full size by z18', [15.5, 9.5, 18, 12],
+    array_slice($byId['area_label_zone_7']['layout']['text-size'] ?? [], 3));
+T::eq('paths widen with zoom', [15, 0.8, 18, 2.2],
+    array_slice($byId['paths_zone_7']['paint']['line-width'] ?? [], 3));
+T::eq('poi labels cap their width', 7, $byId['poi_a_label_zone_7']['layout']['text-max-width'] ?? null);
+T::eq('dotted poi labels sit above the dot', [0, 0.55], $byId['poi_a_label_zone_7']['layout']['text-offset'] ?? null);
+T::eq('undotted poi labels stay centered', [0, 0], $byId['poi_c_label_zone_7']['layout']['text-offset'] ?? null);
+T::eq('water lines grow with zoom', [12, 10, 17, 13],
+    array_slice($byId['water_line_label_zone_7']['layout']['text-size'] ?? [], 3));
 
 // Every font a symbol layer names must ship as glyphs, or labels vanish
 // silently (MapLibre only logs a 404 per range).
@@ -101,6 +114,16 @@ foreach ($ids2 as $i => $id) {
 }
 T::ok('all geometry precedes all labels across zones', $lastGeometry < $firstLabel);
 T::eq('two zones register two sources', ['zone_1', 'zone_2'], array_keys($two['sources']));
+
+// Full-style snapshot: every literal in the generated style (zoom gates,
+// text sizes, colors, widths) is pinned by one hash — a drifted literal
+// changes what owners see with no test failing otherwise. Regenerate on
+// intentional style changes:
+//   php -r "require 'tests/bootstrap.php'; echo hash('sha256', json_encode(maps_style([['id'=>'zone_7','file'=>'zone_7.pmtiles']]), JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES)), PHP_EOL;"
+T::eq('one zone renders 32 layers', 32, count($one['layers']));
+T::eq('generated style matches the snapshot',
+    '63396625fce29bcde2b1641d9cb43a65cb1f0190f3b04b3e5dfb8c5f01583d6c',
+    hash('sha256', (string)json_encode($one, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)));
 
 // The style endpoint json_encodes this array — it must survive the round trip.
 $rt = json_decode(json_encode($one, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), true);
@@ -135,12 +158,55 @@ T::eq('directory line is null', null, maps_parse_progress('extract.go:401: fetch
 T::eq('bytes MB', 33554432, maps_parse_bytes('32', 'MB'));
 T::eq('bytes fractional', 1468006, maps_parse_bytes('1.4', 'MB'));
 T::eq('bytes kB lowercase', 51200, maps_parse_bytes('50', 'kB'));
+T::eq('bytes GB', 2147483648, maps_parse_bytes('2', 'GB'));
+T::eq('bytes TB', 2199023255552, maps_parse_bytes('2', 'TB'));
 T::eq('bytes unknown unit', null, maps_parse_bytes('3', 'XB'));
 T::eq('dur seconds', 24, maps_parse_dur('24s'));
 T::eq('dur minutes', 655, maps_parse_dur('10m55s'));
 T::eq('dur hours', 3723, maps_parse_dur('1h02m03s'));
 T::eq('dur zero', 0, maps_parse_dur('0s'));
 T::eq('dur garbage', 0, maps_parse_dur('soon'));
+
+// Resume outcome (pure — the transports only fetch): a 200 to a resume
+// means the server ignored Range (restart from zero); a fresh 200 or a
+// resume 206 is success; anything else falls through to failure cleanup.
+T::eq('200 to a resume restarts', 'restart', maps_fetch_resume_outcome(true, 200, 512));
+T::eq('fresh 200 succeeds', 'ok', maps_fetch_resume_outcome(true, 200, 0));
+T::eq('resume 206 succeeds', 'ok', maps_fetch_resume_outcome(true, 206, 512));
+T::eq('fresh 206 falls through', 'continue', maps_fetch_resume_outcome(true, 206, 0));
+T::eq('failed attempt falls through', 'continue', maps_fetch_resume_outcome(false, 200, 512));
+T::eq('wrong status falls through', 'continue', maps_fetch_resume_outcome(true, 404, 512));
+
+// Sizing deadline: a positive box ends at phase start plus budget, zero (or
+// negative) is unbounded — the edge itself must not time out the worker.
+T::eq('positive box ends at start plus budget', 1010.0, maps_size_deadline(1000.0, 10.0));
+T::eq('zero box is unbounded', 0.0, maps_size_deadline(1000.0, 0.0));
+T::eq('negative box is unbounded', 0.0, maps_size_deadline(1000.0, -5.0));
+
+// An unwritable destination fails before any network happens (the false
+// branch owns the error, never a curl fatal on a bad handle). Curl-branch
+// contract — the curl-less transport reports refusal differently.
+$noDir = sys_get_temp_dir() . '/ddmgmt_no_such_dir_' . getmypid();
+if (host_has_curl()) {
+    T::eq('unwritable destination fails closed', [false, 'cannot write download file'],
+        maps_fetch_file('http://127.0.0.1:9/x', $noDir . '/f', null));
+} else {
+    T::ok('unwritable-destination contract needs curl — skipped here', true);
+}
+// Failure messages name the proxy path: a swapped null check would report
+// a proxied failure as direct and vice versa. (Writable destinations — the
+// unwritable case above never reaches the fetch.)
+if (host_has_curl()) {
+    $msgDest = sys_get_temp_dir() . '/ddmgmt_fetchmsg_' . getmypid();
+    $msgDirect = maps_fetch_file('http://127.0.0.1:9/x', $msgDest . '.direct', null)[1] ?? '';
+    T::ok('direct failure says direct', str_contains($msgDirect, 'download failed (HTTP'));
+    $msgProxied = maps_fetch_file('http://127.0.0.1:9/x', $msgDest . '.proxied', 'http://127.0.0.1:9')[1] ?? '';
+    T::ok('proxied failure says through proxy', str_contains($msgProxied, 'through proxy'));
+    @unlink($msgDest . '.direct');
+    @unlink($msgDest . '.proxied');
+} else {
+    T::ok('fetch-message contract needs curl — skipped here', true);
+}
 
 $boxA = ['min_lon' => 20.0, 'min_lat' => 52.0, 'max_lon' => 22.0, 'max_lat' => 54.0];
 T::eq('identical overlap is 1', 1.0, maps_overlap_frac($boxA, $boxA));
@@ -288,6 +354,40 @@ T::ok('style carries the zone source', isset($styled['sources']['zone_' . $zid])
 T::ok('zone delete removes the row', maps_zone_delete((int)$zid));
 T::ok('zone gone after delete', !in_array('P2 Test Zone', array_column(maps_zone_list(), 'name'), true));
 
+// Orphan sweep keeps a live zone's own file: an aged file whose name token
+// matches the row's token is claimed, never debris. (A flipped comparison
+// would delete live downloads as orphans.)
+[$tokZid] = maps_zone_add('P2 Token Zone', 20.85, 52.05, 21.30, 52.40, 14, false);
+$tokNow = maps_zone_ensure_token((int)$tokZid);
+$tokFile = maps_tiles_dir() . '/zone_' . $tokZid . '_' . $tokNow . '.pmtiles';
+file_put_contents($tokFile, 'live zone bytes');
+touch($tokFile, time() - 3700);
+try {
+    T::ok('token setup sane', is_string($tokNow) && preg_match('/^[0-9a-f]{32}$/', $tokNow) === 1);
+    maps_sweep_orphan_files();
+    T::ok('live zone file survives the sweep', is_file($tokFile));
+} finally {
+    @unlink($tokFile);
+    $db->prepare('DELETE FROM map_zones WHERE id = ?')->execute([$tokZid]);
+}
+
+// Legacy renames only fill gaps: when both the legacy and the token names
+// exist, the token file (the live download) is never overwritten.
+[$legZid] = maps_zone_add('P2 Legacy Zone', 20.85, 52.05, 21.30, 52.40, 14, false);
+$legTok = maps_zone_ensure_token((int)$legZid);
+$legNamed = maps_tiles_dir() . '/zone_' . $legZid . '_' . $legTok . '.pmtiles';
+$legLegacy = maps_tiles_dir() . '/zone_' . $legZid . '.pmtiles';
+file_put_contents($legNamed, 'live bytes');
+file_put_contents($legLegacy, 'stale bytes');
+try {
+    maps_zone_ensure_token((int)$legZid);
+    T::eq('token file untouched by the rename', 'live bytes', file_get_contents($legNamed));
+    T::ok('legacy file left alone when named exists', is_file($legLegacy));
+} finally {
+    @unlink($legNamed);
+    @unlink($legLegacy);
+    $db->prepare('DELETE FROM map_zones WHERE id = ?')->execute([$legZid]);
+}
 // Steward fails jobs whose worker died without a word.
 [$sid] = maps_zone_add('P2 Stale Zone', 20.85, 52.05, 21.30, 52.40, 14, false);
 $db->prepare("UPDATE map_zones SET status = 'downloading', updated_at = '2020-01-01 00:00:00' WHERE id = ?")->execute([$sid]);
@@ -306,6 +406,45 @@ T::eq('stale reason coded', 'code:stalled', $stale['error'] ?? null);
 set_setting('maps_worker_kick', '0');
 T::ok('kick stays down when switched off', maps_kick_worker() === false);
 
+// Status-poll slice respects the worker lock: with the lock held elsewhere
+// a queued zone is left alone. (An inverted check would run the zone twice —
+// under the mutant this test pays one processing attempt and then fails on
+// the moved row, which is exactly the kill.)
+putenv('DDMGMT_MAPS_ENGINE=php');
+set_setting('maps_worker_kick', '1');
+[$lockZid] = maps_zone_add('P2 Lock Zone', 20.85, 52.05, 21.30, 52.40, 14, false);
+$db->prepare("UPDATE map_zones SET status = 'queued' WHERE id = ?")->execute([$lockZid]);
+[$lockHeld] = maps_worker_lock();
+T::ok('lock held for the test', $lockHeld === true);
+maps_php_poll_slice();
+$lockRow = null;
+foreach (maps_zone_list() as $z) {
+    if ((int)$z['id'] === (int)$lockZid) {
+        $lockRow = $z;
+    }
+}
+T::eq('locked zone untouched by the poll slice', 'queued', $lockRow['status'] ?? null);
+maps_worker_unlock();
+@unlink(maps_zone_path((int)$lockZid));
+$db->prepare('DELETE FROM map_zones WHERE id = ?')->execute([$lockZid]);
+$db->exec("DELETE FROM settings WHERE key_name = 'maps_worker_lock'");
+putenv('DDMGMT_MAPS_ENGINE');
+// A non-PHP engine never runs the PHP poll slice (an inverted gate would
+// process zones under the wrong engine).
+putenv('DDMGMT_MAPS_ENGINE=cli');
+set_setting('maps_worker_kick', '1');
+[$engZid] = maps_zone_add('P2 Engine Zone', 20.85, 52.05, 21.30, 52.40, 14, false);
+$db->prepare("UPDATE map_zones SET status = 'queued' WHERE id = ?")->execute([$engZid]);
+maps_php_poll_slice();
+$engRow = null;
+foreach (maps_zone_list() as $z) {
+    if ((int)$z['id'] === (int)$engZid) {
+        $engRow = $z;
+    }
+}
+T::eq('cli engine skips the php poll slice', 'queued', $engRow['status'] ?? null);
+$db->prepare('DELETE FROM map_zones WHERE id = ?')->execute([$engZid]);
+putenv('DDMGMT_MAPS_ENGINE');
 // Full pipeline against a stub CLI (no network, no real binary): sizing →
 // extract with live progress → verify → atomic publish → ready. The CLI
 // engine is forced: elsewhere the PHP engine would dispatch instead (its own
@@ -383,6 +522,93 @@ foreach (maps_zone_list() as $z) {
 }
 [$fok, $ferr] = maps_process_one($frow);
 T::ok('empty pool fails the job', !$fok && $ferr === 'code:proxy_empty');
+
+// A failed extract fails the job as download_failed (the missing part file
+// must never slide into verify+publish — a dead result check would).
+maps_cli_runner(static function (array $args, ?array $env, ?callable $onChunk): array {
+    if ($args[0] === 'version') {
+        return [true, 'pmtiles ' . PMTILES_CLI_VERSION];
+    }
+    if ($args[0] === 'extract' && in_array('--dry-run', $args, true)) {
+        return [true, "Completed in 1s\nExtract transferred 1.0 MB (overfetch 0.05) for an archive size of 1.0 MB"];
+    }
+    return [false, 'stub: extract failed'];
+});
+[$eid] = maps_zone_add('P2 Extract Zone', 20.85, 52.05, 21.30, 52.40, 14, false);
+$erow = null;
+foreach (maps_zone_list() as $z) {
+    if ((int)$z['id'] === (int)$eid) {
+        $erow = $z;
+    }
+}
+[$eok, $eerr] = maps_process_one($erow);
+T::ok('failed extract fails the job', !$eok && $eerr === 'code:download_failed');
+$efailed = null;
+foreach (maps_zone_list() as $z) {
+    if ((int)$z['id'] === (int)$eid) {
+        $efailed = $z;
+    }
+}
+T::eq('fresh failure starts progress at zero', 0, (int)($efailed['bytes_done'] ?? -1));
+$db->prepare('DELETE FROM map_zones WHERE id = ?')->execute([$eid]);
+maps_cli_runner(null, true);
+// A CLI that answers the right version is accepted without re-downloading
+// (a dead version check would re-fetch a good binary every run — here
+// against a refused host, so the fallthrough fails instead of succeeding).
+putenv('DDMGMT_PMTILES_URL=http://127.0.0.1:9/pmtiles.tgz');
+maps_cli_runner(static fn(): array => [true, 'pmtiles ' . PMTILES_CLI_VERSION]);
+T::eq('good version needs no download', [true, ''], maps_ensure_cli(false, null));
+maps_cli_runner(null, true);
+putenv('DDMGMT_PMTILES_URL');
+// The runner seam uninstalls cleanly (a dead clear would leak the stub into
+// every later suite in the process).
+maps_cli_runner(static fn(): array => [true, 'x']);
+maps_cli_runner(null, true);
+T::ok('runner cleared', maps_cli_runner() === null);
+
+// A CLI that exits 1 is a failure, not a silent success (exit codes other
+// than zero never mean "version answered"). Needs a real process exit —
+// skipped where no Bourne shell exists.
+if (DIRECTORY_SEPARATOR === '\\') {
+    T::ok('CLI exit-code contract needs a shell — skipped here', true);
+} else {
+    $failSh = sys_get_temp_dir() . '/ddmgmt_failcli_' . getmypid() . '.sh';
+    file_put_contents($failSh, "#!/bin/sh\nexit 1\n");
+    chmod($failSh, 0750);
+    putenv('DDMGMT_PMTILES_BIN=' . $failSh);
+    maps_cli_runner(null, true);
+    [$failOk] = maps_cli_exec(['version']);
+    T::ok('exit 1 is a failure', $failOk === false);
+    putenv('DDMGMT_PMTILES_BIN');
+    @unlink($failSh);
+}
+// Pin first, execute second: a binary that is not the pinned release is
+// deleted before any version probe would run it. Needs a pinned host arch
+// (Linux) — elsewhere the pin is null and there is nothing to enforce.
+$pinNow = maps_cli_pin();
+if ($pinNow === null) {
+    T::ok('pin-mismatch deletion needs a pinned arch — skipped here', true);
+} else {
+    $binPath = maps_cli_bin();
+    $hadBin = is_file($binPath);
+    $binBackup = $binPath . '.pintestbak';
+    if ($hadBin) {
+        rename($binPath, $binBackup);
+    }
+    try {
+        file_put_contents($binPath, 'not the pinned release');
+        maps_cli_runner(static fn(): array => [true, 'pmtiles ' . PMTILES_CLI_VERSION]);
+        [$pinOk, $pinErr] = maps_ensure_cli(false, null);
+        T::ok('mismatched binary deleted before any probe runs', !is_file($binPath));
+        T::eq('stubbed CLI answers under test', [true, ''], [$pinOk, $pinErr]);
+    } finally {
+        @unlink($binPath);
+        if ($hadBin) {
+            rename($binBackup, $binPath);
+        }
+        maps_cli_runner(null, true);
+    }
+}
 
 // Cleanup: rows, published files, scratch settings, stub runner.
 foreach ([$pid, $qid, $fid, $sid] as $cid) {

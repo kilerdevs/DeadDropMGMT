@@ -613,6 +613,15 @@ function backup_verify_json(string $path): array {
  * @param array{backup:int, created_utc:string, app:string, format:string, encoding:string, key_fp:string, config_crc:string, db:array<string,int>, files:array<string,string>} $manifest
  * @return array{ok:bool,code?:string,key_mismatch?:bool,files_partial?:bool}
  */
+
+// Refusal code for a failed stage/payload read: an oversized payload stays
+// 'too_large' (the caller may retry chunked), anything else is 'invalid'.
+// A swapped mapping would report corrupt bundles as oversized and vice
+// versa — pinned by BackupTest, not just read here.
+function backup_refusal_code(?string $why): string {
+    return $why === 'too_large' ? 'too_large' : 'invalid';
+}
+
 function backup_restore(PDO $db, string $path, array $manifest, ?string $root = null): array {
     // Size first: an oversized bundle is refused before a stage directory
     // or a transaction exists, so the refusal touches neither disk nor DB.
@@ -642,12 +651,12 @@ function backup_restore(PDO $db, string $path, array $manifest, ?string $root = 
         $staged = backup_stage_files($path, $manifest, $stage, $why);
         if (!$staged) {
             $cleanup();
-            return ['ok' => false, 'code' => $why === 'too_large' ? 'too_large' : 'invalid'];
+            return ['ok' => false, 'code' => backup_refusal_code($why)];
         }
         $rows = backup_read_payload_rows($path, $manifest, $why);
         if ($rows === null) {
             $cleanup();
-            return ['ok' => false, 'code' => $why === 'too_large' ? 'too_large' : 'invalid'];
+            return ['ok' => false, 'code' => backup_refusal_code($why)];
         }
         // The database half: one transaction, DELETE (never TRUNCATE — DDL
         // would implicit-commit on MySQL and split the restore in two).

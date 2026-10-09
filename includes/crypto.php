@@ -776,6 +776,19 @@ function save_uploaded_photo(array $file_entry, int $order_id, int $max_bytes = 
     return $order_id . '/' . basename($dest);
 }
 
+// Transparent canvas for PNG/GIF downscales, shared by the long-edge
+// pre-cap and the loop resample so alpha handling cannot drift between the
+// two paths. JPEG/WebP get a plain canvas.
+function photo_alpha_canvas(int $w, int $h, string $mime) {
+    $img = imagecreatetruecolor($w, $h);
+    if ($mime === 'image/png' || $mime === 'image/gif') {
+        imagealphablending($img, false);
+        imagesavealpha($img, true);
+        imagefill($img, 0, 0, imagecolorallocatealpha($img, 0, 0, 0, 127));
+    }
+    return $img;
+}
+
 function _compress_image(string $src_path, string $dest_path, string $mime, int $max_bytes): bool {
     $loaders = [
         'image/jpeg' => 'imagecreatefromjpeg',
@@ -803,12 +816,7 @@ function _compress_image(string $src_path, string $dest_path, string $mime, int 
     if ($cap < 1.0) {
         $cw = max(1, (int)round($orig_w * $cap));
         $ch = max(1, (int)round($orig_h * $cap));
-        $small = imagecreatetruecolor($cw, $ch);
-        if ($mime === 'image/png' || $mime === 'image/gif') {
-            imagealphablending($small, false);
-            imagesavealpha($small, true);
-            imagefill($small, 0, 0, imagecolorallocatealpha($small, 0, 0, 0, 127));
-        }
+        $small = photo_alpha_canvas($cw, $ch, $mime);
         imagecopyresampled($small, $orig, 0, 0, 0, 0, $cw, $ch, $orig_w, $orig_h);
         $orig = $small;
         $orig_w = $cw;
@@ -821,18 +829,12 @@ function _compress_image(string $src_path, string $dest_path, string $mime, int 
         $w = max(1, (int)round($orig_w * $scale));
         $h = max(1, (int)round($orig_h * $scale));
 
-        if ($w === $orig_w && $h === $orig_h && $scale >= 1.0) {
-            $img = $orig;
-        } else {
-            $img = imagecreatetruecolor($w, $h);
-            // Preserve transparency for PNG/GIF
-            if ($mime === 'image/png' || $mime === 'image/gif') {
-                imagealphablending($img, false);
-                imagesavealpha($img, true);
-                imagefill($img, 0, 0, imagecolorallocatealpha($img, 0, 0, 0, 127));
-            }
-            imagecopyresampled($img, $orig, 0, 0, 0, 0, $w, $h, $orig_w, $orig_h);
-        }
+        // One canvas for every attempt, same size or not: alpha handling
+        // lives in exactly one place, and a 1:1 resample is a pixel-exact
+        // copy (verified) — so fitting images keep their transparency too,
+        // instead of re-encoding to opaque on the fast path.
+        $img = photo_alpha_canvas($w, $h, $mime);
+        imagecopyresampled($img, $orig, 0, 0, 0, 0, $w, $h, $orig_w, $orig_h);
 
         ob_start();
         switch ($mime) {
@@ -843,9 +845,7 @@ function _compress_image(string $src_path, string $dest_path, string $mime, int 
         }
         $data = ob_get_clean();
 
-        if ($img !== $orig) {
-            $img = null; // PHP 8.5 deprecates imagedestroy(); GC frees the GdImage
-        }
+        $img = null; // PHP 8.5 deprecates imagedestroy(); GC frees the GdImage
 
         if (strlen($data) <= $max_bytes) {
             $orig = null; // PHP 8.5 deprecates imagedestroy(); GC frees the GdImage

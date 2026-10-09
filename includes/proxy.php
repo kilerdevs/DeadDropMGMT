@@ -45,6 +45,30 @@ function proxy_curl_url(string $url): string {
     return $url;
 }
 
+// Host header value with default-port elision: 443 on TLS and 80 on plain
+// HTTP travel bare; anything else is explicit. Shared by both transports so
+// the elision cannot drift between them — a flipped comparison would send
+// `:443` everywhere (harmless) or drop `:8443` (routing to the wrong vhost).
+/** @param array{host:string,dial:string,port:int,tls:bool} $t */
+function proxy_host_header(array $t): string {
+    if (($t['tls'] && $t['port'] === 443) || (!$t['tls'] && $t['port'] === 80)) {
+        return $t['dial'];
+    }
+    return $t['dial'] . ':' . $t['port'];
+}
+// cURL proxy option as data, so the "route through the proxy vs go direct"
+// decision is unit-testable without a network: callers spread the result
+// into curl_setopt_array(). A dead `if ($proxy !== null)` here would
+// silently send every proxied fetch direct (a leak), or route every direct
+// fetch at a proxy — both must fail a test, never the network.
+/** @return array<int,string> CURLOPT_PROXY opt, or [] when direct */
+function proxy_curl_opts(?string $proxy): array {
+    if ($proxy === null) {
+        return [];
+    }
+    return [CURLOPT_PROXY => proxy_curl_url($proxy)];
+}
+
 // scheme://host:port only — never the userinfo. For anything that leaves the
 // owner-only proxy settings: the courier-visible status caption, the audit log.
 function osm_proxy_redact(string $url): string {
@@ -633,7 +657,7 @@ function proxy_request_streams(string $method, string $url, array $headers = [],
             }
             $target = $forward ? $cur : $t['path'];
             $req = "{$method} {$target} HTTP/1.1\r\n"
-                . 'Host: ' . $t['dial'] . (($t['tls'] && $t['port'] === 443) || (!$t['tls'] && $t['port'] === 80) ? '' : ':' . $t['port']) . "\r\n"
+                . 'Host: ' . proxy_host_header($t) . "\r\n"
                 . "User-Agent: DeadDropMGMT/1.0\r\nConnection: close\r\n";
             if ($forward && $px !== null && $px['user'] !== '') {
                 $req .= 'Proxy-Authorization: ' . proxy_basic_auth($px['user'], $px['pass']) . "\r\n";
@@ -725,10 +749,7 @@ function proxy_request_streams(string $method, string $url, array $headers = [],
             } elseif (!$noBody) {
                 $buf = $rest;
                 $rest = '';
-                $want = null;
-                if (isset($fields['content-length']) && preg_match('/^\d+$/', $fields['content-length']) === 1) {
-                    $want = (int)$fields['content-length'];
-                }
+                $want = proxy_body_want($fields);
                 while (true) {
                     if ($buf !== '') {
                         $take = $buf;
@@ -785,7 +806,50 @@ function proxy_request_streams(string $method, string $url, array $headers = [],
     }
 }
 
-// One GET through a specific proxy (or direct when $proxy is null).
+// Round-1 probe verdicts as a pure filter: 2xx under 3 s counts as working
+// (anonymous or not — that is round 2's question). Unit-tested in ProxyTest:
+// a weakened arm would admit dead proxies into the anonymity round or drop
+// live ones from the pool.
+/**
+ * @param array<string,array{int,int}> $results url => [status, latency_ms]
+ * @param array<string,array{source:string}> $candidates
+ * @return array<string,array{url:string,latency_ms:int,source:string}>
+ */
+function proxy_filter_working(array $results, array $candidates): array {
+    $working = [];
+    foreach ($results as $pxUrl => [$code, $ms]) {
+        if ($code >= 200 && $code < 300 && $ms < 3000) {
+            $working[$pxUrl] = [
+                'url'        => $pxUrl,
+                'latency_ms' => $ms,
+                'source'     => $candidates[$pxUrl]['source'],
+            ];
+        }
+    }
+    return $working;
+}
+
+// Response acceptance as a pure predicate: 2xx with a body no longer than
+// the cap. The cap itself still fits (a body of exactly $maxBytes is the
+// largest honest answer); anything past it is a hostile or broken upstream.
+// Unit-tested in ProxyTest — a loosened bound admits over-long bodies into
+// memory, a tightened one drops legal tiles.
+/** @param mixed $body @phpstan-assert-if-true string $body */
+function osm_fetch_body_ok(int $code, mixed $body, int $maxBytes): bool {
+    return $code >= 200 && $code < 300 && is_string($body) && strlen($body) <= $maxBytes;
+}
+
+// Expected body length from the response headers: a numeric Content-Length
+// is honoured, anything else (missing, garbage) reads until close. Pure so
+// the combination is unit-testable — a weakened arm would truncate garbage
+// -length bodies to empty or misread them.
+/** @param array<string,string> $fields */
+function proxy_body_want(array $fields): ?int {
+    if (isset($fields['content-length']) && preg_match('/^\d+$/', $fields['content-length']) === 1) {
+        return (int)$fields['content-length'];
+    }
+    return null;
+}
 // Returns body on HTTP 2xx, false otherwise. cURL first when present; the
 // pure-PHP transport above otherwise — every proxy scheme works on both.
 // Never throws. $maxBytes caps the response body on BOTH transports.
@@ -800,16 +864,13 @@ function osm_fetch_via(string $url, ?string $proxy, int $timeout = 5, int $maxBy
             CURLOPT_MAXFILESIZE    => $maxBytes,
             CURLOPT_USERAGENT      => 'DeadDropMGMT/1.0',
             CURLOPT_SSL_VERIFYPEER => true,
-        ]);
-        if ($proxy !== null) {
-            curl_setopt($ch, CURLOPT_PROXY, proxy_curl_url($proxy));
-        }
+        ] + proxy_curl_opts($proxy));
 
         $body = curl_exec($ch);
         $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
         unset($ch); // PHP 8.5 deprecates curl_close(); the handle frees on scope exit
 
-        if ($code < 200 || $code >= 300 || !is_string($body) || strlen($body) > $maxBytes) {
+        if (!osm_fetch_body_ok($code, $body, $maxBytes)) {
             return false;
         }
         return $body;
@@ -1427,6 +1488,34 @@ function proxy_fetch_lists_parallel(array $urls, int $timeout_s): array {
     return $out;
 }
 
+// Proxifly JSON bodies as a pure list: protocol + anonymity gate each entry
+// (socks always, plain HTTP only when anonymous or better), empty or
+// address-less entries never become candidates. Unit-tested in ProxyTest —
+// a weakened gate would admit transparent proxies into the pool or drop
+// elites on the floor.
+/** @return list<string> normalized proxy URLs */
+function proxy_parse_proxifly_list(string $raw): array {
+    $list = json_decode($raw, true);
+    if (!is_array($list)) return [];
+    $out = [];
+    foreach ($list as $entry) {
+        if (!is_array($entry)) continue;
+        $proto = strtolower((string)($entry['protocol'] ?? ''));
+        if ($proto === '') continue;
+        $anon = strtolower((string)($entry['anonymity'] ?? ''));
+        if (!str_starts_with($proto, 'socks')
+            && !in_array($anon, ['anonymous', 'elite'], true)) {
+            continue;
+        }
+        $ip   = (string)($entry['ip'] ?? '');
+        $port = (string)($entry['port'] ?? '');
+        if ($ip === '' || $port === '') continue;
+        $norm = osm_proxy_normalize("$proto://$ip:$port");
+        if ($norm !== null) $out[] = $norm;
+    }
+    return $out;
+}
+
 // Pull candidates from public sources, then probe them in parallel against a
 // real OSM tile URL. Returns [['url' => ..., 'latency_ms' => ...], ...],
 // sorted fastest first.
@@ -1476,23 +1565,7 @@ function proxy_discover(int $max_test = 400, int $timeout_s = 4, ?float $budget_
         };
 
         if ($src['type'] === 'proxifly') {
-            $list = json_decode($raw, true);
-            if (!is_array($list)) continue;
-            foreach ($list as $entry) {
-                if (!is_array($entry)) continue;
-                $proto = strtolower((string)($entry['protocol'] ?? ''));
-                if ($proto === '') continue;
-                $anon = strtolower((string)($entry['anonymity'] ?? ''));
-                if (!str_starts_with($proto, 'socks')
-                    && !in_array($anon, ['anonymous', 'elite'], true)) {
-                    continue;
-                }
-                $ip   = (string)($entry['ip'] ?? '');
-                $port = (string)($entry['port'] ?? '');
-                if ($ip === '' || $port === '') continue;
-                $norm = osm_proxy_normalize("$proto://$ip:$port");
-                if ($norm !== null) $record($norm);
-            }
+            foreach (proxy_parse_proxifly_list($raw) as $norm) $record($norm);
         } else {
             foreach (preg_split('/\r?\n/', trim($raw)) ?: [] as $line) {
                 // plain lists are one ip:port per line, but tolerate stray
@@ -1513,16 +1586,7 @@ function proxy_discover(int $max_test = 400, int $timeout_s = 4, ?float $budget_
     $probeUrl = 'https://a.tile.openstreetmap.org/13/4051/2749.png';
     $results  = proxy_multi_probe($toTest, $probeUrl, $timeout_s, $timeout_s);
 
-    $working = [];
-    foreach ($results as $pxUrl => [$code, $ms]) {
-        if ($code >= 200 && $code < 300 && $ms < 3000) {
-            $working[$pxUrl] = [
-                'url'        => $pxUrl,
-                'latency_ms' => $ms,
-                'source'     => $candidates[$pxUrl]['source'],
-            ];
-        }
-    }
+    $working = proxy_filter_working($results, $candidates);
     if (!$working) return [];
 
     // Round 2: live anonymity verification for unrated HTTP proxies — both
@@ -1734,7 +1798,7 @@ function proxy_multi_probe_streams(array $proxies, string $url, int $timeout_s, 
             }
             $target = $forward ? $url : $t['path'];
             $req = "{$method} {$target} HTTP/1.1\r\n"
-                . 'Host: ' . $t['dial'] . (($t['tls'] && $t['port'] === 443) || (!$t['tls'] && $t['port'] === 80) ? '' : ':' . $t['port']) . "\r\n"
+                . 'Host: ' . proxy_host_header($t) . "\r\n"
                 . "User-Agent: DeadDropMGMT/1.0\r\nConnection: close\r\n";
             if ($forward && $p['user'] !== '') {
                 $req .= 'Proxy-Authorization: ' . proxy_basic_auth($p['user'], $p['pass']) . "\r\n";
@@ -1945,6 +2009,14 @@ function osm_proxy_heal_spawner(?callable $set = null, bool $reset = false): ?ca
 // (a kick from live traffic that just watched a proxy die) uses the short
 // urgent window instead of the full cooldown, so failures heal on the next
 // requests, not minutes later.
+// Cooldown arithmetic as a pure predicate: a heal is due only once the
+// window since the last run has fully passed — the edge itself is still
+// cooling down. Unit-tested with exact timestamps (a live clock can never
+// hit the boundary deterministically).
+function osm_heal_cooled_down(int $since, int $now, int $window): bool {
+    return ($now - $since) >= $window;
+}
+
 function osm_proxy_heal_pending(bool $throttle = false, bool $urgent = false): bool {
     if (!osm_proxy_heal_allowed() || !osm_proxy_enabled()) return false;
     $since = (int)get_setting('proxy_heal_last', '0');
@@ -1952,7 +2024,7 @@ function osm_proxy_heal_pending(bool $throttle = false, bool $urgent = false): b
         $since = max($since, (int)get_setting('proxy_heal_checked', '0'));
     }
     $window = ($urgent && !$throttle) ? OSM_PROXY_HEAL_URGENT_COOLDOWN : OSM_PROXY_HEAL_COOLDOWN;
-    if ((time() - $since) < $window) return false;
+    if (!osm_heal_cooled_down($since, time(), $window)) return false;
     if (osm_proxy_replaceable_dead() !== [] || osm_proxy_pool_empty()) return true;
     if ($throttle) {
         set_setting('proxy_heal_checked', (string)time());

@@ -34,6 +34,10 @@ const AUDIT_RETENTION_DAYS = 365;
 // under uploads/0/): a crash between staging and claiming orphans them — no
 // order_photos row ever points at 0/, so anything older than an hour dies.
 // Never throws.
+function cleanup_staging_expired(int $mtime, int $now): bool {
+    return ($now - $mtime) > 3600;
+}
+
 function _sweep_staging_uploads(): void {
     try {
         $dir = dirname(__DIR__) . '/uploads/0/';
@@ -42,7 +46,7 @@ function _sweep_staging_uploads(): void {
         }
         $now = time();
         foreach (glob_list($dir . '*') as $f) {
-            if ((is_file($f) || is_link($f)) && ($now - (int)@filemtime($f)) > 3600) {
+            if ((is_file($f) || is_link($f)) && cleanup_staging_expired((int)@filemtime($f), $now)) {
                 overwrite_and_unlink($f);
             }
         }

@@ -51,6 +51,17 @@ T::ok('a config.php constant set to true turns it on', host_flag('DDMGMT_T_CONST
 putenv('DDMGMT_T_CONST_OFF=1');
 T::ok('the environment wins over the constant', host_flag('DDMGMT_T_CONST_OFF', false) === true);
 putenv('DDMGMT_T_CONST_OFF');
+// Numeric-string cousins of zero are NOT in the off family (the comparison
+// is strict — a loose check would take '00' as off).
+putenv('DDMGMT_T_ZEROISH=00');
+T::ok('00 is not in the off family', host_flag('DDMGMT_T_ZEROISH', false) === true);
+putenv('DDMGMT_T_ZEROISH');
+// Overrides reset back to live probes (a dead reset would leak a stubbed
+// host into every later suite in the process).
+host_override(['curl' => false]);
+T::ok('override pins curl off', host_has_curl() === false);
+host_override(null, true);
+T::ok('reset restores live probes', host_override() === []);
 
 // ── a host with no exec, no CLI PHP ───────────────────────────────────────────
 // Downloads no longer need the CLI triplet: the pure-PHP engine covers them
@@ -74,6 +85,30 @@ T::ok('every capability row has an id, a valid status and a note',
       count(host_capabilities()) === 6
       && array_reduce(host_capabilities(), static fn(bool $c, array $r): bool => $c
           && in_array($r['status'], ['ok', 'limited', 'unavailable'], true) && is_string($r['note']), true));
+
+// An unwritable tree dir is reported, not silently ok. Needs POSIX
+// permission semantics: skipped on Windows (chmod is a no-op there) and
+// for root (permission bits do not apply).
+$canPerm = DIRECTORY_SEPARATOR !== '\\' && function_exists('posix_geteuid') && posix_geteuid() !== 0;
+if (!$canPerm) {
+    T::ok('unwritable-dir reporting needs POSIX non-root — skipped here', true);
+} else {
+    $permRoot = dirname(__DIR__);
+    $permTarget = $permRoot . '/cache';
+    $permMode = fileperms($permTarget) & 0777;
+    chmod($permTarget, 0555);
+    clearstatcache(true, $permTarget);
+    try {
+        $permCaps = array_column(host_capabilities(), null, 'id');
+        T::eq('unwritable tree dir is unavailable', 'unavailable', $permCaps['dirs']['status'] ?? null);
+        T::ok('...naming the dir', str_contains($permCaps['dirs']['note'] ?? '', 'cache/'));
+    } finally {
+        chmod($permTarget, $permMode);
+        clearstatcache(true, $permTarget);
+    }
+    $permBack = array_column(host_capabilities(), 'status', 'id');
+    T::eq('dirs ok again after restore', 'ok', $permBack['dirs'] ?? null);
+}
 
 host_override(['exec' => true, 'proc_open' => true, 'curl' => true, 'linux' => true, 'cli' => '/usr/bin/php']);
 T::ok('exec + CLI on Linux: can detach', host_can_detach() === true);
