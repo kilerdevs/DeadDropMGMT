@@ -136,7 +136,16 @@ try {
 } finally {
     @ini_set('max_execution_time', $keepLimit);
 }
-T::eq('unlimited host keeps old behavior', 0, maps_inline_budget());
+// Unlimited is pinned, not assumed: earlier suites in a shared process can
+// leak a concrete limit (production calls set_time_limit), so asserting on
+// the ambient value fails under coverage while passing standalone.
+@ini_set('max_execution_time', '0');
+if ((string)@ini_get('max_execution_time') === '0') {
+    T::eq('unlimited host keeps old behavior', 0, maps_inline_budget());
+} else {
+    T::ok('max_execution_time not pinnable here — unlimited-budget skipped', true);
+}
+@ini_set('max_execution_time', $keepLimit);
 
 // ── setup_db_probe / setup_db_rows: fast, hermetic, no schema reload ──────
 // The sampler maps setup_check.php here: semantic mutants in the probe must
