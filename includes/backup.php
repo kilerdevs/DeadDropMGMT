@@ -605,15 +605,6 @@ function backup_verify_json(string $path): array {
     return ['ok' => true, 'manifest' => $manifest, 'key_mismatch' => $manifest['key_fp'] !== backup_key_fingerprint()];
 }
 
-/**
- * Restore a VERIFIED backup (pass backup_verify() output's manifest). The
- * caller re-verifies cheaply by reusing the same manifest — the file is
- * re-read entry by entry, so a swap between verify and restore still fails.
- *
- * @param array{backup:int, created_utc:string, app:string, format:string, encoding:string, key_fp:string, config_crc:string, db:array<string,int>, files:array<string,string>} $manifest
- * @return array{ok:bool,code?:string,key_mismatch?:bool,files_partial?:bool}
- */
-
 // Refusal code for a failed stage/payload read: an oversized payload stays
 // 'too_large' (the caller may retry chunked), anything else is 'invalid'.
 // A swapped mapping would report corrupt bundles as oversized and vice
@@ -622,6 +613,14 @@ function backup_refusal_code(?string $why): string {
     return $why === 'too_large' ? 'too_large' : 'invalid';
 }
 
+/**
+ * Restore a VERIFIED backup (pass backup_verify() output's manifest). The
+ * caller re-verifies cheaply by reusing the same manifest — the file is
+ * re-read entry by entry, so a swap between verify and restore still fails.
+ *
+ * @param array{backup:int, created_utc:string, app:string, format:string, encoding:string, key_fp:string, config_crc:string, db:array<string,int>, files:array<string,string>} $manifest
+ * @return array{ok:bool,code?:string,key_mismatch?:bool,files_partial?:bool}
+ */
 function backup_restore(PDO $db, string $path, array $manifest, ?string $root = null): array {
     // Size first: an oversized bundle is refused before a stage directory
     // or a transaction exists, so the refusal touches neither disk nor DB.

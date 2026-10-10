@@ -85,6 +85,10 @@ T::eq('negative formats as expired', t('common.expired'), format_countdown(-5));
 T::ok('hours render', str_contains(format_countdown(7265), '2h'));
 T::ok('minutes-only render', str_contains(format_countdown(125), '2m'));
 T::ok('seconds-only render', str_contains(format_countdown(42), '42s'));
+// Exact unit boundaries: a weakened hour arm collapses 3600 into minutes.
+T::eq('exact hour renders fully', '1h 0m 0s', format_countdown(3600));
+T::eq('exact minute renders fully', '1m 0s', format_countdown(60));
+T::eq('hour boundary minus one second', '59m 59s', format_countdown(3599));
 
 // ── Pseudo-cron ───────────────────────────────────────────────────────────────
 // A stale stamp triggers exactly one full pass per process...

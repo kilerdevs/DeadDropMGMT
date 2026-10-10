@@ -947,6 +947,7 @@ function maps_fetch_resume_outcome(bool $ok, int $code, int $have): string {
     return 'continue';
 }
 
+/** @return array{bool,string} [ok, error] */
 function maps_fetch_file(string $url, string $dest, ?string $proxy): array {
     if (!host_has_curl()) {
         return maps_fetch_file_streams($url, $dest, $proxy);
@@ -1692,6 +1693,14 @@ function maps_kick_worker(): bool {
     return true;
 }
 
+// Sizing deadline as a pure value: a positive time box ends at phase start
+// plus budget, zero/negative means unbounded (0.0). The edge (exactly 0)
+// is unbounded — a dead comparison here would time out every worker-path
+// sizing run before its first request.
+function maps_size_deadline(float $phase0, float $timeBox): float {
+    return $timeBox > 0 ? $phase0 + $timeBox : 0.0;
+}
+
 // Full pipeline for one zone on the PHP engine (no CLI): plan (resolve tile
 // offsets once) → resumable span fetching → assemble → structural verify →
 // atomic publish. Every state change hits the DB so the UI (and a killed
@@ -1702,14 +1711,6 @@ function maps_kick_worker(): bool {
  * @param array<string,mixed> $zone
  * @return array{0:string,1:string} [done|more|failed, error]
  */
-// Sizing deadline as a pure value: a positive time box ends at phase start
-// plus budget, zero/negative means unbounded (0.0). The edge (exactly 0)
-// is unbounded — a dead comparison here would time out every worker-path
-// sizing run before its first request.
-function maps_size_deadline(float $phase0, float $timeBox): float {
-    return $timeBox > 0 ? $phase0 + $timeBox : 0.0;
-}
-
 function maps_process_php(array $zone, int $timeBox): array {
     $id = (int)$zone['id'];
     $db = get_db();

@@ -185,6 +185,17 @@ T::ok('fail-closed block carries a cooldown', (int)($fc['remaining'] ?? 0) > 0);
 $s = rl_status($scope);
 T::eq('rate_limits table restored after probe (data intact)', 2, rl_status($scope)['count']);
 
+// Pre-schema bootstrap stays OPEN: with neither rate_limits nor users
+// present (the very first owner creation), the limiter must not block —
+// failing closed here bricks fresh installs (child process = fresh state,
+// exactly like the next request).
+$boot = json_decode(shell_exec(
+    escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(__DIR__ . '/_rl_bootstrap.php') . " 2>$devnull"
+) ?: '{}', true) ?: [];
+T::ok('bootstrap without tables stays open', ($boot['blocked'] ?? true) === false);
+T::ok('...with a full window remaining', (int)($boot['remaining'] ?? 0) > 0);
+T::eq('...and a zero count', 0, (int)($boot['count'] ?? -1));
+
 // Corrupt window_start fails CLOSED: strtotime() answers false for values
 // the column should never hold (legacy zero-dates, damaged rows), and the
 // old code read that as "window started in 1970" — silently resetting the

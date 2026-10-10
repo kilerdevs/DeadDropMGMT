@@ -690,7 +690,7 @@ function proxy_request_streams(string $method, string $url, array $headers = [],
                 if (!isset($fields['location'])) return [...$fail, 'code' => $code, 'headers' => $respHeaders];
                 $next = proxy_resolve_url($cur, $fields['location']);
                 if ($next === null) return [...$fail, 'code' => $code, 'headers' => $respHeaders];
-                if (in_array($code, [301, 302, 303], true) && $method !== 'HEAD') {
+                if (proxy_redirect_rewrites($code, $method)) {
                     $method = 'GET'; // cURL parity: only HEAD stays HEAD
                 }
                 $cur = $next;
@@ -1800,7 +1800,7 @@ function proxy_multi_probe_streams(array $proxies, string $url, int $timeout_s, 
             $req = "{$method} {$target} HTTP/1.1\r\n"
                 . 'Host: ' . proxy_host_header($t) . "\r\n"
                 . "User-Agent: DeadDropMGMT/1.0\r\nConnection: close\r\n";
-            if ($forward && $p['user'] !== '') {
+            if (proxy_forward_auth_wanted($forward, $p['user'])) {
                 $req .= 'Proxy-Authorization: ' . proxy_basic_auth($p['user'], $p['pass']) . "\r\n";
             }
             $req .= "\r\n";
@@ -2265,4 +2265,19 @@ function osm_proxy_heal(?callable $discover = null, ?callable $probe = null, boo
     } finally {
         osm_proxy_heal_unlock();
     }
+}
+
+// Redirect method rewrite as a pure predicate (cURL parity): 301/302/303
+// switch anything but HEAD to GET; 307/308 preserve the method. Pinned by
+// ProxyTest's method table — a drifted literal silently changes POST safety.
+function proxy_redirect_rewrites(int $code, string $method): bool {
+    return in_array($code, [301, 302, 303], true) && $method !== 'HEAD';
+}
+
+// Forwarded-request auth as a pure predicate: only a FORWARDED request with
+// a configured user carries Proxy-Authorization. Pinned by ProxyTest —
+// sending it on direct requests leaks credentials to origins, dropping it
+// breaks authenticated proxies.
+function proxy_forward_auth_wanted(bool $forward, string $user): bool {
+    return $forward && $user !== '';
 }

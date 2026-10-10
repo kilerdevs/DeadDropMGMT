@@ -347,6 +347,18 @@ write_chain($old, [$o1, $o2]);
 $db->exec('DELETE FROM log_checkpoints');
 $db->prepare('INSERT INTO log_checkpoints (tip_hash, tip_seq) VALUES (?, ?)')->execute([$c4['hash'], 4]);
 T::eq('aged-out anchor reports rotated', 'rotated', verify_log_continuity($old)['status']);
+// Hashless lines never pollute the bounds: a planted valid-JSON line
+// without a hash (or outright garbage) must not move tip_seq or the entry
+// count — the verdict would otherwise follow attacker bytes.
+$polP = $tmpDir . '/polluted.log';
+write_chain($polP, [$c1, $c2, $c3, $c4, $c5]);
+file_put_contents($polP, "{\"seq\":99999,\"msg\":\"planted\"}\nnot json at all\n", FILE_APPEND);
+$db->exec('DELETE FROM log_checkpoints');
+$db->prepare('INSERT INTO log_checkpoints (tip_hash, tip_seq) VALUES (?, ?)')->execute([$c4['hash'], 4]);
+$polR = verify_log_continuity($polP);
+T::eq('planted hashless line ignored for tip', 5, $polR['tip_seq']);
+T::eq('...and for the entry count', 5, $polR['entries']);
+T::eq('...verdict still extends', 'extends', $polR['status']);
 // Checkpoint write-through anchors the live tip (best-effort, never throws).
 // Table cleared first: the assertion must see THIS write's row, not a
 // leftover anchor (a stale row would also let a neutered writer pass).

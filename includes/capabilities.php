@@ -188,9 +188,12 @@ function capabilities_evaluate(array $env): array {
 // shell_exec reports no exit code, and a silent half-extract is worse than a
 // clear error. Pure builtins, no side effects; null when nothing can run it.
 // NEVER throws.
-function capabilities_find_unzip(): ?string {
+// $fns is a test seam (default: the real runner list): a missing entry must
+// skip to the next candidate, never enable a binary nothing can run.
+/** @param list<string>|null $fns */
+function capabilities_find_unzip(?array $fns = null): ?string {
     $canRun = false;
-    foreach (['proc_open', 'exec'] as $fn) {
+    foreach ($fns ?? ['proc_open', 'exec'] as $fn) {
         if (!function_exists($fn)) {
             continue;
         }

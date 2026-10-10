@@ -779,8 +779,11 @@ function save_uploaded_photo(array $file_entry, int $order_id, int $max_bytes = 
 // Transparent canvas for PNG/GIF downscales, shared by the long-edge
 // pre-cap and the loop resample so alpha handling cannot drift between the
 // two paths. JPEG/WebP get a plain canvas.
-function photo_alpha_canvas(int $w, int $h, string $mime) {
+function photo_alpha_canvas(int $w, int $h, string $mime): \GdImage {
     $img = imagecreatetruecolor($w, $h);
+    if (!($img instanceof \GdImage)) {
+        throw new RuntimeException('photo canvas allocation failed');
+    }
     if ($mime === 'image/png' || $mime === 'image/gif') {
         imagealphablending($img, false);
         imagesavealpha($img, true);

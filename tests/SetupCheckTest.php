@@ -138,4 +138,75 @@ try {
 }
 T::eq('unlimited host keeps old behavior', 0, maps_inline_budget());
 
+// ── setup_db_probe / setup_db_rows: fast, hermetic, no schema reload ──────
+// The sampler maps setup_check.php here: semantic mutants in the probe must
+// die in this suite, in seconds.
+
+// The probe connects to the test database and positively establishes the
+// owner answer: tables readable, owner_known true.
+$probeFast = setup_db_probe();
+T::ok('probe connects to the test database', $probeFast['connected'] === true);
+T::ok('...reading tables', count($probeFast['tables']) > 0);
+T::eq('owner answer positively established', true, $probeFast['owner_known']);
+T::ok('zone is a string or null', $probeFast['zone'] === null || is_string($probeFast['zone']));
+
+// A verifiably missing users table is still a KNOWN answer (fresh install):
+// the tables query ran, users is simply not in it. A dropped tablesRead
+// flag reports unknown instead — and an unknown owner state is what would
+// let the setup page go public on an installed app.
+$dbFast = get_db();
+$dbFast->exec('SET FOREIGN_KEY_CHECKS=0');
+$dbFast->exec('RENAME TABLE users TO users_setup_probe_bak');
+try {
+    $probeNoUsers = setup_db_probe();
+    T::eq('missing users table is still a known answer', true, $probeNoUsers['owner_known']);
+    T::eq('...with no owner', false, $probeNoUsers['owner_exists']);
+} finally {
+    $dbFast->exec('RENAME TABLE users_setup_probe_bak TO users');
+    $dbFast->exec('SET FOREIGN_KEY_CHECKS=1');
+}
+
+// Rows are pure over a fabricated probe: UTC session time_zone warns about
+// nothing, any other zone warns loudly (DB-side NOW() windows would skew).
+$utcProbe = ['connected' => true, 'error' => '', 'pdo' => null, 'zone' => '+00:00',
+    'tables' => SETUP_TABLES, 'engines' => [], 'owner_exists' => false,
+    'owner_known' => true, 'grants' => null];
+$utcIds = array_column(setup_db_rows($utcProbe), 'id');
+T::ok('UTC time_zone raises no db_zone row', !in_array('db_zone', $utcIds, true));
+$skewed = $utcProbe;
+$skewed['zone'] = 'Europe/Warsaw';
+$zoneRow = null;
+foreach (setup_db_rows($skewed) as $row) {
+    if (($row['id'] ?? null) === 'db_zone') {
+        $zoneRow = $row;
+    }
+}
+T::eq('skewed time_zone warns', 'warn', $zoneRow['status'] ?? null);
+
+// Schema rows: a complete probe is ok, a missing table fails (a flipped
+// emptiness check would report a broken schema as healthy and vice versa).
+$schemaOk = null;
+foreach (setup_db_rows($utcProbe) as $row) {
+    if (($row['id'] ?? null) === 'schema') {
+        $schemaOk = $row;
+    }
+}
+T::eq('complete schema is ok', 'ok', $schemaOk['status'] ?? null);
+$gapped = $utcProbe;
+$gapped['tables'] = array_values(array_diff(SETUP_TABLES, [SETUP_TABLES[0]]));
+$schemaFail = null;
+foreach (setup_db_rows($gapped) as $row) {
+    if (($row['id'] ?? null) === 'schema') {
+        $schemaFail = $row;
+    }
+}
+T::eq('missing table fails the schema row', 'fail', $schemaFail['status'] ?? null);
+
+// Disconnected probe fails the db row (fail-closed diagnostics, never a
+// silent ok).
+$downRows = setup_db_rows(['connected' => false, 'error' => 'refused', 'pdo' => null,
+    'zone' => null, 'tables' => [], 'engines' => [], 'owner_exists' => false,
+    'owner_known' => false, 'grants' => null]);
+T::eq('down database fails', 'fail', $downRows[0]['status'] ?? null);
+
 exit(T::done());

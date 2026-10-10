@@ -339,7 +339,7 @@ $db->prepare('DELETE FROM osm_proxies')->execute();
 // Empty discovery is reported, not silently absorbed: the heal result names
 // it and the failure counter moves. Reset first — earlier suites in the run
 // may have left their own heal counters behind.
-$db->exec("DELETE FROM osm_proxies");
+$db->exec('DELETE FROM osm_proxies');
 $db->exec("DELETE FROM settings WHERE key_name IN ('proxy_heal_lock', 'proxy_heal_last', 'proxy_heal_checked', 'proxy_heal_urgent', 'proxy_seed_failures', 'osm_proxy_auto_off')");
 $db->exec("DELETE FROM audit_log WHERE action IN ('proxy_seed', 'proxy_replace', 'proxy_auto_off')");
 settings_invalidate();
@@ -356,7 +356,7 @@ set_setting('osm_proxy_enabled', '1');
 // One swap is counted once (a counter starting at one would report phantom
 // replacements and audit them). Reset first — only the seeded dead row may
 // be in the pool.
-$db->exec("DELETE FROM osm_proxies");
+$db->exec('DELETE FROM osm_proxies');
 $db->exec("DELETE FROM settings WHERE key_name IN ('proxy_heal_lock', 'proxy_heal_last', 'proxy_heal_urgent', 'proxy_seed_failures', 'osm_proxy_auto_off')");
 $db->exec("DELETE FROM audit_log WHERE action IN ('proxy_seed', 'proxy_replace', 'proxy_auto_off')");
 settings_invalidate();
@@ -365,7 +365,7 @@ $healSwap = osm_proxy_heal(
     static fn(): array => [['url' => 'http://10.9.9.1:80', 'latency_ms' => 300, 'source' => 'proxifly']],
     static fn(array $u): array => array_fill_keys($u, [0, 0]));
 T::eq('one swap counted once', 1, $healSwap['replaced'] ?? null);
-$db->exec("DELETE FROM osm_proxies");
+$db->exec('DELETE FROM osm_proxies');
 $db->exec("DELETE FROM settings WHERE key_name IN ('proxy_heal_lock', 'proxy_heal_last', 'proxy_heal_checked', 'proxy_heal_urgent', 'proxy_seed_failures', 'osm_proxy_auto_off')");
 $db->exec("DELETE FROM audit_log WHERE action IN ('proxy_seed', 'proxy_replace', 'proxy_auto_off')");
 
@@ -465,7 +465,7 @@ if ($writePair === false) {
 
 // Heal recovery: a dead entry that answers the re-probe is kept and counted,
 // not swapped out from under a live proxy.
-$db->exec("DELETE FROM osm_proxies");
+$db->exec('DELETE FROM osm_proxies');
 $db->exec("DELETE FROM settings WHERE key_name IN ('proxy_heal_lock', 'proxy_heal_last', 'proxy_heal_urgent', 'proxy_seed_failures', 'osm_proxy_auto_off')");
 $db->exec("DELETE FROM audit_log WHERE action IN ('proxy_seed', 'proxy_replace', 'proxy_auto_off')");
 settings_invalidate();
@@ -476,7 +476,7 @@ $healRec = osm_proxy_heal(static fn(): array => [],
 $recUrls = array_column($db->query('SELECT url FROM osm_proxies')->fetchAll(), 'url');
 T::ok('recovered proxy kept', in_array('http://10.0.0.9:80', $recUrls, true));
 T::eq('...and counted', 1, $healRec['recovered'] ?? null);
-$db->exec("DELETE FROM osm_proxies");
+$db->exec('DELETE FROM osm_proxies');
 $db->exec("DELETE FROM settings WHERE key_name IN ('proxy_heal_lock', 'proxy_heal_last', 'proxy_heal_urgent', 'proxy_seed_failures', 'osm_proxy_auto_off')");
 $db->exec("DELETE FROM audit_log WHERE action IN ('proxy_seed', 'proxy_replace', 'proxy_auto_off')");
 
@@ -510,5 +510,197 @@ if ($listen === false) {
     T::ok('exhausted deadline refuses before dialing', $refusedPast === null);
     fclose($listen);
 }
+
+// Redirect method table (cURL parity): 301/302/303 rewrite anything but
+// HEAD to GET; 307/308 and the rest preserve the method. A drifted literal
+// silently changes POST safety on redirects.
+T::ok('301 rewrites POST', proxy_redirect_rewrites(301, 'POST'));
+T::ok('302 rewrites POST', proxy_redirect_rewrites(302, 'POST'));
+T::ok('303 rewrites POST', proxy_redirect_rewrites(303, 'POST'));
+T::ok('301 leaves HEAD', !proxy_redirect_rewrites(301, 'HEAD'));
+T::ok('302 leaves HEAD', !proxy_redirect_rewrites(302, 'HEAD'));
+T::ok('303 leaves HEAD', !proxy_redirect_rewrites(303, 'HEAD'));
+T::ok('301 rewrites GET', proxy_redirect_rewrites(301, 'GET'));
+T::ok('307 preserves POST', !proxy_redirect_rewrites(307, 'POST'));
+T::ok('308 preserves POST', !proxy_redirect_rewrites(308, 'POST'));
+T::ok('307 preserves HEAD', !proxy_redirect_rewrites(307, 'HEAD'));
+T::ok('200 preserves POST', !proxy_redirect_rewrites(200, 'POST'));
+T::ok('300 preserves POST', !proxy_redirect_rewrites(300, 'POST'));
+T::ok('304 preserves POST', !proxy_redirect_rewrites(304, 'POST'));
+
+// Forward auth header: only a FORWARDED request with a configured user
+// carries Proxy-Authorization. Sending it direct leaks credentials to
+// origins; dropping it breaks authenticated proxies.
+T::ok('forward+user wants auth', proxy_forward_auth_wanted(true, 'u'));
+T::ok('direct+user wants none', !proxy_forward_auth_wanted(false, 'u'));
+T::ok('forward anonymous wants none', !proxy_forward_auth_wanted(true, ''));
+T::ok('direct anonymous wants none', !proxy_forward_auth_wanted(false, ''));
+
+// TCP loopback pair for handshake tests: unix socket pairs are unavailable
+// on some Windows PHP builds (WSA 10042), while loopback TCP is hermetic
+// everywhere. Returns [client, server-conn] with $prewritten already
+// buffered server-side, or null when loopback itself is unavailable.
+$socksTcpPair = static function (string $prewritten): ?array {
+    $srv = @stream_socket_server('tcp://127.0.0.1:0', $eno, $estr);
+    if (!is_resource($srv)) {
+        return null;
+    }
+    $port = (int)explode(':', (string)stream_socket_get_name($srv, false))[1];
+    $cli = @stream_socket_client('tcp://127.0.0.1:' . $port, $cno, $cstr, 2.0);
+    if (!is_resource($cli)) {
+        fclose($srv);
+        return null;
+    }
+    $conn = @stream_socket_accept($srv, 2.0);
+    fclose($srv);
+    if (!is_resource($conn)) {
+        fclose($cli);
+        return null;
+    }
+    if ($prewritten !== '') {
+        @fwrite($conn, $prewritten);
+    }
+    return [$cli, $conn];
+};
+// Drain everything the client sent to the server side (bounded wait).
+$socksDrain = static function ($srvConn): string {
+    stream_set_blocking($srvConn, false);
+    $sent = '';
+    $t0 = microtime(true);
+    while (microtime(true) - $t0 < 0.5) {
+        $chunk = @fread($srvConn, 8192);
+        if (is_string($chunk) && $chunk !== '') {
+            $sent .= $chunk;
+        } else {
+            usleep(10000);
+        }
+    }
+    return $sent;
+};
+
+// SOCKS5 no-auth grant completes: greeting accepted, CONNECT sent, reply
+// accepted. (The unacceptable-method test above pins the rejection side;
+// a dropped no-auth arm would refuse every anonymous proxy.)
+$noAuthPair = $socksTcpPair("\x05\x00" // greeting: no auth required
+    . "\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00"); // connect granted
+if ($noAuthPair === null) {
+    T::ok('loopback unavailable here — socks5 grant skipped', true);
+} else {
+    [$noAuthCli, $noAuthSrv] = $noAuthPair;
+    $noAuthPx = ['scheme' => 'socks5', 'user' => '', 'pass' => ''];
+    $noAuthTgt = ['host' => 'example.com', 'port' => 80, 'tls' => false, 'dial' => 'example.com'];
+    $noAuthOpened = proxy_sock_open_from($noAuthCli, $noAuthPx, $noAuthTgt, microtime(true) + 2.0);
+    T::ok('no-auth socks5 grant opens the socket', is_array($noAuthOpened));
+    $noAuthSent = $socksDrain($noAuthSrv);
+    T::ok('...after greeting then CONNECT', str_starts_with($noAuthSent, proxy_socks5_greet(''))
+        && strlen($noAuthSent) > strlen(proxy_socks5_greet('')));
+    if (is_array($noAuthOpened)) {
+        fclose($noAuthOpened[0]);
+    }
+    fclose($noAuthSrv);
+}
+
+// SOCKS5 auth-required grant completes: method offer, auth exchange with
+// credentials, then CONNECT. (A dropped auth-ok check would refuse every
+// credentialed proxy while anonymous ones sail through.)
+$authPair = $socksTcpPair("\x05\x02" // greeting: username/password required
+    . "\x05\x00" // auth exchange accepted
+    . "\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00"); // connect granted
+if ($authPair === null) {
+    T::ok('loopback unavailable here — socks5 auth grant skipped', true);
+} else {
+    [$authCli, $authSrv] = $authPair;
+    $authPx = ['scheme' => 'socks5', 'user' => 'u', 'pass' => 'p'];
+    $authTgt = ['host' => 'example.com', 'port' => 80, 'tls' => false, 'dial' => 'example.com'];
+    $authOpened = proxy_sock_open_from($authCli, $authPx, $authTgt, microtime(true) + 2.0);
+    T::ok('auth-required socks5 grant opens the socket', is_array($authOpened));
+    if (is_array($authOpened)) {
+        fclose($authOpened[0]);
+    }
+    fclose($authSrv);
+}
+
+// SOCKS5 unknown-method grant is refused: anything but no-auth (\x00) or
+// credential auth (\x02) aborts before CONNECT. (A dropped method check
+// would handshake with proxies speaking no known method.)
+$unkPair = $socksTcpPair("\x05\x01" // GSSAPI — offered by nobody we use
+    . "\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00"); // grant (must never be read)
+if ($unkPair === null) {
+    T::ok('loopback unavailable here — socks5 method refusal skipped', true);
+} else {
+    [$unkCli, $unkSrv] = $unkPair;
+    $unkPx = ['scheme' => 'socks5', 'user' => '', 'pass' => ''];
+    $unkTgt = ['host' => 'example.com', 'port' => 80, 'tls' => false, 'dial' => 'example.com'];
+    $unkOpened = proxy_sock_open_from($unkCli, $unkPx, $unkTgt, microtime(true) + 2.0);
+    T::ok('unknown socks5 method refuses', $unkOpened === null);
+    T::eq('...sending the greeting and nothing after', proxy_socks5_greet(''), $socksDrain($unkSrv));
+    fclose($unkCli);
+    fclose($unkSrv);
+}
+
+// Heal lock strictly: a free lock acquires (true, not just truthy — the
+// healer's compare-and-swap depends on the boolean), a held one refuses.
+$db->exec("DELETE FROM settings WHERE key_name = 'proxy_heal_lock'");
+settings_invalidate();
+T::eq('free heal lock acquires', true, osm_proxy_heal_lock());
+T::eq('held heal lock refuses', false, osm_proxy_heal_lock());
+$db->exec("DELETE FROM settings WHERE key_name = 'proxy_heal_lock'");
+settings_invalidate();
+
+// Heal pending arms: a fresh run is not due even with an empty pool (the
+// cooldown decides first); a stale run with nothing usable is.
+$db->exec('DELETE FROM osm_proxies');
+set_setting('osm_proxy_enabled', '1');
+set_setting('proxy_heal_last', (string)time());
+settings_invalidate();
+T::eq('fresh run is not pending', false, osm_proxy_heal_pending());
+set_setting('proxy_heal_last', '0');
+settings_invalidate();
+T::eq('stale run with empty pool is pending', true, osm_proxy_heal_pending());
+$db->exec("DELETE FROM settings WHERE key_name IN ('proxy_heal_last', 'proxy_heal_checked')");
+
+// A single seeded proxy is audited (the audit is the discovery trail —
+// seeding exactly one must not slip past it silently).
+$db->exec('DELETE FROM osm_proxies');
+$db->exec("DELETE FROM settings WHERE key_name IN ('proxy_heal_lock', 'proxy_heal_last', 'proxy_heal_checked', 'proxy_heal_urgent', 'proxy_seed_failures', 'osm_proxy_auto_off')");
+$db->exec("DELETE FROM audit_log WHERE action IN ('proxy_seed', 'proxy_replace', 'proxy_auto_off')");
+settings_invalidate();
+set_setting('osm_proxy_enabled', '1');
+$healOne = osm_proxy_heal(
+    static fn(): array => [['url' => 'http://10.9.9.1:80', 'latency_ms' => 300, 'source' => 'proxifly']],
+    static fn(array $u): array => array_fill_keys($u, [0, 0]));
+T::eq('exactly one proxy seeded', 1, $healOne['seeded'] ?? null);
+T::eq('single seed is audited',
+    1, (int)$db->query("SELECT COUNT(*) FROM audit_log WHERE action = 'proxy_seed'")->fetchColumn());
+$db->exec('DELETE FROM osm_proxies');
+$db->exec("DELETE FROM settings WHERE key_name IN ('proxy_heal_lock', 'proxy_heal_last', 'proxy_heal_checked', 'proxy_heal_urgent', 'proxy_seed_failures', 'osm_proxy_auto_off')");
+$db->exec("DELETE FROM audit_log WHERE action IN ('proxy_seed', 'proxy_replace', 'proxy_auto_off')");
+
+// Pseudo-cron urgent slot heals inline when nothing can detach: the dead
+// row is probed right here instead of one cooldown later. (The bootstrap
+// stand-in spawner is uninstalled for this block and restored after.)
+$db->exec('DELETE FROM osm_proxies');
+$db->exec("DELETE FROM settings WHERE key_name IN ('proxy_heal_lock', 'proxy_heal_last', 'proxy_heal_checked', 'proxy_heal_urgent', 'proxy_seed_failures', 'osm_proxy_auto_off')");
+settings_invalidate();
+set_setting('osm_proxy_enabled', '1');
+$db->prepare("INSERT INTO osm_proxies (url, source, last_status, last_checked) VALUES ('http://10.0.0.1:80', 'proxifly', 'fail', NOW())")->execute();
+set_setting('proxy_heal_urgent', (string)time());
+osm_proxy_heal_spawner(null, true);
+host_override(['linux' => false]);
+$cronProbed = [];
+try {
+    osm_proxy_heal_pseudo_cron(static fn(): array => [],
+        static function (array $u) use (&$cronProbed): array {
+            $cronProbed = $u;
+            return array_fill_keys($u, [0, 0]);
+        });
+} finally {
+    host_override(null, true);
+    osm_proxy_heal_spawner(static fn(): bool => false);
+}
+T::eq('urgent pseudo-cron probes the dead row inline', ['http://10.0.0.1:80'], $cronProbed);
+$db->exec('DELETE FROM osm_proxies');
+$db->exec("DELETE FROM settings WHERE key_name IN ('proxy_heal_lock', 'proxy_heal_last', 'proxy_heal_checked', 'proxy_heal_urgent', 'proxy_seed_failures', 'osm_proxy_auto_off')");
+$db->exec("DELETE FROM audit_log WHERE action IN ('proxy_seed', 'proxy_replace', 'proxy_auto_off')");
 
 exit(T::done());

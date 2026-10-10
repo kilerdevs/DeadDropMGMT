@@ -523,6 +523,28 @@ foreach (maps_zone_list() as $z) {
 [$fok, $ferr] = maps_process_one($frow);
 T::ok('empty pool fails the job', !$fok && $ferr === 'code:proxy_empty');
 
+// Unreachable build list fails the job before any planet URL is built (a
+// dropped refusal check would TypeError into maps_planet_url(null)). The
+// pool holds one refused proxy so the list fetch genuinely attempts and
+// fails instead of short-circuiting on an empty pool.
+$db->prepare("INSERT INTO osm_proxies (url, source, last_status) VALUES ('http://127.0.0.1:9/', 'manual', 'new')")->execute();
+set_setting('maps_build_key', '');
+set_setting('maps_build_at', '0');
+[$nbid] = maps_zone_add('P2 Build Zone', 20.85, 52.05, 21.30, 52.40, 14, true);
+$nbrow = null;
+foreach (maps_zone_list() as $z) {
+    if ((int)$z['id'] === (int)$nbid) {
+        $nbrow = $z;
+    }
+}
+[$nbok, $nberr] = maps_process_one($nbrow);
+T::ok('unreachable build list fails the job', !$nbok && $nberr === 'code:build_list_unreachable');
+$db->prepare('DELETE FROM map_zones WHERE id = ?')->execute([$nbid]);
+$db->prepare('DELETE FROM osm_proxies')->execute();
+// Restore the pinned build cache the pipeline tests above rely on.
+set_setting('maps_build_key', '20260918');
+set_setting('maps_build_at', (string)time());
+
 // A failed extract fails the job as download_failed (the missing part file
 // must never slide into verify+publish — a dead result check would).
 maps_cli_runner(static function (array $args, ?array $env, ?callable $onChunk): array {
@@ -596,6 +618,10 @@ if ($pinNow === null) {
         rename($binPath, $binBackup);
     }
     try {
+        // The binary dir may not exist on a fresh checkout (no CLI ever
+        // downloaded) — create it, and remove it again if we did.
+        $binDir = dirname($binPath);
+        $madeDir = !is_dir($binDir) && @mkdir($binDir, 0777, true);
         file_put_contents($binPath, 'not the pinned release');
         maps_cli_runner(static fn(): array => [true, 'pmtiles ' . PMTILES_CLI_VERSION]);
         [$pinOk, $pinErr] = maps_ensure_cli(false, null);
@@ -603,6 +629,9 @@ if ($pinNow === null) {
         T::eq('stubbed CLI answers under test', [true, ''], [$pinOk, $pinErr]);
     } finally {
         @unlink($binPath);
+        if ($madeDir) {
+            @rmdir($binDir);
+        }
         if ($hadBin) {
             rename($binBackup, $binPath);
         }

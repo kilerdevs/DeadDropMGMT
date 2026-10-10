@@ -93,11 +93,10 @@ $mg_suites = [
     'version.php'      => ['VersionTest'],
     'wipe.php'         => ['PanicTest'],
     'db.php'           => ['FailClosedTest'],
-    // setup_check.php's natural killer (SetupCheckTest) shells a schema
-    // reload per run — minutes per mutant. CapabilitiesTest at least loads
-    // the file, so parse-level breakage surfaces; semantic survival here
-    // means "write a fast setup_check unit test", and says so in the report.
-    'setup_check.php'  => ['CapabilitiesTest'],
+    // setup_check.php's fast killer (SetupCheckTest) pins the probe flags and
+    // the pure row builders in seconds; CapabilitiesTest behind it loads
+    // the file, so parse-level breakage surfaces too.
+    'setup_check.php'  => ['SetupCheckTest', 'CapabilitiesTest'],
     'kernel.php'       => ['KernelTest'],
 ];
 
@@ -127,8 +126,13 @@ $mg_equiv = [
     // only skips work, it never changes the answer.
     // The compressor's scale floor is hit with probability zero (exact float
     // equality after sqrt steps) and both arms converge next iteration.
+    // decrypt_location()'s short-payload arm converges downstream too: with
+    // a guard-passing IV, substr() on a <16 B payload is safe and
+    // openssl_decrypt() answers false either way (verified empirically —
+    // proven: survives even targeted runs).
     'crypto.php' => [319 => ['if-false' => 'guard subsumed by typed decrypt + null arms'],
-                     866 => ['cmp-bound' => 'scale-floor edge hit with probability zero']],
+                     869 => ['cmp-bound' => 'scale-floor edge hit with probability zero'],
+                     157 => ['if-false' => 'short-payload arm converges via openssl false']],
     // log_tail_lines() normalizes both arms identically: an empty file reads
     // as '' (filtered to [] with cut=false), a missing file fails fopen —
     // the early return only skips work (LoggerTest 'empty file' passes both
@@ -164,10 +168,14 @@ $mg_equiv = [
     // already agree).
     // The tmp-name entropy only matters under concurrent creates; sequential
     // runs reuse the name safely either way.
+    // The oversized-gzip refusal converges through the truthy caller: $why
+    // is already 'too_large' before the deleted return, so the restore
+    // answers identically (proven: survives even targeted runs).
     'backup.php' => [512 => ['return-del' => 'I/O-fault branch, not inducible in-process'],
-                     692 => ['if-false' => 'inner rollback subsumed by outer catch'],
+                     700 => ['if-false' => 'inner rollback subsumed by outer catch'],
                      344 => ['if-false' => 'read-fault arms need I/O faults'],
-                     219 => ['int-lit' => 'tmp-name entropy needs concurrency']],
+                     219 => ['int-lit' => 'tmp-name entropy needs concurrency'],
+                     810 => ['return-del' => 'oversized refusal converges via truthy caller']],
     // verify_path()'s minimum-size guard is subsumed by the layout check
     // below it: any file under 128 B fails `rootOff + lens === size` (127 +
     // non-negatives can never equal fewer than 128), so both arms agree on
@@ -213,6 +221,14 @@ $mg_equiv = [
     // far enough to diverge.
     // The curl-less result mapping needs a live origin (refused hosts fail
     // both arms identically).
+    // The heal-lock's DB-fault catch converges through the single truthy
+    // caller (needs a faulted connection to observe — proven: survives
+    // even targeted runs).
+    // The redirect method-rewrite glue needs a live redirect chain (loopback
+    // servers cannot speak HTTP single-process); the predicate's literal
+    // table is pinned by ProxyTest instead.
+    // The CONNECT auth-header glue needs a live tunnel for the same reason;
+    // the predicate is pinned by ProxyTest instead.
     'proxy.php' => [1069 => ['if-false' => 'success arm needs a live proxy to observe'],
                     726 => ['if-false' => 'deadline enforced again downstream'],
                     495 => ['bool-lit' => 'direct-TLS flag needs a live TLS peer'],
@@ -227,7 +243,12 @@ $mg_equiv = [
                     1253 => ['return-del' => 'non-array arm converges via implode'],
                     1829 => ['not-del' => 'tunnel-TLS arms need a live TLS peer'],
                     1589 => ['if-false' => 'round-2 gate needs live judges'],
-                    1415 => ['if-false' => 'curl-less mapping needs a live origin']],
+                    1415 => ['if-false' => 'curl-less mapping needs a live origin'],
+                    1981 => ['return-del' => 'lock-catch refusal converges via truthy caller'],
+                    2056 => ['int-lit' => 'heal time budget needs a slow pass to observe'],
+                    1735 => ['bool-lit' => 'mass-dial blocking flag needs live dial targets'],
+                    693 => ['if-false' => 'rewrite glue needs a live redirect chain'],
+                    1803 => ['if-false' => 'auth-header glue needs a live tunnel']],
     // Pseudo-cron may only run under a web SAPI: fast suites always run as
     // CLI, where the SAPI arm decides alone and the flag default is dead.
     'cleanup.php' => [204 => ['bool-lit' => 'SAPI-gated, fast suites always CLI']],
@@ -245,12 +266,20 @@ $mg_equiv = [
     // refuse identically.
     // A 0/1-byte upload converges to the same refusal downstream (disk and
     // header checks refuse what the size guard would have).
-    'maps.php' => [1249 => ['if-false' => 'id guard subsumed by rowCount check'],
-                   1591 => ['cmp-bound' => 'chance-1.0 dice always passes'],
-                   1025 => ['cmp-bound' => 'fresh-206 arm needs a Range origin'],
-                   1776 => ['int-lit' => 'swapped plan args need a fetchable archive'],
-                   1060 => ['return-del' => 'build-list parse needs a live list host'],
-                   1324 => ['logic' => 'tiny upload converges to the same refusal']],
+    // The magic/version fast-reject converges through the structural verify
+    // right below it: every input taking the early arm fails the full pass
+    // with the same reason string and the same staging unlink (proven:
+    // survives even targeted runs).
+    // The disk-full arm needs a full disk to observe (no hermetic suite can
+    // fill one — proven: survives even targeted runs).
+    'maps.php' => [1266 => ['if-false' => 'id guard subsumed by rowCount check'],
+                   1592 => ['cmp-bound' => 'chance-1.0 dice always passes'],
+                   1026 => ['cmp-bound' => 'fresh-206 arm needs a Range origin'],
+                   1777 => ['int-lit' => 'swapped plan args need a fetchable archive'],
+                   1061 => ['return-del' => 'build-list parse needs a live list host'],
+                   1325 => ['logic' => 'tiny upload converges to the same refusal'],
+                   1335 => ['return-del' => 'magic-guard refusal subsumed by structural verify'],
+                   1794 => ['if-false' => 'disk-full arm needs a full disk']],
     // Session language lookup: the supported list holds no numeric strings,
     // and under PHP 8 a session value loosely matches one only by strictly
     // matching it — same proof as the logger scrub above.

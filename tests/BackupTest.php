@@ -54,6 +54,26 @@ T::eq('manifest pins both photos', 2, count($ver['manifest']['files'] ?? []));
 T::eq('own key matches', false, $ver['key_mismatch'] ?? true);
 T::ok('config crc recorded', ($ver['manifest']['config_crc'] ?? '') !== '');
 
+// ── Schema-less database fails creation honestly ──────────────────────────
+// A database without the schema must refuse with ok:false, never claim a
+// backup (a flipped ok flag would ship an empty "success").
+$adminDsn = 'mysql:host=' . (getenv('DDMGMT_DB_HOST') ?: '127.0.0.1')
+    . ';port=' . (getenv('DDMGMT_DB_PORT') ?: '3306');
+$adminUser = getenv('DDMGMT_DB_USER') ?: 'root';
+$adminPass = getenv('DDMGMT_DB_PASS') !== false ? (string)getenv('DDMGMT_DB_PASS') : '';
+$emptyDb = 'deaddrops_emptyprobe';
+$adminPdo = new PDO($adminDsn, $adminUser, $adminPass, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+try {
+    $adminPdo->exec('CREATE DATABASE IF NOT EXISTS `' . $emptyDb . '`');
+    $emptyPdo = new PDO($adminDsn . ';dbname=' . $emptyDb . ';charset=utf8mb4',
+        $adminUser, $adminPass, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+    $emptyRes = backup_create($emptyPdo, $tmpRoot);
+    T::eq('schema-less database fails creation', false, $emptyRes['ok'] ?? null);
+    T::eq('...with the failure code', 'create_failed', $emptyRes['code'] ?? null);
+} finally {
+    $adminPdo->exec('DROP DATABASE IF EXISTS `' . $emptyDb . '`');
+}
+
 // ── Tamper: one flipped byte voids the whole file ──────────────────────────
 $tampered = $tmpRoot . '/tampered.bin';
 copy($path, $tampered);

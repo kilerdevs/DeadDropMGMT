@@ -303,5 +303,21 @@ T::eq('non-apache warns', 'warn', $wsRow['status'] ?? null);
 T::ok('...pointing at the nginx snippet', str_contains($wsRow['detail'] ?? '', 'ginx'));
 @rmdir($wsTmp);
 
+// A runner that exists nowhere skips without enabling the binary: the fake
+// unzip below must NOT be returned for a missing executor (a dropped skip
+// would hand out a binary nothing can run).
+$uzDir2 = sys_get_temp_dir() . '/ddmgmt_unzip2_' . getmypid();
+@mkdir($uzDir2, 0770, true);
+file_put_contents($uzDir2 . '/' . $uzExe, 'fake');
+$oldPath2 = getenv('PATH');
+putenv('PATH=' . $uzDir2 . PATH_SEPARATOR . (string)$oldPath2);
+try {
+    T::eq('missing executor never enables a binary', null, capabilities_find_unzip(['no_such_executor_xyz']));
+} finally {
+    putenv('PATH=' . (string)$oldPath2);
+}
+@unlink($uzDir2 . '/' . $uzExe);
+@rmdir($uzDir2);
+
 $teardown();
 exit(T::done());

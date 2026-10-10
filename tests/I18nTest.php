@@ -17,14 +17,21 @@ T::eq('dictionary load is cached', $en, i18n_load('en'));
 T::eq('unknown language falls back to empty dict', [], i18n_load('xx'));
 // Dictionary snapshot: every shipped string in every language is pinned —
 // a drifted message or dropped key changes owner-facing copy with no test
-// failing otherwise. Regenerate on intentional copy changes:
-//   php -r "require 'tests/bootstrap.php'; require 'includes/i18n.php'; $a=[]; foreach (i18n_supported_langs() as $l) $a[$l]=i18n_load($l); echo hash('sha256', json_encode($a, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES)), PHP_EOL;"
+// failing otherwise. Line endings are normalized first: lang files check out
+// as CRLF on Windows and LF on Linux, and a few values embed literal
+// newlines — without this the same copy hashes differently per platform.
+// Regenerate on intentional copy changes:
+//   php -r "require 'tests/bootstrap.php'; $a=[]; foreach (i18n_supported_langs() as $l) { $d=i18n_load($l); foreach ($d as $k=>$v) $d[$k]=str_replace([\"\r\n\",\"\r\"],\"\n\",$v); $a[$l]=$d; } echo hash('sha256', json_encode($a, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES)), PHP_EOL;"
 $allDicts = [];
 foreach (i18n_supported_langs() as $dictLang) {
-    $allDicts[$dictLang] = i18n_load($dictLang);
+    $dict = i18n_load($dictLang);
+    foreach ($dict as $dictKey => $dictVal) {
+        $dict[$dictKey] = str_replace(["\r\n", "\r"], "\n", $dictVal);
+    }
+    $allDicts[$dictLang] = $dict;
 }
 T::eq('dictionaries match the snapshot',
-    'e186659a33ce0a17273364d698ec5a3466a11691b996f4146d6c766f1de577d9',
+    'cf9712c80651b467275ad1541504eda6a7e436624d5ee193e4d3e8b12ddcea63',
     hash('sha256', (string)json_encode($allDicts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)));
 
 // current_lang: unsupported session value collapses to English.
