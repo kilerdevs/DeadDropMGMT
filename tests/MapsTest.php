@@ -588,6 +588,44 @@ maps_cli_runner(static fn(): array => [true, 'x']);
 maps_cli_runner(null, true);
 T::ok('runner cleared', maps_cli_runner() === null);
 
+// Build-key pick table: only .pmtiles keys qualify, and only when newer
+// than the running best. A weakened comparison would pin stale planet
+// files (or admit non-planet keys) with no refusal anywhere downstream.
+T::ok('first key wins', maps_build_key_better(null, '20261010.pmtiles'));
+T::ok('newer key wins', maps_build_key_better('20261009.pmtiles', '20261010.pmtiles'));
+T::ok('older key loses', !maps_build_key_better('20261010.pmtiles', '20261009.pmtiles'));
+T::ok('same key loses', !maps_build_key_better('20261010.pmtiles', '20261010.pmtiles'));
+T::ok('non-planet key loses', !maps_build_key_better(null, '20261010.zip'));
+T::ok('non-string loses', !maps_build_key_better(null, null));
+T::ok('empty loses', !maps_build_key_better(null, ''));
+
+// Progress-row throttle table: a write is due unless the fetch is still
+// incomplete AND the last write is fresher than half a second.
+T::ok('fresh incomplete fetch skips', !maps_progress_write_due(5, 10, 0.1));
+T::ok('complete fetch writes', maps_progress_write_due(10, 10, 0.1));
+T::ok('stale incomplete fetch writes', maps_progress_write_due(5, 10, 0.6));
+T::ok('zero of zero writes', maps_progress_write_due(0, 0, 0.0));
+
+// Inline budget edge: unlimited (0) stays unlimited — a tightened bound
+// would hand workers a 5 s box on hosts with no limit at all. (The full
+// table lives in SetupCheckTest, which is not a mapped killer here.)
+// Guarded: ini_set can refuse under coverage-style shared processes —
+// then there is nothing to pin, and skipping beats failing.
+$keepLimit = (string)@ini_get('max_execution_time');
+@ini_set('max_execution_time', '0');
+if ((string)@ini_get('max_execution_time') === '0') {
+    T::eq('unlimited host keeps old behavior', 0, maps_inline_budget());
+    @ini_set('max_execution_time', '2');
+    if ((string)@ini_get('max_execution_time') === '2') {
+        T::eq('tiny limit floors at 5s', 5, maps_inline_budget());
+    } else {
+        T::ok('max_execution_time not pinnable here — floor skipped', true);
+    }
+} else {
+    T::ok('max_execution_time not pinnable here — budget edge skipped', true);
+}
+@ini_set('max_execution_time', $keepLimit);
+
 // A CLI that exits 1 is a failure, not a silent success (exit codes other
 // than zero never mean "version answered"). Needs a real process exit —
 // skipped where no Bourne shell exists.
@@ -638,6 +676,79 @@ if ($pinNow === null) {
         maps_cli_runner(null, true);
     }
 }
+
+// Proxy pick order: healthy before untested before dead (a re-ranked pool
+// would route map traffic through dead proxies first). Inserted new-first
+// on purpose: PHP 8.0+ sorts are stable, so a new==ok tie would surface
+// here instead of hiding behind the tie.
+$db->prepare("INSERT INTO osm_proxies (url, source, last_status) VALUES ('http://10.0.0.7/new', 'manual', 'new')")->execute();
+$db->prepare("INSERT INTO osm_proxies (url, source, last_status) VALUES ('http://10.0.0.8/ok', 'manual', 'ok')")->execute();
+$db->prepare("INSERT INTO osm_proxies (url, source, last_status) VALUES ('http://10.0.0.9/dead', 'manual', 'fail')")->execute();
+T::eq('healthy proxy picked first', 'http://10.0.0.8/ok', maps_pick_proxy());
+$db->prepare("DELETE FROM osm_proxies WHERE url = 'http://10.0.0.8/ok'")->execute();
+T::eq('...then untested', 'http://10.0.0.7/new', maps_pick_proxy());
+$db->prepare("DELETE FROM osm_proxies WHERE url = 'http://10.0.0.7/new'")->execute();
+T::eq('dead pool picks nothing', null, maps_pick_proxy());
+$db->prepare('DELETE FROM osm_proxies')->execute();
+
+// First-use hash pinning records and succeeds (a flipped ok flag would
+// report a verified binary as failed and re-fetch forever). The BIN override
+// nulls the release pin on every platform, so this arm is reachable here
+// and on CI alike.
+$pinBin = sys_get_temp_dir() . '/ddmgmt_pinbin_' . getmypid();
+file_put_contents($pinBin, 'pinned-release-bytes');
+putenv('DDMGMT_PMTILES_BIN=' . $pinBin);
+maps_cli_runner(static fn(array $args): array => [true, 'pmtiles ' . PMTILES_CLI_VERSION]);
+$db->prepare("DELETE FROM settings WHERE key_name = 'maps_cli_sha256'")->execute();
+[$pinFirstOk, $pinFirstErr] = maps_ensure_cli(false, null);
+T::eq('first-use binary pins and succeeds', [true, ''], [$pinFirstOk, $pinFirstErr]);
+T::eq('...recording its hash', (string)hash_file('sha256', $pinBin), get_setting('maps_cli_sha256', ''));
+[$pinSecondOk] = maps_ensure_cli(false, null);
+T::eq('recorded hash still succeeds', true, $pinSecondOk);
+$db->prepare("DELETE FROM audit_log WHERE action = 'maps_cli_fetch' AND detail LIKE '%" . substr((string)hash_file('sha256', $pinBin), 0, 16) . "%'")->execute();
+putenv('DDMGMT_PMTILES_BIN');
+maps_cli_runner(null, true);
+$db->prepare("DELETE FROM settings WHERE key_name = 'maps_cli_sha256'")->execute();
+@unlink($pinBin);
+
+// Blocked publish fails the job instead of sliding past it: when the final
+// path is a non-empty directory, the rename must fail and the job reports
+// publish_failed (a dropped refusal would crash or claim success).
+maps_cli_runner(static function (array $args, ?array $env, ?callable $onChunk): array {
+    if ($args[0] === 'version') {
+        return [true, 'pmtiles ' . PMTILES_CLI_VERSION];
+    }
+    if ($args[0] === 'extract') {
+        if ($onChunk !== null) {
+            $onChunk("fetching chunks 100% |x| (1.0/1.0 MB, 2.0 MB/s) [1s:0s]\r");
+        }
+        $body = "Completed in 1s\nExtract transferred 1.0 MB (overfetch 0.05) for an archive size of 1.0 MB";
+        if (!in_array('--dry-run', $args, true)) {
+            file_put_contents($args[2], str_repeat('x', 1048576));
+        }
+        return [true, $body];
+    }
+    if ($args[0] === 'verify') {
+        return [true, 'Completed verify'];
+    }
+    return [false, 'stub: unknown command'];
+});
+[$pubId] = maps_zone_add('P2 Publish Zone', 20.85, 52.05, 21.30, 52.40, 14, false);
+$pubBlock = maps_zone_path((int)$pubId);
+@mkdir($pubBlock, 0777, true);
+file_put_contents($pubBlock . '/blocker', 'x');
+$pubRow = null;
+foreach (maps_zone_list() as $z) {
+    if ((int)$z['id'] === (int)$pubId) {
+        $pubRow = $z;
+    }
+}
+[$pubOk, $pubErr] = maps_process_one($pubRow);
+T::ok('blocked publish fails the job', !$pubOk && $pubErr === 'code:publish_failed');
+@unlink($pubBlock . '/blocker');
+@rmdir($pubBlock);
+$db->prepare('DELETE FROM map_zones WHERE id = ?')->execute([$pubId]);
+maps_cli_runner(null, true);
 
 // Cleanup: rows, published files, scratch settings, stub runner.
 foreach ([$pid, $qid, $fid, $sid] as $cid) {

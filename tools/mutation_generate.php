@@ -72,7 +72,7 @@ $root = dirname(__DIR__);
 // Timings measured 2026-10-07 on the dev box; reorder if they drift.
 /** @var array<string,list<string>> $mg_suites */
 $mg_suites = [
-    'auth.php'         => ['CsrfTest', 'RateLimitTest', 'AuthTest', 'FailClosedTest'],
+    'auth.php'         => ['CsrfTest', 'RateLimitTest', 'AuthTest', 'AuthorizationTest', 'FailClosedTest'],
     'crypto.php'       => ['UploadHardeningTest', 'CryptoTest', 'PhotoCapTest'],
     'cleanup.php'      => ['CleanupTest'],
     'order_state.php'  => ['CleanupTest', 'StateTransitionTest'],
@@ -175,7 +175,13 @@ $mg_equiv = [
                      700 => ['if-false' => 'inner rollback subsumed by outer catch'],
                      344 => ['if-false' => 'read-fault arms need I/O faults'],
                      219 => ['int-lit' => 'tmp-name entropy needs concurrency'],
-                     810 => ['return-del' => 'oversized refusal converges via truthy caller']],
+                     810 => ['return-del' => 'oversized refusal converges via truthy caller'],
+                     // The 512 MB stage cap needs a stream that straddles it
+                     // exactly — no hermetic fixture can (nor should) do that.
+                     779 => ['cmp-bound' => 'stage cap needs a 512 MB stream'],
+                     // The zlib-missing refusal needs a zlib-less host to
+                     // observe (CI and dev both ship zlib).
+                     805 => ['bool-lit' => 'zlib-missing arm needs a zlib-less host']],
     // verify_path()'s minimum-size guard is subsumed by the layout check
     // below it: any file under 128 B fails `rootOff + lens === size` (127 +
     // non-negatives can never equal fewer than 128), so both arms agree on
@@ -248,7 +254,25 @@ $mg_equiv = [
                     2056 => ['int-lit' => 'heal time budget needs a slow pass to observe'],
                     1735 => ['bool-lit' => 'mass-dial blocking flag needs live dial targets'],
                     693 => ['if-false' => 'rewrite glue needs a live redirect chain'],
-                    1803 => ['if-false' => 'auth-header glue needs a live tunnel']],
+                    1803 => ['if-false' => 'auth-header glue needs a live tunnel'],
+                    // The dialing opener's 255-octet bound needs a live
+                    // scripted listener (single-process stubs deadlock);
+                    // the same bound in the connected-socket twin is pinned
+                    // by ProxyTest's TCP loopback tests.
+                    568 => ['cmp-bound' => 'dialing bound needs a live scripted listener'],
+                    // The pool-rank tie needs a live winner to observe (all-
+                    // refused pools mark identically either way); the twin
+                    // rank in maps_pick_proxy is pinned by MapsTest (stable
+                    // sort surfaces the tie there).
+                    1096 => ['int-lit' => 'rank tie needs a live winner to observe'],
+                    // Anonymity judging needs clearnet plus live judges;
+                    // without both the fail-closed filter drops unjudged
+                    // proxies either way (documented on the gate itself).
+                    1600 => ['if-false' => 'anonymity judging needs clearnet and live judges'],
+                    // The select timeout granularity (full vs truncated
+                    // microsecond) needs sub-second timing races no
+                    // deterministic suite can straddle.
+                    411 => ['int-lit' => 'select precision needs timing races']],
     // Pseudo-cron may only run under a web SAPI: fast suites always run as
     // CLI, where the SAPI arm decides alone and the flag default is dead.
     'cleanup.php' => [204 => ['bool-lit' => 'SAPI-gated, fast suites always CLI']],
@@ -279,7 +303,17 @@ $mg_equiv = [
                    1061 => ['return-del' => 'build-list parse needs a live list host'],
                    1325 => ['logic' => 'tiny upload converges to the same refusal'],
                    1335 => ['return-del' => 'magic-guard refusal subsumed by structural verify'],
-                   1794 => ['if-false' => 'disk-full arm needs a full disk']],
+                   1794 => ['if-false' => 'disk-full arm needs a full disk'],
+                   // The PHP-engine publish refusal needs a fetching
+                   // pipeline to reach (no fast suite gets there); the CLI
+                   // twin is pinned by MapsTest's blocked-publish test.
+                   1877 => ['return-del' => 'PHP-engine publish needs a fetching pipeline'],
+                   // The progress clock (microtime float vs string) crashes
+                   // only mid-fetch; no fast suite reaches the fetch phase.
+                   1825 => ['bool-lit' => 'progress clock needs a fetching pipeline'],
+                   // The retry catch needs a faulted connection to fire;
+                   // the single caller reads it truthily either way.
+                   1238 => ['bool-lit' => 'retry-catch refusal needs a DB fault']],
     // Session language lookup: the supported list holds no numeric strings,
     // and under PHP 8 a session value loosely matches one only by strictly
     // matching it — same proof as the logger scrub above.

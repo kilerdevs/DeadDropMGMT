@@ -703,4 +703,64 @@ $db->exec('DELETE FROM osm_proxies');
 $db->exec("DELETE FROM settings WHERE key_name IN ('proxy_heal_lock', 'proxy_heal_last', 'proxy_heal_checked', 'proxy_heal_urgent', 'proxy_seed_failures', 'osm_proxy_auto_off')");
 $db->exec("DELETE FROM audit_log WHERE action IN ('proxy_seed', 'proxy_replace', 'proxy_auto_off')");
 
+// Read-until answers at once when $done fires on the first call (a dropped
+// early return would keep reading until cap/eof instead).
+$untilPair = $socksTcpPair('');
+if ($untilPair === null) {
+    T::ok('loopback unavailable here — read-until skipped', true);
+} else {
+    [$untilCli, $untilSrv] = $untilPair;
+    $untilCalls = 0;
+    $untilRes = proxy_read_until($untilCli, microtime(true) + 2.0,
+        static function (string $b) use (&$untilCalls): ?array {
+            $untilCalls++;
+            return $untilCalls === 1 ? ['first', $b] : null;
+        }, 64);
+    T::eq('done on first call answers at once', ['first', ''], $untilRes);
+    T::eq('...without reading further', 1, $untilCalls);
+    fclose($untilCli);
+    fclose($untilSrv);
+}
+
+// SOCKS5 255-octet domain is the last legal length (a tightened bound would
+// refuse it and strand long-but-valid domains).
+$long255Pair = $socksTcpPair("\x05\x00"
+    . "\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00");
+if ($long255Pair === null) {
+    T::ok('loopback unavailable here — 255-octet domain skipped', true);
+} else {
+    [$long255Cli, $long255Srv] = $long255Pair;
+    $long255Px = ['scheme' => 'socks5', 'user' => '', 'pass' => ''];
+    $long255Tgt = ['host' => str_repeat('h', 255), 'port' => 80, 'tls' => false, 'dial' => str_repeat('h', 255)];
+    T::ok('255-octet domain opens', is_array(proxy_sock_open_from($long255Cli, $long255Px, $long255Tgt, microtime(true) + 2.0)));
+    fclose($long255Cli);
+    fclose($long255Srv);
+}
+
+// Routing-off fetch fails as exactly false and never touches the pool (a
+// dropped early return would fall through into the pool walk and mark rows
+// behind the owner's back).
+$db->prepare("INSERT INTO osm_proxies (url, source, last_status) VALUES ('http://127.0.0.1:9/', 'manual', 'new')")->execute();
+set_setting('osm_proxy_enabled', '0');
+T::eq('routing-off refusal is exactly false', false, osm_fetch('http://127.0.0.1:9/unreachable'));
+T::eq('...leaving the pool untouched', null,
+    $db->query("SELECT last_checked FROM osm_proxies WHERE url = 'http://127.0.0.1:9/'")->fetchColumn());
+set_setting('osm_proxy_enabled', '1');
+$db->prepare('DELETE FROM osm_proxies')->execute();
+
+// TLS peer verification stays pinned on (a flipped flag would handshake
+// with anyone holding any certificate and then send secrets).
+$tlsVerifyPair = $socksTcpPair('');
+if ($tlsVerifyPair === null) {
+    T::ok('loopback unavailable here — TLS verify skipped', true);
+} else {
+    [$tlsVerifyCli, $tlsVerifySrv] = $tlsVerifyPair;
+    proxy_target_tls($tlsVerifyCli, ['host' => 'example.com'], null);
+    $tlsOpts = stream_context_get_options($tlsVerifyCli);
+    T::eq('peer verification pinned on', true, $tlsOpts['ssl']['verify_peer_name'] ?? null);
+    T::eq('...and peer itself', true, $tlsOpts['ssl']['verify_peer'] ?? null);
+    fclose($tlsVerifyCli);
+    fclose($tlsVerifySrv);
+}
+
 exit(T::done());

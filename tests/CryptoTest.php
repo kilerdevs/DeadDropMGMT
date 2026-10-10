@@ -320,6 +320,13 @@ file_put_contents($ptd . '/good.json', json_encode(['ct' => $good['ciphertext'],
 T::ok('decrypt round-trips sealed photo',
     photo_decrypt_to_temp($ptd . '/good.json', $ptd . '/o4') && file_get_contents($ptd . '/o4') === 'cover-bytes');
 
+// Photo file encryption seals in place and reports honestly (a flipped
+// success flag would report sealed files as failed and retry forever).
+file_put_contents($ptd . '/plain.bin', 'photo-bytes');
+T::eq('seal reports success', true, photo_encrypt_file($ptd . '/plain.bin'));
+T::ok('sealed file no longer plaintext', file_get_contents($ptd . '/plain.bin') !== 'photo-bytes');
+T::eq('seal of a missing file fails', false, photo_encrypt_file($ptd . '/nope.bin'));
+
 // order_notes_plain prefers the encrypted copy, falls back safely.
 T::eq('notes prefers encrypted copy', 'enc-note', order_notes_plain(['notes' => 'legacy'], ['notes' => 'enc-note']));
 T::eq('notes falls back to legacy column', 'legacy', order_notes_plain(['notes' => 'legacy'], false));

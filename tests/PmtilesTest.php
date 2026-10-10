@@ -108,6 +108,7 @@ if (is_file($dest)) {
     $raw = (string)file_get_contents($dest);
     $hdr = pmtiles_parse_header(substr($raw, 0, 127));
     $okHdr = $hdr !== null && $hdr['maxZoom'] === 2 && $hdr['nEntries'] === 3
+        && $hdr['minZoom'] === 0
         && abs($hdr['minLon'] - 20.0) < 1e-6 && abs($hdr['maxLat'] - 53.0) < 1e-6;
     T::ok('assembled header carries plan', $okHdr);
     if ($hdr !== null) {
@@ -200,6 +201,43 @@ foreach (glob($tmp4 . '/*') ?: [] as $f) {
     @unlink($f);
 }
 @rmdir($tmp4);
+
+// ── Zero-length directory entries are refused at verify ───────────────────
+// A loosened bound would accept a tile that occupies no bytes.
+$tmp5 = sys_get_temp_dir() . '/ddmgmt_pmtiles5_' . getmypid();
+@mkdir($tmp5, 0700, true);
+$tileE1 = (string)gzencode('E1');
+$tileE3 = (string)gzencode('E3');
+file_put_contents($tmp5 . '/e.tiles', $tileE1 . $tileE3);
+$emptyEntryPlan = [
+    'url' => 'http://127.0.0.1/x', 'proxy' => null,
+    'bbox' => [0.0, 0.0, 1.0, 1.0], 'maxzoom' => 1,
+    'tileType' => PMTILES_TYPE_MVT, 'tileComp' => PMTILES_COMP_GZIP,
+    'outMaxZoom' => 1, 'meta' => base64_encode('{}'),
+    // id 1 occupies no bytes; id 2's real gzip bytes sit exactly where id 1
+    // points, so only the entry-bounds check can refuse it (the magic probe
+    // reads valid gzip either way).
+    'entries' => [[0, 0, strlen($tileE1)], [1, strlen($tileE1), 0], [2, strlen($tileE1), strlen($tileE3)]],
+    'spans' => [[0, strlen($tileE1) + strlen($tileE3)]],
+    'expected' => 10,
+];
+$emptyArch = $tmp5 . '/empty-entry.pmtiles';
+T::ok('zero-length entry assembles', pmtiles_assemble($emptyEntryPlan, $tmp5 . '/e.tiles', $emptyArch) === $emptyArch);
+T::ok('zero-length entry fails verify', !pmtiles_verify_path($emptyArch));
+
+// ── Span search misses below the first span ─────────────────────────────────
+// A source offset below every span resolves to null (no tile there); the
+// binary search must still terminate — a hi bound that never shrinks loops
+// forever here instead.
+$gapPlan = $emptyEntryPlan;
+$gapPlan['entries'] = [[0, 0, 1]];
+$gapPlan['spans'] = [[10, 14], [30, 34]];
+file_put_contents($tmp5 . '/g.tiles', str_repeat('G', 34));
+T::eq('below-span source resolves to null', null, pmtiles_assemble($gapPlan, $tmp5 . '/g.tiles', $tmp5 . '/gap.pmtiles'));
+foreach (glob($tmp5 . '/*') ?: [] as $f) {
+    @unlink($f);
+}
+@rmdir($tmp5);
 
 // ── Plan validation fails closed on untrusted sidecar bytes ────────────────
 $good = [

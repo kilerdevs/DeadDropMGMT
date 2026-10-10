@@ -482,6 +482,9 @@ T::eq('tail of an empty file is empty', [[], false], log_tail_lines($el));
 file_put_contents($el, "one\n\ntwo\nthree\n");
 T::eq('short file: all non-blank lines, not cut', [['one', 'two', 'three'], false], log_tail_lines($el));
 T::eq('line cap keeps the newest', [['two', 'three'], true], log_tail_lines($el, 262144, 2));
+// Exact line count is not cut: a loosened bound would flag a full-but-whole
+// window (and a loosened start bound would flag every read from offset 0).
+T::eq('exact cap is whole', [['one', 'two', 'three'], false], log_tail_lines($el, 262144, 3));
 [$tl, $tcut] = log_tail_lines($el, 9);
 T::ok('byte window drops the partial first line', $tcut && $tl === ['three']);
 T::ok('small error log is not trimmed', error_log_trim($el, 1024, 512) === false);

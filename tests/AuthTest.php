@@ -226,4 +226,46 @@ $_POST = [];
 $db->prepare('DELETE FROM users WHERE id = ?')->execute([$pendingId]);
 $db->prepare('DELETE FROM users WHERE id IN (?, ?)')->execute([$ownerId, $courierId]);
 
+// ── Session fallback dir: uncreatable means hands off ─────────────────────
+// When the effective session path is unusable (a file squats here, so it is
+// settable but never a directory) AND the app-local fallback cannot be
+// created either, the helper must leave the configured path alone instead
+// of pointing sessions at a file.
+$localDir = dirname(__DIR__) . '/cache/sessions';
+if (!is_dir($localDir)) {
+    // Fallback dir missing anyway: nothing to squat (the helper would just
+    // create it — covered by the setup suite's session tests).
+    T::ok('fallback squat skipped (no dir to block)', true);
+} else {
+    $prevSavePath = (string)@ini_get('session.save_path');
+    $probeFile = sys_get_temp_dir() . '/ddmgmt_sesprobe_' . getmypid();
+    file_put_contents($probeFile, 'x');
+    rename($localDir, $localDir . '.probe_bak');
+    file_put_contents($localDir, 'squat');
+    // A live session locks save_path: close it so the probe path is settable
+    // (nothing below needs the session — only cleanup queries remain).
+    if (session_status() === PHP_SESSION_ACTIVE) {
+        session_write_close();
+    }
+    try {
+        @ini_set('session.save_path', $probeFile);
+        session_save_path_ensure();
+        T::eq('uncreatable fallback leaves save_path alone',
+            $probeFile, (string)@ini_get('session.save_path'));
+    } finally {
+        @ini_set('session.save_path', $prevSavePath);
+        @unlink($localDir);
+        rename($localDir . '.probe_bak', $localDir);
+        @unlink($probeFile);
+    }
+}
+
+// ── Admin guard: no session means exit, never fall-through ─────────────────
+// (Child process: the guard exits, exactly like the next request would.)
+$devnull = PHP_OS_FAMILY === 'Windows' ? 'NUL' : '/dev/null';
+$guardOut = shell_exec(
+    escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(__DIR__ . '/_admin_guard.php') . " 2>$devnull"
+) ?: '';
+T::eq('logged-out admin never passes the guard', '', $guardOut);
+
 exit(T::done());

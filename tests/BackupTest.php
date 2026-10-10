@@ -37,6 +37,15 @@ set_setting('backup_test_marker', 'before');
 // ── Create (zip here if available, JSON fallback otherwise) ─────────────────
 $created = backup_create($db, $tmpRoot);
 T::eq('create ok (' . ($created['code'] ?? 'no-code') . ')', true, $created['ok'] ?? false);
+// The container matches host capability: zip when ZipArchive exists (a
+// flipped gzip flag would silently ship json.gz on zip-capable hosts).
+if (backup_zip_supported()) {
+    T::eq('zip host ships zip', 'zip', $created['format'] ?? null);
+    T::ok('...with a .zip name', str_ends_with($created['file'] ?? '', '.zip'));
+} else {
+    T::eq('non-zip host ships json variant',
+        extension_loaded('zlib') ? 'json.gz' : 'json', $created['format'] ?? null);
+}
 T::ok('create names a file', isset($created['file']) && preg_match(BACKUP_NAME_RE, $created['file']) === 1);
 $path = backup_dir() . '/' . $created['file'];
 T::ok('bundle on disk', is_file($path));

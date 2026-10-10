@@ -1063,8 +1063,8 @@ function maps_latest_build(): array {
     $best = null;
     foreach (is_array($list) ? $list : [] as $entry) {
         $key = is_array($entry) ? ($entry['key'] ?? '') : '';
-        if (is_string($key) && str_ends_with($key, '.pmtiles')
-            && ($best === null || $key > $best)) {
+        // Newest build key wins (pure predicate, unit-pinned).
+        if (maps_build_key_better($best, $key)) {
             $best = $key;
         }
     }
@@ -1829,7 +1829,7 @@ function maps_process_php(array $zone, int $timeBox): array {
         // second, and anything slower leaves the progress bar and ETA visibly
         // stale on multi-minute downloads. One narrow UPDATE per row per
         // half-second is cheap next to the fetch traffic itself.
-        if ($fetched < $total && (microtime(true) - $lastRow) < 0.5) {
+        if (!maps_progress_write_due($fetched, $total, microtime(true) - $lastRow)) {
             return;
         }
         $lastRow = microtime(true);
@@ -2199,4 +2199,22 @@ function maps_zone_error_text(?string $raw): string {
         $text .= ' — ' . $detail;
     }
     return $text;
+}
+
+// Newest build key wins over the running best (pure pick predicate for the
+// build list: only .pmtiles keys qualify, and only when newer). Pinned by
+// MapsTest's key table — a weakened comparison would pin stale planet
+// files (or admit non-planet keys) with no refusal anywhere downstream.
+function maps_build_key_better(?string $best, mixed $key): bool {
+    return is_string($key) && str_ends_with($key, '.pmtiles')
+        && ($best === null || $key > $best);
+}
+
+// Progress-row throttle as a pure predicate: a write is due unless the
+// fetch is still incomplete AND the last write is fresher than half a
+// second. Pinned by MapsTest's throttle table — a loosened gate would spam
+// one UPDATE per fetched chunk, a tightened one would freeze the progress
+// bar and ETA on multi-minute downloads.
+function maps_progress_write_due(int $fetched, int $total, float $elapsed): bool {
+    return !($fetched < $total && $elapsed < 0.5);
 }

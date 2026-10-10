@@ -166,6 +166,19 @@ try {
     $dbFast->exec('SET FOREIGN_KEY_CHECKS=1');
 }
 
+// Exactly one owner counts as existing (a raised comparison would demand
+// two and report a fresh single-owner install as ownerless).
+$dbFast->exec("DELETE FROM users WHERE username = 't_sc_owner'");
+$dbFast->prepare("INSERT INTO users (username, password_hash, role) VALUES ('t_sc_owner', ?, 'owner')")
+    ->execute([password_hash('x', PASSWORD_BCRYPT)]);
+try {
+    $probeOneOwner = setup_db_probe();
+    T::eq('single owner counts as existing', true, $probeOneOwner['owner_exists']);
+    T::eq('...and known', true, $probeOneOwner['owner_known']);
+} finally {
+    $dbFast->prepare("DELETE FROM users WHERE username = 't_sc_owner'")->execute();
+}
+
 // Rows are pure over a fabricated probe: UTC session time_zone warns about
 // nothing, any other zone warns loudly (DB-side NOW() windows would skew).
 $utcProbe = ['connected' => true, 'error' => '', 'pdo' => null, 'zone' => '+00:00',

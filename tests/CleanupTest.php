@@ -194,6 +194,11 @@ purge_orders_like($db, 'clstoken');
 // HTTP. Everything is reachable in-process through the seams, which is also
 // what the coverage floor measures.)
 T::ok('the CLI never runs the pseudo-cron on its own', pseudo_cron_enabled() === false);
+// ...even when the flag is on: the SAPI arm decides alone under CLI (a
+// weakened conjunction would start running it here).
+putenv('DDMGMT_PSEUDO_CRON=1');
+T::eq('CLI ignores an enabled flag', false, pseudo_cron_enabled());
+putenv('DDMGMT_PSEUDO_CRON=0');
 
 $calls = [];
 $fin = static function () use (&$calls): void { $calls[] = 'finish'; };

@@ -258,6 +258,7 @@ T::eq('postgres offset parses', $noonUtc, _rl_parse_window_start('2026-10-04 12:
 T::eq('bare date parses as midnight UTC', gmmktime(0, 0, 0, 10, 4, 2026), _rl_parse_window_start('2026-10-04'));
 T::eq('unanchored text falls back to strtotime UTC', $noonUtc, _rl_parse_window_start('04 Oct 2026 12:00:00'));
 T::eq('garbage fails closed', false, _rl_parse_window_start('not-a-date'));
+T::eq('empty string fails closed', false, _rl_parse_window_start(''));
 // Impossible values match a strategy regex but never parse: each strategy's
 // catch falls through and the input still ends closed, never reset.
 T::eq('impossible ISO falls through to closed', false, _rl_parse_window_start('2026-10-04T25:00:00Z'));
