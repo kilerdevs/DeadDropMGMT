@@ -106,21 +106,36 @@ $db->prepare('DELETE FROM log_checkpoints WHERE id > ?')->execute([$prevCpId]);
 // strtotime to the year-0 epoch (documented, not null — the column is NOT
 // NULL, so PDO always fetches a string and the false arm never fires).
 $db->prepare("INSERT INTO rate_limits (ip_address, scope, count, window_start) VALUES ('198.51.100.31', 'diag_live_ws', 2000000000, UTC_TIMESTAMP())")->execute();
-$db->prepare("INSERT INTO rate_limits (ip_address, scope, count, window_start) VALUES ('198.51.100.32', 'diag_zero_ws', 1999999999, '0000-00-00 00:00:00')")->execute();
 $secRows = diagnostics_security();
-$liveRow = $zeroRow = null;
+$liveRow = null;
 foreach ($secRows['top_blocked'] ?? [] as $br) {
     if (($br['ip'] ?? '') === '198.51.100.31') {
         $liveRow = $br;
     }
-    if (($br['ip'] ?? '') === '198.51.100.32') {
-        $zeroRow = $br;
-    }
 }
 T::ok('live window surfaces, not dropped', $liveRow !== null);
 T::ok('...mapped near now', abs(($liveRow['window_start'] ?? 0) - time()) < 60);
-T::ok('zero-date window surfaces, not dropped', $zeroRow !== null);
-T::eq('...as the year-0 epoch', -62169984000, $zeroRow['window_start'] ?? 'missing');
-$db->exec("DELETE FROM rate_limits WHERE scope IN ('diag_live_ws', 'diag_zero_ws')");
+$db->exec("DELETE FROM rate_limits WHERE scope = 'diag_live_ws'");
+// Zero-date mapping (year-0 epoch) where the engine stores zero-dates at
+// all: MySQL 8 in strict mode rejects the insert, so the pin is skipped
+// there instead of failing.
+$zeroStored = false;
+try {
+    $db->prepare("INSERT INTO rate_limits (ip_address, scope, count, window_start) VALUES ('198.51.100.32', 'diag_zero_ws', 1999999999, '0000-00-00 00:00:00')")->execute();
+    $zeroStored = true;
+} catch (PDOException $e) {
+    T::ok('zero-dates rejected by this engine — mapping skipped', true);
+}
+if ($zeroStored) {
+    $zeroRow = null;
+    foreach (diagnostics_security()['top_blocked'] ?? [] as $br) {
+        if (($br['ip'] ?? '') === '198.51.100.32') {
+            $zeroRow = $br;
+        }
+    }
+    T::ok('zero-date window surfaces, not dropped', $zeroRow !== null);
+    T::eq('...as the year-0 epoch', -62169984000, $zeroRow['window_start'] ?? 'missing');
+    $db->exec("DELETE FROM rate_limits WHERE scope = 'diag_zero_ws'");
+}
 
 exit(T::done());
