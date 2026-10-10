@@ -155,7 +155,12 @@ $mg_equiv = [
                           340 => ['if-false' => 'PDO fetchAll elements always arrays'],
     // `>` vs `>=` on the running maximum is unobservable: a tie writes the
     // identical value it would have kept.
-                          349 => ['cmp-bound' => 'max-tracking tie writes the same value']],
+                           349 => ['cmp-bound' => 'max-tracking tie writes the same value'],
+    // window_start is NOT NULL DATETIME: PDO always fetches a string and
+    // strtotime is total over storable values (valid dates, plus the
+    // zero-date which maps to the year-0 epoch), so the false arm is
+    // unreachable and its default unobservable.
+                           281 => ['bool-lit' => 'unparseable-window default is a dead arm']],
     // fread() failing on a ZipArchive entry stream has no in-process
     // injection point (the stream comes from getStream(), not a path) — the
     // branch is defensive against OS-level I/O faults only.
@@ -179,9 +184,13 @@ $mg_equiv = [
                      // The 512 MB stage cap needs a stream that straddles it
                      // exactly — no hermetic fixture can (nor should) do that.
                      779 => ['cmp-bound' => 'stage cap needs a 512 MB stream'],
-                     // The zlib-missing refusal needs a zlib-less host to
-                     // observe (CI and dev both ship zlib).
-                     805 => ['bool-lit' => 'zlib-missing arm needs a zlib-less host']],
+                      // The zlib-missing refusal needs a zlib-less host to
+                      // observe (CI and dev both ship zlib).
+                      805 => ['bool-lit' => 'zlib-missing arm needs a zlib-less host'],
+                      // Same proof for the JSON gunzip guard: with zlib the
+                      // condition is already false, so forcing it false is a
+                      // no-op on every supported host.
+                      568 => ['if-false' => 'no-zlib arm needs a zlib-less host']],
     // verify_path()'s minimum-size guard is subsumed by the layout check
     // below it: any file under 128 B fails `rootOff + lens === size` (127 +
     // non-negatives can never equal fewer than 128), so both arms agree on
@@ -197,7 +206,17 @@ $mg_equiv = [
     'pmtiles.php' => [841 => ['if-false' => 'size guard subsumed by layout consistency check'],
                       166 => ['cmp-bound' => 'exact-cap hit needs contrived coordinates'],
                       648 => ['cmp-neg' => 'null-body arm needs a live origin'],
-                      412 => ['if-false' => 'plan-phase miss needs a fetchable archive']],
+                      412 => ['if-false' => 'plan-phase miss needs a fetchable archive'],
+                      // Reusing vs re-creating the pooled curl handle is
+                      // unobservable: every request option is re-set per call,
+                      // and the only divergence needs curl_init() to fail,
+                      // which no hermetic test can induce.
+                      237 => ['logic' => 'curl-pool reuse vs re-init unobservable'],
+                      // `>=` vs `>` on the deadline differs only when
+                      // microtime() lands exactly on the deadline float —
+                      // zero-probability; past deadlines fire under both,
+                      // future ones pass under both.
+                      392 => ['cmp-bound' => 'deadline edge needs an exact float hit']],
     // The pool-walk success arm needs a LIVE proxy to observe: with only
     // dead/refused proxies both arms return the same false. Covered
     // behaviourally by ProxyClientTest (HTTP-driven, excluded as a killer

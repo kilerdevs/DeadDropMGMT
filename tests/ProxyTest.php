@@ -763,4 +763,114 @@ if ($tlsVerifyPair === null) {
     fclose($tlsVerifySrv);
 }
 
+// ── Streams method gate over a local origin ───────────────────────────────
+// GET and HEAD pass; anything else never leaves the guard (a flipped
+// comparison here would either refuse HEAD or bless POST).
+$originDir = sys_get_temp_dir() . '/ddmgmt-origin-' . getmypid();
+@mkdir($originDir);
+file_put_contents($originDir . '/origin.php',
+    '<?php if (($_SERVER["REQUEST_URI"] ?? "") === "/tile") {'
+    . ' header("Content-Type: text/plain"); header("Content-Length: 11");'
+    . ' if ($_SERVER["REQUEST_METHOD"] !== "HEAD") { echo "HELLO-WORLD"; }'
+    . ' return true; } http_response_code(404); echo "not found"; return true;');
+$originPort = 0;
+$originProc = null;
+$originNull = DIRECTORY_SEPARATOR === '\\' ? 'NUL' : '/dev/null';
+for ($t = 0; $t < 10 && $originPort === 0; $t++) {
+    $cand = 19337 + ((getmypid() + $t * 131) % 200);
+    $probeSock = @fsockopen('127.0.0.1', $cand, $errno, $errstr, 0.2);
+    if (is_resource($probeSock)) {
+        fclose($probeSock);
+        continue;
+    }
+    $try = proc_open(t_exec_cmd(escapeshellarg(PHP_BINARY) . " -S 127.0.0.1:$cand " . escapeshellarg($originDir . '/origin.php')),
+        [['pipe', 'r'], ['file', $originNull, 'w'], ['file', $originNull, 'w']], $pipes);
+    if (!is_resource($try)) {
+        continue;
+    }
+    $ready = false;
+    for ($i = 0; $i < 15; $i++) {
+        $ctx = stream_context_create(['http' => ['timeout' => 2]]);
+        $got = @file_get_contents("http://127.0.0.1:$cand/tile", false, $ctx);
+        if ($got === 'HELLO-WORLD') {
+            $ready = true;
+            break;
+        }
+        usleep(50000);
+    }
+    if ($ready) {
+        $originPort = $cand;
+        $originProc = $try;
+    } else {
+        if (!empty(proc_get_status($try)['running'])) {
+            if (DIRECTORY_SEPARATOR === '\\') {
+                exec('taskkill /F /T /PID ' . (int)proc_get_status($try)['pid'] . ' >NUL 2>&1');
+            } else {
+                proc_terminate($try);
+            }
+        }
+        proc_close($try);
+    }
+}
+if ($originPort === 0) {
+    T::ok('stub server unavailable here — streams gate skipped', true);
+} else {
+    register_shutdown_function(static function () use ($originProc, $originDir): void {
+        if (is_resource($originProc) && !empty(proc_get_status($originProc)['running'])) {
+            if (DIRECTORY_SEPARATOR === '\\') {
+                exec('taskkill /F /T /PID ' . (int)proc_get_status($originProc)['pid'] . ' >NUL 2>&1');
+            } else {
+                proc_terminate($originProc);
+            }
+        }
+        if (is_resource($originProc)) {
+            proc_close($originProc);
+        }
+        @unlink($originDir . '/origin.php');
+        @rmdir($originDir);
+    });
+    $tileUrl = "http://127.0.0.1:$originPort/tile";
+    $getRes = proxy_request_streams('GET', $tileUrl, [], null, 10, 8192);
+    T::eq('origin GET serves', 200, $getRes['code'] ?? -1);
+    T::eq('...body intact', 'HELLO-WORLD', $getRes['body'] ?? null);
+    T::eq('...never truncated', false, $getRes['truncated'] ?? null);
+    // Over the byte cap the answer is still 200, but marked truncated (a
+    // dead truncated arm would bless a partial body as whole).
+    $smallRes = proxy_request_streams('GET', $tileUrl, [], null, 10, 5);
+    T::eq('over-cap body truncates', 200, $smallRes['code'] ?? -1);
+    T::eq('...saying so', true, $smallRes['truncated'] ?? null);
+    $headRes = proxy_request_streams('HEAD', $tileUrl, [], null, 10, 8192);
+    T::eq('origin HEAD serves', 200, $headRes['code'] ?? -1);
+    $postRes = proxy_request_streams('POST', $tileUrl, [], null, 10, 8192);
+    T::eq('POST never leaves the guard', 0, $postRes['code'] ?? -1);
+}
+
+// ── Wholesale pool failure heals urgently, not next cooldown ───────────────
+// A weakened kick would leave dead proxies in the rotation for ten minutes:
+// with the last run two minutes ago (inside the full cooldown, outside the
+// urgent one) a total failure must still spawn the healer.
+$db->exec('DELETE FROM osm_proxies');
+$db->exec("DELETE FROM settings WHERE key_name IN ('proxy_heal_lock', 'proxy_heal_last', 'proxy_heal_checked', 'proxy_heal_urgent', 'proxy_seed_failures', 'osm_proxy_auto_off', 'pool_down_until', 'pool_down_fp')");
+osm_pool_circuit_clear();
+settings_invalidate();
+set_setting('osm_proxy_enabled', '1');
+set_setting('proxy_heal_last', (string)(time() - 120));
+$db->prepare("INSERT INTO osm_proxies (url, source, last_status, last_checked) VALUES ('http://127.0.0.1:9/', 'proxifly', 'fail', NULL)")->execute();
+$db->prepare("INSERT INTO osm_proxies (url, source, last_status, last_checked) VALUES ('http://127.0.0.1:8/', 'proxifly', 'fail', NULL)")->execute();
+$kickSpawned = false;
+osm_proxy_heal_spawner(static function () use (&$kickSpawned): bool {
+    $kickSpawned = true;
+    return true;
+});
+try {
+    T::ok('dead pool fails closed', osm_fetch('http://127.0.0.1:9/unreachable', 512) === false);
+} finally {
+    osm_proxy_heal_spawner(null, true);
+}
+T::ok('wholesale failure kicks the healer urgently', $kickSpawned);
+$db->exec('DELETE FROM osm_proxies');
+osm_pool_circuit_clear();
+$db->exec("DELETE FROM settings WHERE key_name IN ('proxy_heal_last', 'proxy_heal_checked', 'proxy_heal_urgent', 'pool_down_until', 'pool_down_fp')");
+set_setting('osm_proxy_enabled', $prevRouting);
+
 exit(T::done());

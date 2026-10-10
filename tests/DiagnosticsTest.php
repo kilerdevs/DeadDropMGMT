@@ -101,4 +101,26 @@ $db->exec("DELETE FROM map_zones WHERE name = 'diag-zone'");
 $db->exec("DELETE FROM osm_proxies WHERE url = 'http://127.0.0.1:9/diag'");
 $db->prepare('DELETE FROM log_checkpoints WHERE id > ?')->execute([$prevCpId]);
 
+// ── Blocked-row timestamps: DATETIME values surface as epochs ─────────────
+// A live window maps to ~now; the zero-date the schema allows maps through
+// strtotime to the year-0 epoch (documented, not null — the column is NOT
+// NULL, so PDO always fetches a string and the false arm never fires).
+$db->prepare("INSERT INTO rate_limits (ip_address, scope, count, window_start) VALUES ('198.51.100.31', 'diag_live_ws', 2000000000, UTC_TIMESTAMP())")->execute();
+$db->prepare("INSERT INTO rate_limits (ip_address, scope, count, window_start) VALUES ('198.51.100.32', 'diag_zero_ws', 1999999999, '0000-00-00 00:00:00')")->execute();
+$secRows = diagnostics_security();
+$liveRow = $zeroRow = null;
+foreach ($secRows['top_blocked'] ?? [] as $br) {
+    if (($br['ip'] ?? '') === '198.51.100.31') {
+        $liveRow = $br;
+    }
+    if (($br['ip'] ?? '') === '198.51.100.32') {
+        $zeroRow = $br;
+    }
+}
+T::ok('live window surfaces, not dropped', $liveRow !== null);
+T::ok('...mapped near now', abs(($liveRow['window_start'] ?? 0) - time()) < 60);
+T::ok('zero-date window surfaces, not dropped', $zeroRow !== null);
+T::eq('...as the year-0 epoch', -62169984000, $zeroRow['window_start'] ?? 'missing');
+$db->exec("DELETE FROM rate_limits WHERE scope IN ('diag_live_ws', 'diag_zero_ws')");
+
 exit(T::done());

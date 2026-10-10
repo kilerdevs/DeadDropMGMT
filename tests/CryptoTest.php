@@ -406,6 +406,23 @@ if (function_exists('imagecreatetruecolor')) {
     T::ok('resampled output keeps its alpha', ((($noisyPx >> 24) & 127) > 0));
     $noisyOut = null;
 
+    // Noisy GIF over a tight byte budget: GIF takes the scale arm (quality
+    // is meaningless for it), so it must converge — a quality-first arm
+    // would burn all ten attempts re-encoding the same bytes and give up.
+    $ngif = imagecreatetruecolor(800, 800);
+    for ($gy = 0; $gy < 800; $gy += 8) {
+        for ($gx = 0; $gx < 800; $gx += 8) {
+            $gc = imagecolorallocate($ngif, ($gx * 7 + $gy * 13) % 256, ($gx * 3 + $gy) % 256, ($gx + $gy * 11) % 256);
+            imagefilledrectangle($ngif, $gx, $gy, $gx + 7, $gy + 7, $gc);
+        }
+    }
+    imagegif($ngif, $ptd . '/noisy.gif');
+    $ngif = null;
+    T::ok('noisy GIF converges to budget',
+        _compress_image($ptd . '/noisy.gif', $ptd . '/noisy.out.gif', 'image/gif', 30000) !== false);
+    T::ok('...to a smaller file',
+        is_file($ptd . '/noisy.out.gif') && filesize($ptd . '/noisy.out.gif') < filesize($ptd . '/noisy.gif'));
+
     // The pixel ceiling multiplies width BY height: a tall 100x5000 strip is
     // half a megapixel (accepted), even though height alone squared is not.
     $tall = imagecreatetruecolor(100, 5000);

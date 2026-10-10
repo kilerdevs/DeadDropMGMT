@@ -517,6 +517,39 @@ if ($markerOrig === '') {
 T::eq('marker restored', $markerOrig, get_setting('backup_test_marker', ''));
 T::ok('bundle deletes', backup_delete($created['file']));
 T::ok('bundle gone from disk', !is_file($path));
+
+// ── Exhausted name space: all 100 collision slots taken ───────────────────
+// The refusal must stand (a dropped guard would overwrite the last backup
+// of that second). Runs after the suite's own bundle is gone so sentinels
+// can never clobber it. Clock-race safe: if the second flips mid-probe a
+// real backup is created instead — it is removed and the probe retries.
+$colDone = false;
+for ($colTry = 0; $colTry < 3 && !$colDone; $colTry++) {
+    $colExt = backup_zip_supported() ? 'zip' : (extension_loaded('zlib') ? 'json.gz' : 'json');
+    $colStamp = gmdate('Ymd-His');
+    $colNames = ['backup-' . $colStamp . '.' . $colExt];
+    for ($i = 1; $i < 100; $i++) {
+        $colNames[] = 'backup-' . $colStamp . '-' . $i . '.' . $colExt;
+    }
+    foreach ($colNames as $n) {
+        file_put_contents(backup_dir() . '/' . $n, 'sentinel');
+    }
+    try {
+        $colRes = backup_create($db, $tmpRoot);
+        if (($colRes['ok'] ?? true) === false && ($colRes['code'] ?? '') === 'create_failed') {
+            $colDone = true;
+            T::eq('...leaving the last sentinel intact', 'sentinel',
+                (string)@file_get_contents(backup_dir() . '/' . end($colNames)));
+        } elseif (isset($colRes['file'])) {
+            @unlink(backup_dir() . '/' . $colRes['file']);
+        }
+    } finally {
+        foreach ($colNames as $n) {
+            @unlink(backup_dir() . '/' . $n);
+        }
+    }
+}
+T::ok('exhausted name space refuses (or the clock raced — skipped)', $colDone);
 @unlink($tmpRoot . '/uploads/7/aaa.enc');
 @unlink($tmpRoot . '/uploads/9-bbb.enc');
 @rmdir($tmpRoot . '/uploads/7');

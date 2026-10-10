@@ -137,6 +137,15 @@ T::eq('multihop XFF uses first untrusted from the right', '70.41.3.18', get_clie
 unset($_SERVER['HTTP_X_FORWARDED_FOR']);
 putenv('DDMGMT_TRUST_PROXY');
 
+// Untrusted-peer warning fires exactly once (child process: the warn-once
+// guard is per-process and this process already tripped it above). A
+// dropped negation here would never warn, hiding proxy misconfiguration.
+$warnCmd = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(__DIR__ . '/_net_warn_probe.php');
+$warnOut = json_decode((string)shell_exec($warnCmd), true) ?: [];
+T::eq('untrusted peer answers the peer', '203.0.113.99', $warnOut['r1'] ?? null);
+T::eq('...stably', '203.0.113.99', $warnOut['r2'] ?? null);
+T::eq('...warning exactly once', 1, $warnOut['warns'] ?? -1);
+
 // Budget subject: IPv6 clients count per /64 (one subscriber holds a whole
 // /64); IPv4 and v4-mapped addresses stay exact.
 $_SERVER['REMOTE_ADDR'] = '2001:db8:1:2:aaaa:bbbb:cccc:dddd';

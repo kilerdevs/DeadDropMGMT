@@ -791,4 +791,30 @@ T::ok('zone colour is stable per id', maps_zone_color_index(41) === maps_zone_co
 T::ok('every zone id maps inside the palette',
       count(array_filter(range(1, 200), static fn(int $i): bool => maps_zone_color_index($i) >= 0 && maps_zone_color_index($i) < count($palette))) === 200);
 
+// ── Disk headroom: the 512 MiB reserve is exact, both sides ────────────────
+// A moved constant would either refuse downloads that fit or bless ones
+// that wedge the disk full mid-extract. The literal is pinned, never the
+// constant itself — the constant is what is under test.
+$liveFree = maps_disk_free();
+if ($liveFree > 536870912) {
+    T::ok('exactly fitting need passes', maps_disk_ok($liveFree - 536870912));
+    T::ok('one byte more fails', !maps_disk_ok($liveFree - 536870912 + 1));
+} else {
+    T::ok('disk too tight for the headroom pin — skipped', true);
+}
+
+// ── Fresh-failure cleanup: a download that never started must not leave
+// its empty destination behind (error pages and truncated bodies would
+// poison the next resume).
+if (host_has_curl()) {
+    $residueDest = sys_get_temp_dir() . '/ddmgmt-residue-' . getmypid();
+    @unlink($residueDest);
+    [$resOk] = maps_fetch_file('http://127.0.0.1:9/unreachable', $residueDest, null);
+    T::ok('refused download fails', $resOk === false);
+    T::ok('...leaving no residue file', !is_file($residueDest));
+    @unlink($residueDest);
+} else {
+    T::ok('no cURL here — residue pin skipped', true);
+}
+
 exit(T::done());

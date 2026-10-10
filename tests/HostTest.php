@@ -218,5 +218,11 @@ T::ok('re-enabling routing clears the auto-off notice', str_contains($sav, 'osm_
 $cfg = (string)file_get_contents($root . '/config.php.example');
 T::ok('config.php.example documents the constant alternatives to env vars',
       str_contains($cfg, 'DDMGMT_PSEUDO_CRON') && str_contains($cfg, 'DDMGMT_PROXY_HEAL'));
+// Live probe map answers as one array (a dropped return would hand every
+// consumer null and fail the setup check open).
+$liveEnv = capabilities_live_env();
+T::ok('live env is an array', is_array($liveEnv));
+T::ok('...naming the PHP version', isset($liveEnv['php_version']) && $liveEnv['php_version'] !== '');
+T::ok('...with test overrides winning', capabilities_live_env(['curl' => 'test-seam'])['curl'] === 'test-seam');
 $teardown();
 exit(T::done());

@@ -383,4 +383,150 @@ $bomb = gzencode(str_repeat("\0", PMTILES_DIR_INFLATED_MAX + 1), 9);
 T::ok('gzip bomb directory fails closed', pmtiles_parse_dir((string)$bomb, PMTILES_COMP_GZIP) === null);
 unset($bomb);
 
+// A directory whose offset section is truncated fails closed: the missing
+// vint is corruption, not a zero offset (a weakened arm would file entries
+// at negative offsets and poison the span map).
+$truncEntries = [
+    ['id' => 0, 'len' => 10, 'off' => 100],
+    ['id' => 4, 'len' => 20, 'off' => 110],
+];
+$truncInflated = @gzdecode(pmtiles_dir_encode($truncEntries));
+$truncCut = is_string($truncInflated) ? gzencode(substr($truncInflated, 0, -1), 9) : false;
+T::ok('directory with truncated offsets fails closed',
+    $truncCut !== false && pmtiles_parse_dir($truncCut, PMTILES_COMP_GZIP) === null);
+
+// ── Single-tile archive over a local stub: planner sizing contract ────────
+// A hand-built one-entry archive (header + gzip root + tile bytes) served
+// by php -S, whose static handler honors Range natively.
+$arcTile = 'TILEBYTES!';
+$arcLen = strlen($arcTile);
+$arcRootRaw = pmtiles_dir_encode([['id' => 0, 'run' => 1, 'len' => $arcLen, 'off' => 0]]);
+$arcTileOff = PMTILES_HEADER_LEN + strlen($arcRootRaw);
+$arcHdr = PMTILES_MAGIC . chr(PMTILES_VERSION)
+    . pmtiles_u64le(PMTILES_HEADER_LEN) . pmtiles_u64le(strlen($arcRootRaw))
+    . pmtiles_u64le($arcTileOff) . pmtiles_u64le(0)
+    . pmtiles_u64le(0) . pmtiles_u64le(0)
+    . pmtiles_u64le($arcTileOff) . pmtiles_u64le($arcLen)
+    . pmtiles_u64le(1) . pmtiles_u64le(1) . pmtiles_u64le($arcLen)
+    . chr(1) . chr(PMTILES_COMP_GZIP) . chr(1) . chr(PMTILES_TYPE_MVT)
+    . chr(0) . chr(0)
+    . pmtiles_i32le(-1800000000) . pmtiles_i32le(-850000000)
+    . pmtiles_i32le(1800000000) . pmtiles_i32le(850000000)
+    . chr(0) . pmtiles_i32le(0) . pmtiles_i32le(0);
+$arcDir = sys_get_temp_dir() . '/ddmgmt-arc-' . getmypid();
+@mkdir($arcDir);
+file_put_contents($arcDir . '/one.pmtiles', $arcHdr . $arcRootRaw . $arcTile);
+// php -S ignores Range for static files, so a tiny router answers slices
+// with 206 itself (same pattern as MapsPhpTest's planet stub).
+$arcRouter = $arcDir . '/router.php';
+file_put_contents($arcRouter, <<<'PHP'
+<?php
+$p = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
+if ($p === '/one.pmtiles') {
+    $body = (string)file_get_contents(__DIR__ . '/one.pmtiles');
+    $range = $_SERVER['HTTP_RANGE'] ?? '';
+    if (preg_match('/bytes=(\d+)-(\d*)/', $range, $m)) {
+        $start = (int)$m[1];
+        $end = $m[2] === '' ? strlen($body) - 1 : min((int)$m[2], strlen($body) - 1);
+        if ($start >= strlen($body)) {
+            http_response_code(416);
+            return true;
+        }
+        http_response_code(206);
+        header('Content-Range: bytes ' . $start . '-' . $end . '/' . strlen($body));
+        header('Content-Length: ' . ($end - $start + 1));
+        echo substr($body, $start, $end - $start + 1);
+        return true;
+    }
+    header('Content-Length: ' . strlen($body));
+    echo $body;
+    return true;
+}
+http_response_code(404);
+echo 'not found';
+return true;
+PHP);
+T::eq('hand-built header is exactly 127 bytes', PMTILES_HEADER_LEN, strlen($arcHdr));
+$arcPort = 0;
+$arcProc = null;
+$arcNull = DIRECTORY_SEPARATOR === '\\' ? 'NUL' : '/dev/null';
+for ($t = 0; $t < 10 && $arcPort === 0; $t++) {
+    $cand = 27437 + ((getmypid() + $t * 131) % 200);
+    $probeSock = @fsockopen('127.0.0.1', $cand, $errno, $errstr, 0.2);
+    if (is_resource($probeSock)) {
+        fclose($probeSock);
+        continue;
+    }
+    $try = proc_open(t_exec_cmd(escapeshellarg(PHP_BINARY) . " -S 127.0.0.1:$cand " . escapeshellarg($arcRouter)),
+        [['pipe', 'r'], ['file', $arcNull, 'w'], ['file', $arcNull, 'w']], $pipes);
+    if (!is_resource($try)) {
+        continue;
+    }
+    $ready = false;
+    for ($i = 0; $i < 15; $i++) {
+        $ctx = stream_context_create(['http' => ['timeout' => 2]]);
+        $got = @file_get_contents("http://127.0.0.1:$cand/one.pmtiles", false, $ctx, 0, 8);
+        if ($got === PMTILES_MAGIC . chr(PMTILES_VERSION)) {
+            $ready = true;
+            break;
+        }
+        usleep(50000);
+    }
+    if ($ready) {
+        $arcPort = $cand;
+        $arcProc = $try;
+    } else {
+        if (!empty(proc_get_status($try)['running'])) {
+            if (DIRECTORY_SEPARATOR === '\\') {
+                exec('taskkill /F /T /PID ' . (int)proc_get_status($try)['pid'] . ' >NUL 2>&1');
+            } else {
+                proc_terminate($try);
+            }
+        }
+        proc_close($try);
+    }
+}
+if ($arcPort === 0) {
+    T::ok('stub server unavailable here — planner sizing skipped', true);
+} else {
+    register_shutdown_function(static function () use ($arcProc, $arcDir): void {
+        if (is_resource($arcProc) && !empty(proc_get_status($arcProc)['running'])) {
+            if (DIRECTORY_SEPARATOR === '\\') {
+                exec('taskkill /F /T /PID ' . (int)proc_get_status($arcProc)['pid'] . ' >NUL 2>&1');
+            } else {
+                proc_terminate($arcProc);
+            }
+        }
+        if (is_resource($arcProc)) {
+            proc_close($arcProc);
+        }
+        @unlink($arcDir . '/router.php');
+        @unlink($arcDir . '/one.pmtiles');
+        @rmdir($arcDir);
+    });
+    $arcUrl = "http://127.0.0.1:$arcPort/one.pmtiles";
+    [$arcPlan, $arcErr] = pmtiles_build_plan($arcUrl, null, -180.0, -85.0, 180.0, 85.0, 0);
+    T::eq('single-tile plan builds', '', $arcErr);
+    T::ok('...with a plan', $arcPlan !== null);
+    if (is_array($arcPlan)) {
+        // Sizing is exact: header + 8 bytes per entry + the fixed directory
+        // allowance + metadata + tile bytes (a moved constant here would
+        // under-reserve the disk and wedge mid-extract).
+        $arcData = 0;
+        foreach ($arcPlan['entries'] as $en) {
+            $arcData += $en[2];
+        }
+        T::eq('plan sizing is exact',
+            PMTILES_HEADER_LEN + count($arcPlan['entries']) * 8 + 256
+                + strlen((string)base64_decode((string)$arcPlan['meta'])) + $arcData,
+            $arcPlan['expected'] ?? null);
+        // An expired deadline aborts the walk before the first entry, never
+        // after resolving it (a weakened check would fetch on a dead budget).
+        [$tPlan, $tErr] = pmtiles_build_plan($arcUrl, null, -180.0, -85.0, 180.0, 85.0, 0,
+            60, [], microtime(true) - 1.0);
+        T::eq('expired deadline times out', 'sizing timed out', $tErr);
+        T::ok('...with no plan', $tPlan === null);
+    }
+}
+
 exit(T::done());

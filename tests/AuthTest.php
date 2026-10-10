@@ -122,6 +122,14 @@ $_POST = [];
 T::eq('missing enrollment secret fails', 'fail', admin_login('t_auth_pending', ''));
 T::eq('non-empty password on unclaimed account fails', 'fail', admin_login('t_auth_pending', 'whatever'));
 
+// A non-empty password is rejected even WITH a valid enrollment secret:
+// the claim credential is the secret alone (a flipped conjunction here
+// would arm setup for password+secret combos).
+$_SESSION = [];
+$_POST = ['enrollment' => 'ENROLL-CODE-123'];
+T::eq('password with valid secret still fails', 'fail', admin_login('t_auth_pending', 'whatever'));
+T::ok('...leaving no pending setup', empty($_SESSION['pending_setup_user_id']));
+
 $_POST = ['enrollment' => 'ENROLL-CODE-123'];
 T::eq('valid enrollment secret arms setup', 'need_setup', admin_login('t_auth_pending', ''));
 T::eq('pending setup user recorded', $pendingId, (int)$_SESSION['pending_setup_user_id']);
