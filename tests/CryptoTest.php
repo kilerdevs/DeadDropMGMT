@@ -142,13 +142,15 @@ $list = $w[1];
 T::eq('word list is exactly 256 words', 256, count($list));
 T::eq('word list has no duplicates', 256, count(array_unique($list)));
 // Every dictionary word is reachable: a range starting at 1 would silently
-// drop the first word (asserted over 1000 draws — 6000 picks — so a missing
-// word fails deterministically, not statistically).
+// drop the first word (asserted over 1000 draws — 6000 picks across all six
+// word slots — so a missing word fails deterministically, not statistically).
 $wordsSeen = [];
 for ($i = 0; $i < 1000; $i++) {
     $ppw = generate_passphrase();
-    if (preg_match('/^([A-Z][a-z]+)/', $ppw, $wm)) {
-        $wordsSeen[strtolower($wm[1])] = true;
+    if (preg_match_all('/[A-Z][a-z]+/', $ppw, $wm)) {
+        foreach ($wm[0] as $w) {
+            $wordsSeen[strtolower($w)] = true;
+        }
     }
 }
 T::ok('first dictionary word reachable', isset($wordsSeen[$list[0]]));
