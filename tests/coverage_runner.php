@@ -32,6 +32,14 @@ require_once dirname(__DIR__) . '/vendor/autoload.php';
 define('T_INPROCESS', 1);
 require_once __DIR__ . '/bootstrap.php';
 
+// Single-process collector: 52 suites share one CPU budget, so any
+// inherited limit (CI production ini: 30 s) or leaked one (production
+// under test calls set_time_limit()) would kill the run cumulatively
+// mid-suite. There is no per-suite timeout to preserve — the CI job
+// timeout still guards real hangs — so neutralize it here and re-assert
+// it for every suite below.
+@set_time_limit(0);
+
 $filter = new Filter();
 // php-code-coverage 11.0.12 removed includeDirectory() — enumerate the
 // library files explicitly. composer.json pins this exact version so the
@@ -51,13 +59,18 @@ $coverages = [];
 $suiteOutput = [];
 
 foreach ($files as $file) {
+    // Re-asserted per suite: code under test leaks concrete limits.
+    @set_time_limit(0);
     ob_start();
     echo '=== ' . basename($file) . " ===\n";
     T::$pass = T::$fail = 0;
     T::$messages = [];
-    $cc = $makeCoverage();
-    $cc->start(basename($file));
+    // $__cc (not $cc): file scope is shared in-process and suites reuse
+    // short names — UploadHardeningTest sets $cc to a color index, which
+    // used to turn $cc->stop() into a fatal that killed collection silent.
+    $__cc = $makeCoverage();
     try {
+        $__cc->start(basename($file));
         include $file;
         // a suite that returns instead of calling T::done() still exits via exit()
     } catch (TExitSignal $sig) {
@@ -67,8 +80,21 @@ foreach ($files as $file) {
         if ($sig->exitCode !== 0 && T::$fail === 0) {
             $totalFail++;
         }
+    } catch (Throwable $e) {
+        // An uncaught throwable must fail its suite visibly, never kill
+        // collection silently: the kernel CLI handler answers any escaped
+        // Throwable with a bare "Fatal error" plus exit(1), discarding all
+        // buffered suite output and the report. Buffered (not STDERR) so
+        // later suites' session handling stays intact.
+        T::$fail++;
+        echo 'SUITE THROW ' . get_class($e) . ': ' . substr($e->getMessage(), 0, 300) . "\n";
     }
-    $cc->stop();
+    try {
+        $__cc->stop();
+    } catch (Throwable $e) {
+        T::$fail++;
+        echo 'COVERAGE STOP THROW ' . get_class($e) . ': ' . substr($e->getMessage(), 0, 300) . "\n";
+    }
     // Buffer and hold EVERY suite output: once anything flushes, PHP considers
     // headers sent and the next suite's session_start() fatals (15 suites of
     // banners eventually overflow the default output buffer). Everything is
@@ -76,7 +102,7 @@ foreach ($files as $file) {
     $suiteOutput[] = ob_get_clean();
     $totalPass += T::$pass;
     $totalFail += T::$fail;
-    $coverages[] = $cc;
+    $coverages[] = $__cc;
 }
 
 echo implode('', $suiteOutput);
