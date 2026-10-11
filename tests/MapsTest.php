@@ -791,7 +791,225 @@ T::ok('zone colour is stable per id', maps_zone_color_index(41) === maps_zone_co
 T::ok('every zone id maps inside the palette',
       count(array_filter(range(1, 200), static fn(int $i): bool => maps_zone_color_index($i) >= 0 && maps_zone_color_index($i) < count($palette))) === 200);
 
-// ── Disk headroom: the 512 MiB reserve is exact, both sides ────────────────
+// ── Zone retry: only failed rows re-queue ─────────────────────────────────
+// A dropped rowCount guard here would report success for zones that never
+// moved (and burn their sidecars behind the owner's back).
+[$retryId] = maps_zone_add('Retry Pin Zone', 20.85, 52.05, 21.30, 52.40, 14, false);
+$db->prepare("UPDATE map_zones SET status = 'failed', error = 'code:stalled' WHERE id = ?")->execute([$retryId]);
+T::ok('failed zone retries', maps_zone_retry((int)$retryId));
+T::eq('retry resets to queued', 'queued',
+    $db->query('SELECT status FROM map_zones WHERE id = ' . (int)$retryId)->fetchColumn());
+T::ok('queued zone does not retry', !maps_zone_retry((int)$retryId));
+T::ok('retry rejects bad ids', !maps_zone_retry(0) && !maps_zone_retry(999999999));
+$db->prepare('DELETE FROM map_zones WHERE id = ?')->execute([$retryId]);
+
+// ── Failed writes refuse loudly, never as success ──────────────────────────
+// A dropped error return here would publish a broken import as ready (the
+// UPDATE is forced to throw with a probe trigger — the only hermetic fault
+// injector for a single statement).
+[$importId] = maps_zone_add('Import Probe Zone', 20.85, 52.05, 21.30, 52.40, 14, false);
+$db->prepare("UPDATE map_zones SET status = 'failed', error = 'code:stalled' WHERE id = ?")->execute([$importId]);
+[$iPlan, $iTiles, $iPart, $iFinal] = maps_zone_workspace((int)$importId);
+$impTile = 'IMPORTTILE';
+$impRoot = pmtiles_dir_encode([['id' => 0, 'run' => 1, 'len' => strlen($impTile), 'off' => 0]]);
+$impOff = PMTILES_HEADER_LEN + strlen($impRoot);
+$impHdr = PMTILES_MAGIC . chr(PMTILES_VERSION)
+    . pmtiles_u64le(PMTILES_HEADER_LEN) . pmtiles_u64le(strlen($impRoot))
+    . pmtiles_u64le($impOff) . pmtiles_u64le(0)
+    . pmtiles_u64le(0) . pmtiles_u64le(0)
+    . pmtiles_u64le($impOff) . pmtiles_u64le(strlen($impTile))
+    . pmtiles_u64le(1) . pmtiles_u64le(1) . pmtiles_u64le(strlen($impTile))
+    . chr(1) . chr(PMTILES_COMP_GZIP) . chr(1) . chr(PMTILES_TYPE_MVT)
+    . chr(0) . chr(0)
+    . pmtiles_i32le(-1800000000) . pmtiles_i32le(-850000000)
+    . pmtiles_i32le(1800000000) . pmtiles_i32le(850000000)
+    . chr(0) . pmtiles_i32le(0) . pmtiles_i32le(0);
+file_put_contents($iPart, $impHdr . $impRoot . $impTile);
+$db->exec('DROP TRIGGER IF EXISTS maps_import_probe_trg');
+$db->exec("CREATE TRIGGER maps_import_probe_trg BEFORE UPDATE ON map_zones FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'probe'");
+try {
+    T::eq('failed write refuses loudly', t('admin.maps.err.save_failed'), maps_zone_import_file((int)$importId));
+} finally {
+    $db->exec('DROP TRIGGER IF EXISTS maps_import_probe_trg');
+    @unlink($iFinal);
+    @unlink($iPart);
+    $db->prepare('DELETE FROM map_zones WHERE id = ?')->execute([$importId]);
+}
+
+// ── Poll slice respects its 8 s box ───────────────────────────────────────
+// A zeroed budget here would run the slice unbounded (a dropped bound only
+// shows on jobs longer than the box, so the stub drips ranges slowly).
+$slowDir = sys_get_temp_dir() . '/ddmgmt-slow-' . getmypid();
+@mkdir($slowDir);
+// Two UNMERGED leaf directories (gap past MERGE_GAP) so sizing needs four
+// slow range fetches: header, root, leaf, leaf — the box bites mid-sizing.
+$slowLeaf1 = pmtiles_dir_encode([['id' => 0, 'run' => 1, 'len' => 5, 'off' => 0]]);
+$slowLl1 = strlen($slowLeaf1);
+$slowOff2 = $slowLl1 + PMTILES_MERGE_GAP + 100;
+$slowLeaf2 = pmtiles_dir_encode([['id' => 1, 'run' => 1, 'len' => 5, 'off' => 5]]);
+$slowLl2 = strlen($slowLeaf2);
+$slowRoot = pmtiles_dir_encode([
+    ['id' => 0, 'run' => 0, 'len' => $slowLl1, 'off' => 0],
+    ['id' => 1, 'run' => 0, 'len' => $slowLl2, 'off' => $slowOff2],
+    ['id' => 2, 'run' => 1, 'len' => 5, 'off' => 100],
+    ['id' => 3, 'run' => 1, 'len' => 5, 'off' => 105],
+    ['id' => 4, 'run' => 1, 'len' => 5, 'off' => 110],
+]);
+$slowLeafBase = PMTILES_HEADER_LEN + strlen($slowRoot);
+$slowLeafSection = $slowLeaf1 . str_repeat("\0", $slowOff2 - $slowLl1) . $slowLeaf2;
+$slowTileBase = $slowLeafBase + strlen($slowLeafSection);
+$slowTiles = str_repeat('S', 115);
+$slowHdr = PMTILES_MAGIC . chr(PMTILES_VERSION)
+    . pmtiles_u64le(PMTILES_HEADER_LEN) . pmtiles_u64le(strlen($slowRoot))
+    . pmtiles_u64le($slowTileBase) . pmtiles_u64le(0)
+    . pmtiles_u64le($slowLeafBase) . pmtiles_u64le(0)
+    . pmtiles_u64le($slowTileBase) . pmtiles_u64le(strlen($slowTiles))
+    . pmtiles_u64le(5) . pmtiles_u64le(5) . pmtiles_u64le(strlen($slowTiles))
+    . chr(1) . chr(PMTILES_COMP_GZIP) . chr(1) . chr(PMTILES_TYPE_MVT)
+    . chr(0) . chr(1)
+    . pmtiles_i32le(-1800000000) . pmtiles_i32le(-850000000)
+    . pmtiles_i32le(1800000000) . pmtiles_i32le(850000000)
+    . chr(0) . pmtiles_i32le(0) . pmtiles_i32le(0);
+file_put_contents($slowDir . '/slow.pmtiles', $slowHdr . $slowRoot . $slowLeafSection . $slowTiles);
+file_put_contents($slowDir . '/router.php',
+    '<?php $p = parse_url($_SERVER["REQUEST_URI"] ?? "/", PHP_URL_PATH);'
+    . ' if ($p === "/slow.pmtiles") { usleep(3000000);'
+    . ' $body = (string)file_get_contents(__DIR__ . "/slow.pmtiles");'
+    . ' $range = $_SERVER["HTTP_RANGE"] ?? "";'
+    . ' if (preg_match("/bytes=(\\d+)-(\\d*)/", $range, $m)) {'
+    . ' $start = (int)$m[1];'
+    . ' $end = $m[2] === "" ? strlen($body) - 1 : min((int)$m[2], strlen($body) - 1);'
+    . ' if ($start >= strlen($body)) { http_response_code(416); return true; }'
+    . ' http_response_code(206);'
+    . ' header("Content-Range: bytes " . $start . "-" . $end . "/" . strlen($body));'
+    . ' header("Content-Length: " . ($end - $start + 1));'
+    . ' echo substr($body, $start, $end - $start + 1); return true; }'
+    . ' header("Content-Length: " . strlen($body)); echo $body; return true; }'
+    . ' http_response_code(404); echo "not found"; return true;');
+$slowPort = 0;
+$slowProc = null;
+$slowNull = DIRECTORY_SEPARATOR === '\\' ? 'NUL' : '/dev/null';
+for ($t = 0; $t < 10 && $slowPort === 0; $t++) {
+    $cand = 30337 + ((getmypid() + $t * 131) % 200);
+    $probeSock = @fsockopen('127.0.0.1', $cand, $errno, $errstr, 0.2);
+    if (is_resource($probeSock)) {
+        fclose($probeSock);
+        continue;
+    }
+    $try = proc_open(t_exec_cmd(escapeshellarg(PHP_BINARY) . " -S 127.0.0.1:$cand " . escapeshellarg($slowDir . '/router.php')),
+        [['pipe', 'r'], ['file', $slowNull, 'w'], ['file', $slowNull, 'w']], $pipes);
+    if (!is_resource($try)) {
+        continue;
+    }
+    $ready = false;
+    for ($i = 0; $i < 15; $i++) {
+        $ctx = stream_context_create(['http' => ['timeout' => 5]]);
+        $got = @file_get_contents("http://127.0.0.1:$cand/slow.pmtiles", false, $ctx, 0, 8);
+        if ($got === PMTILES_MAGIC . chr(PMTILES_VERSION)) {
+            $ready = true;
+            break;
+        }
+        usleep(50000);
+    }
+    if ($ready) {
+        $slowPort = $cand;
+        $slowProc = $try;
+    } else {
+        if (!empty(proc_get_status($try)['running'])) {
+            if (DIRECTORY_SEPARATOR === '\\') {
+                exec('taskkill /F /T /PID ' . (int)proc_get_status($try)['pid'] . ' >NUL 2>&1');
+            } else {
+                proc_terminate($try);
+            }
+        }
+        proc_close($try);
+    }
+}
+if ($slowPort === 0) {
+    T::ok('stub server unavailable here — slice box skipped', true);
+} else {
+    // Sanity first: the stub serves a plannable archive (a broken stub
+    // must skip, never fake a bound).
+    [$slowPlan] = pmtiles_build_plan("http://127.0.0.1:$slowPort/slow.pmtiles", null, -180.0, -85.0, 180.0, 85.0, 1);
+    if ($slowPlan === null) {
+        T::ok('stub planet unplannable here — slice box skipped', true);
+    } else {
+        $prevEngine = getenv('DDMGMT_MAPS_ENGINE');
+        $prevPlanet = getenv('DDMGMT_MAPS_PLANET_URL');
+        $prevKickRow = $db->query("SELECT value FROM settings WHERE key_name = 'maps_worker_kick' LIMIT 1")->fetchColumn();
+        $prevKick = $prevKickRow === false ? null : (string)$prevKickRow;
+        $prevBKeyRow = $db->query("SELECT value FROM settings WHERE key_name = 'maps_build_key' LIMIT 1")->fetchColumn();
+        $prevBKey = $prevBKeyRow === false ? null : (string)$prevBKeyRow;
+        $prevBAtRow = $db->query("SELECT value FROM settings WHERE key_name = 'maps_build_at' LIMIT 1")->fetchColumn();
+        $prevBAt = $prevBAtRow === false ? null : (string)$prevBAtRow;
+        putenv('DDMGMT_MAPS_ENGINE=php');
+        putenv('DDMGMT_MAPS_PLANET_URL=http://127.0.0.1:' . $slowPort . '/slow.pmtiles');
+        set_setting('maps_build_key', 'slowtest');
+        set_setting('maps_build_at', (string)time());
+        set_setting('maps_worker_kick', '1');
+        $db->exec("DELETE FROM settings WHERE key_name = 'maps_worker_lock'");
+        // Raw INSERT: maps_zone_add() only offers z14/z15, but the slice
+        // takes any zoom (the synthetic planet is z0/z1).
+        $db->prepare(
+            'INSERT INTO map_zones (name, min_lon, min_lat, max_lon, max_lat, maxzoom, via_proxy, status)
+             VALUES (?, ?, ?, ?, ?, ?, 0, ?)'
+        )->execute(['Slow Slice Zone', -180.0, -85.0, 180.0, 85.0, 1, 'queued']);
+        $slowId = (int)$db->lastInsertId();
+        try {
+            maps_php_poll_slice();
+            $slowRow = maps_zone_get((int)$slowId);
+            $slowSt = is_array($slowRow) ? ($slowRow['status'] ?? null) : null;
+            T::eq('bounded slice yields mid-sizing', 'sizing', $slowSt);
+        } finally {
+            if ($prevEngine === false) {
+                putenv('DDMGMT_MAPS_ENGINE');
+            } else {
+                putenv('DDMGMT_MAPS_ENGINE=' . $prevEngine);
+            }
+            if ($prevPlanet === false) {
+                putenv('DDMGMT_MAPS_PLANET_URL');
+            } else {
+                putenv('DDMGMT_MAPS_PLANET_URL=' . $prevPlanet);
+            }
+            if ($prevKick === null) {
+                $db->exec("DELETE FROM settings WHERE key_name = 'maps_worker_kick'");
+            } else {
+                set_setting('maps_worker_kick', $prevKick);
+            }
+            if ($prevBKey === null) {
+                $db->exec("DELETE FROM settings WHERE key_name = 'maps_build_key'");
+            } else {
+                set_setting('maps_build_key', $prevBKey);
+            }
+            if ($prevBAt === null) {
+                $db->exec("DELETE FROM settings WHERE key_name = 'maps_build_at'");
+            } else {
+                set_setting('maps_build_at', $prevBAt);
+            }
+            $db->exec("DELETE FROM settings WHERE key_name = 'maps_worker_lock'");
+            [$sPlan, $sTiles] = maps_zone_workspace((int)$slowId);
+            @unlink(maps_zone_path((int)$slowId));
+            @unlink(maps_zone_path((int)$slowId, true));
+            @unlink($sPlan);
+            @unlink($sPlan . '.leaves');
+            @unlink($sTiles);
+            $db->prepare('DELETE FROM map_zones WHERE id = ?')->execute([$slowId]);
+        }
+    }
+    if (!empty(proc_get_status($slowProc)['running'])) {
+        if (DIRECTORY_SEPARATOR === '\\') {
+            exec('taskkill /F /T /PID ' . (int)proc_get_status($slowProc)['pid'] . ' >NUL 2>&1');
+        } else {
+            proc_terminate($slowProc);
+        }
+    }
+    if (is_resource($slowProc)) {
+        proc_close($slowProc);
+    }
+    @unlink($slowDir . '/router.php');
+    @unlink($slowDir . '/slow.pmtiles');
+    @rmdir($slowDir);
+}
 // A moved constant would either refuse downloads that fit or bless ones
 // that wedge the disk full mid-extract. The literal is pinned, never the
 // constant itself — the constant is what is under test.

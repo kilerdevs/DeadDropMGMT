@@ -23,6 +23,13 @@ T::ok('tampered ciphertext rejected', decrypt_location(base64_encode($bad), $enc
 $bad2 = $raw; $last = strlen($bad2) - 1; $bad2[$last] = $bad2[$last] ^ "\x01";
 T::ok('tampered auth tag rejected', decrypt_location(base64_encode($bad2), $enc['iv']) === false);
 
+// Row-bound values open only with their identity: the claim credential is
+// the row id (a dropped prefix check would decrypt bound rows unbound).
+$bound = encrypt_location($plain, 'row-7');
+T::ok('bound value opens with its identity', decrypt_location($bound['ciphertext'], $bound['iv'], 'row-7') === $plain);
+T::ok('...never without it', decrypt_location($bound['ciphertext'], $bound['iv']) === false);
+T::ok('...nor with another identity', decrypt_location($bound['ciphertext'], $bound['iv'], 'row-8') === false);
+
 // Truncated payload / garbage inputs
 T::ok('truncated tag rejected', decrypt_location(base64_encode(substr($raw, 0, -1)), $enc['iv']) === false);
 T::ok('too-short payload rejected', decrypt_location(base64_encode('abc'), $enc['iv']) === false);

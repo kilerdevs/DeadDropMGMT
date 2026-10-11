@@ -375,7 +375,20 @@ T::eq('lookup inside run hits', $runRoot[0], pmtiles_lookup_id($runRoot, $fetch,
 T::eq('lookup run last id hits', $runRoot[0], pmtiles_lookup_id($runRoot, $fetch, 7));
 T::ok('lookup past run misses', pmtiles_lookup_id($runRoot, $fetch, 8) === null);
 
-// Hostile-upstream bounds: an absurd entry count or a gzip bomb fails
+// ── Range classifier edges: exact-length bodies pass ───────────────────────
+// A tightened comparison here would reject full-length origins and force
+// every download down the resume path (or fail it).
+T::eq('exact-length 200 body passes',
+    ['0123456789', ''], pmtiles_classify_range(200, '0123456789', 0, 10));
+T::eq('longer 200 body truncates to length',
+    ['0123456789', ''], pmtiles_classify_range(200, '0123456789ABC', 0, 10));
+
+// ── Covering count includes the top zoom level ─────────────────────────────
+// A dropped level here would under-size every plan (and the OOM guard).
+T::eq('world at z0 is one tile', 1, pmtiles_covering_count(-180.0, -85.0, 180.0, 85.0, 0));
+T::ok('world at z1 exceeds z0', pmtiles_covering_count(-180.0, -85.0, 180.0, 85.0, 1) > 1);
+
+// ── Hostile-upstream bounds: an absurd entry count or a gzip bomb fails
 // closed instead of exhausting memory.
 T::ok('directory claiming too many entries fails closed',
       pmtiles_parse_dir(pmtiles_vint_encode(PMTILES_DIR_ENTRIES_MAX + 1), PMTILES_COMP_NONE) === null);
@@ -422,9 +435,10 @@ $arcRouter = $arcDir . '/router.php';
 file_put_contents($arcRouter, <<<'PHP'
 <?php
 $p = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
-if ($p === '/one.pmtiles') {
-    $body = (string)file_get_contents(__DIR__ . '/one.pmtiles');
+if ($p === '/one.pmtiles' || $p === '/two.pmtiles') {
+    $body = (string)file_get_contents(__DIR__ . $p);
     $range = $_SERVER['HTTP_RANGE'] ?? '';
+    file_put_contents(__DIR__ . '/ranges.log', $p . ' ' . ($range !== '' ? $range : 'full') . "\n", FILE_APPEND);
     if (preg_match('/bytes=(\d+)-(\d*)/', $range, $m)) {
         $start = (int)$m[1];
         $end = $m[2] === '' ? strlen($body) - 1 : min((int)$m[2], strlen($body) - 1);
@@ -502,6 +516,8 @@ if ($arcPort === 0) {
         }
         @unlink($arcDir . '/router.php');
         @unlink($arcDir . '/one.pmtiles');
+        @unlink($arcDir . '/two.pmtiles');
+        @unlink($arcDir . '/ranges.log');
         @rmdir($arcDir);
     });
     $arcUrl = "http://127.0.0.1:$arcPort/one.pmtiles";
@@ -527,6 +543,78 @@ if ($arcPort === 0) {
         T::eq('expired deadline times out', 'sizing timed out', $tErr);
         T::ok('...with no plan', $tPlan === null);
     }
+
+    // ── Leaf archives: merge gap, corrupt leaves, warm recovery ──────────
+    // Two leaf directories exactly MERGE_GAP apart must fetch as one range
+    // (a tightened bound would double the requests on clustered planets).
+    $leaf1raw = pmtiles_dir_encode([['id' => 0, 'run' => 1, 'len' => 5, 'off' => 0]]);
+    $ll1 = strlen($leaf1raw);
+    $off2 = $ll1 + PMTILES_MERGE_GAP; // gap to the previous end is exactly the bound
+    $leaf2raw = pmtiles_dir_encode([['id' => 1, 'run' => 1, 'len' => 5, 'off' => 5]]);
+    $ll2 = strlen($leaf2raw);
+    $leafRoot = pmtiles_dir_encode([
+        ['id' => 0, 'run' => 0, 'len' => $ll1, 'off' => 0],
+        ['id' => 1, 'run' => 0, 'len' => $ll2, 'off' => $off2],
+        ['id' => 2, 'run' => 1, 'len' => 5, 'off' => 10],
+        ['id' => 3, 'run' => 1, 'len' => 5, 'off' => 15],
+        ['id' => 4, 'run' => 1, 'len' => 5, 'off' => 20],
+    ]);
+    $leafBase = PMTILES_HEADER_LEN + strlen($leafRoot);
+    $leafSection = $leaf1raw . str_repeat("\0", $off2 - $ll1) . $leaf2raw;
+    $tileBase = $leafBase + strlen($leafSection);
+    $leafTiles = 'TILESDATA0123456789012345';
+    $leafHdr = PMTILES_MAGIC . chr(PMTILES_VERSION)
+        . pmtiles_u64le(PMTILES_HEADER_LEN) . pmtiles_u64le(strlen($leafRoot))
+        . pmtiles_u64le($tileBase) . pmtiles_u64le(0)
+        . pmtiles_u64le($leafBase) . pmtiles_u64le(0)
+        . pmtiles_u64le($tileBase) . pmtiles_u64le(strlen($leafTiles))
+        . pmtiles_u64le(5) . pmtiles_u64le(5) . pmtiles_u64le(strlen($leafTiles))
+        . chr(1) . chr(PMTILES_COMP_GZIP) . chr(1) . chr(PMTILES_TYPE_MVT)
+        . chr(0) . chr(1)
+        . pmtiles_i32le(-1800000000) . pmtiles_i32le(-850000000)
+        . pmtiles_i32le(1800000000) . pmtiles_i32le(850000000)
+        . chr(0) . pmtiles_i32le(0) . pmtiles_i32le(0);
+    file_put_contents($arcDir . '/one.pmtiles', $leafHdr . $leafRoot . $leafSection . $leafTiles);
+    // A one-leaf archive with garbage leaf bytes (for the corrupt arms).
+    $badRoot = pmtiles_dir_encode([['id' => 0, 'run' => 0, 'len' => 8, 'off' => 0]]);
+    $badBase = PMTILES_HEADER_LEN + strlen($badRoot);
+    $badHdr = PMTILES_MAGIC . chr(PMTILES_VERSION)
+        . pmtiles_u64le(PMTILES_HEADER_LEN) . pmtiles_u64le(strlen($badRoot))
+        . pmtiles_u64le($badBase + 8) . pmtiles_u64le(0)
+        . pmtiles_u64le($badBase) . pmtiles_u64le(0)
+        . pmtiles_u64le($badBase + 8) . pmtiles_u64le(10)
+        . pmtiles_u64le(1) . pmtiles_u64le(1) . pmtiles_u64le(10)
+        . chr(1) . chr(PMTILES_COMP_GZIP) . chr(1) . chr(PMTILES_TYPE_MVT)
+        . chr(0) . chr(0)
+        . pmtiles_i32le(-1800000000) . pmtiles_i32le(-850000000)
+        . pmtiles_i32le(1800000000) . pmtiles_i32le(850000000)
+        . chr(0) . pmtiles_i32le(0) . pmtiles_i32le(0);
+    file_put_contents($arcDir . '/two.pmtiles', $badHdr . $badRoot . 'GARBAGE!' . 'TILESBYTES');
+    @unlink($arcDir . '/ranges.log');
+    $leafUrl = "http://127.0.0.1:$arcPort/one.pmtiles";
+    [$leafPlan, $leafErr] = pmtiles_build_plan($leafUrl, null, -180.0, -85.0, 180.0, 85.0, 1);
+    T::eq('leaf plan builds', '', $leafErr);
+    T::ok('...with a plan', $leafPlan !== null);
+    $leafRanges = 0;
+    foreach (file($arcDir . '/ranges.log', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $rl) {
+        if (preg_match('{one\.pmtiles bytes=(\d+)-}', $rl, $rm)
+            && (int)$rm[1] >= $leafBase && (int)$rm[1] < $leafBase + $off2 + $ll2) {
+            $leafRanges++;
+        }
+    }
+    T::eq('gap-exact leaves merge into one range', 1, $leafRanges);
+    // A corrupt upstream leaf fails the plan (a dropped null check would
+    // file entries at negative offsets and poison the span map).
+    [$badPlan, $badErr] = pmtiles_build_plan(
+        "http://127.0.0.1:$arcPort/two.pmtiles", null, -180.0, -85.0, 180.0, 85.0, 0);
+    T::eq('corrupt leaf fails closed', 'bad leaf directory', $badErr);
+    T::ok('...with no plan', $badPlan === null);
+    // A corrupt sidecar entry is refetched from upstream, not fatal (a
+    // dropped recovery arm would fail a resumable plan).
+    [$warmPlan, $warmErr] = pmtiles_build_plan($leafUrl, null, -180.0, -85.0, 180.0, 85.0, 1,
+        60, ['0:' . $ll1 => 'GARBAGE']);
+    T::eq('warm corruption recovers from upstream', '', $warmErr);
+    T::ok('...with a plan', $warmPlan !== null);
 }
 
 exit(T::done());

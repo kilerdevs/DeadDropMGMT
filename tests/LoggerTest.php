@@ -142,6 +142,38 @@ write_chain($p, [$r1, $r2, $rec]);
 [$valid] = verify_log_chain($p);
 T::ok('legacy-HMAC entry still verifies', $valid === true);
 
+// A legacy (unsequenced) tip links forward, never restarts at genesis: a
+// weakened freshness check here would anchor the new entry at GENESIS and
+// fork the chain instead of continuing it.
+$liveLegacy = APP_LOG_PATH;
+$keepLegacy = file_get_contents($liveLegacy);
+// A rotated generation would force continuation from its tip: park it so
+// the legacy-genesis link is what gets verified.
+$rotLegacy = $liveLegacy . '.1';
+$keepRot = is_file($rotLegacy) ? file_get_contents($rotLegacy) : null;
+if ($keepRot !== null) {
+    @unlink($rotLegacy);
+}
+try {
+    $legRec = ['ts' => '2026-01-01T00:00:00.000Z', 'level' => 'info', 'event' => 'legacy_probe', 'msg' => 'gen one', 'prev' => APP_LOG_GENESIS];
+    $legPayload = json_encode($legRec, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    $legRec['hash'] = hash_hmac('sha256', (string)$legPayload, _log_key_legacy());
+    file_put_contents($liveLegacy, json_encode($legRec, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n");
+    app_log('info', 'legacy_probe_two', ['msg' => 'gen two']);
+    $legLines = file($liveLegacy, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+    $legSecond = json_decode((string)end($legLines), true);
+    T::ok('legacy tip continues the chain',
+        is_array($legSecond) && ($legSecond['prev'] ?? null) === ($legRec['hash'] ?? null));
+    T::eq('continued chain verifies', [true, 2, null, null], verify_log_chain($liveLegacy));
+} finally {
+    file_put_contents($liveLegacy, (string)$keepLegacy);
+    if ($keepRot !== null) {
+        file_put_contents($rotLegacy, $keepRot);
+    } else {
+        @unlink($rotLegacy);
+    }
+}
+
 // The legacy key is 32 BINARY bytes (raw_output), not 64 hex chars: history
 // written by older releases verifies only under the exact same bytes, so the
 // format is pinned, not just round-tripped.

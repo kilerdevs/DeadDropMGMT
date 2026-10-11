@@ -132,7 +132,12 @@ $mg_equiv = [
     // proven: survives even targeted runs).
     'crypto.php' => [319 => ['if-false' => 'guard subsumed by typed decrypt + null arms'],
                      869 => ['cmp-bound' => 'scale-floor edge hit with probability zero'],
-                     157 => ['if-false' => 'short-payload arm converges via openssl false']],
+                     157 => ['if-false' => 'short-payload arm converges via openssl false'],
+                     // open_payload()'s short-payload arm converges the same
+                     // way: short/invalid input re-fails inside
+                     // openssl_decrypt (false on short tags, silent
+                     // coercions, no warnings — verified empirically).
+                     439 => ['return-del' => 'short-payload arm converges via openssl false']],
     // log_tail_lines() normalizes both arms identically: an empty file reads
     // as '' (filtered to [] with cut=false), a missing file fails fopen —
     // the early return only skips work (LoggerTest 'empty file' passes both
@@ -149,13 +154,20 @@ $mg_equiv = [
     // map_zones rows arrive via PDO FETCH_ASSOC: fetchAll() elements are
     // always arrays, so the non-array arm is unreachable without changing
     // the fetch mode.
+    // ERROR_LOG_PATH is defined by config.php and its example alike: the
+    // undefined arm never runs on any supported install.
     'diagnostics.php' => [323 => ['if-false' => 'PDO fetchAll elements always arrays'],
+                          183 => ['if-false' => 'ERROR_LOG_PATH always defined'],
     // Same proof for the proxy-pool loop two dozen lines down: only the
     // tracked maximum is stored, and a tied maximum writes the same number.
-                          340 => ['if-false' => 'PDO fetchAll elements always arrays'],
+                           340 => ['if-false' => 'PDO fetchAll elements always arrays'],
     // `>` vs `>=` on the running maximum is unobservable: a tie writes the
     // identical value it would have kept.
                            349 => ['cmp-bound' => 'max-tracking tie writes the same value'],
+    // The stat-cache clear scope is unobservable: stale-entry probes refresh
+    // identically whether the realpath cache is cleared with it or not
+    // (verified empirically — both arms re-stat on next access).
+                           488 => ['bool-lit' => 'stat-cache clear scope unobservable'],
     // window_start is NOT NULL DATETIME: PDO always fetches a string and
     // strtotime is total over storable values (valid dates, plus the
     // zero-date which maps to the year-0 epoch), so the false arm is
@@ -291,7 +303,13 @@ $mg_equiv = [
                     // The select timeout granularity (full vs truncated
                     // microsecond) needs sub-second timing races no
                     // deterministic suite can straddle.
-                    411 => ['int-lit' => 'select precision needs timing races']],
+                    411 => ['int-lit' => 'select precision needs timing races'],
+                    // Same proof for the two read-loop granularity sites:
+                    // data already present returns at once under both, none
+                    // present misses identically; only a sub-second arrival
+                    // race could tell them apart.
+                    782 => ['int-lit' => 'select precision needs timing races'],
+                    430 => ['int-lit' => 'select precision needs timing races']],
     // Pseudo-cron may only run under a web SAPI: fast suites always run as
     // CLI, where the SAPI arm decides alone and the flag default is dead.
     'cleanup.php' => [204 => ['bool-lit' => 'SAPI-gated, fast suites always CLI']],

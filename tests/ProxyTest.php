@@ -748,6 +748,15 @@ T::eq('...leaving the pool untouched', null,
 set_setting('osm_proxy_enabled', '1');
 $db->prepare('DELETE FROM osm_proxies')->execute();
 
+// ── Proxy URL redaction never double-brackets ─────────────────────────────
+// An already-bracketed IPv6 literal passes through untouched (a dropped
+// negation here would wrap it again and poison captions and audit rows).
+T::eq('bracketed v6 passes through',
+    'http://[::1]:8080', osm_proxy_redact('http://[::1]:8080/x'));
+T::eq('plain host redacts userinfo, keeps port',
+    'http://proxy.example:8080', osm_proxy_redact('http://user:pass@proxy.example:8080/x'));
+T::eq('garbage redacts to a stub', '(proxy)', osm_proxy_redact('not a url'));
+
 // TLS peer verification stays pinned on (a flipped flag would handshake
 // with anyone holding any certificate and then send secrets).
 $tlsVerifyPair = $socksTcpPair('');
@@ -769,10 +778,15 @@ if ($tlsVerifyPair === null) {
 $originDir = sys_get_temp_dir() . '/ddmgmt-origin-' . getmypid();
 @mkdir($originDir);
 file_put_contents($originDir . '/origin.php',
-    '<?php if (($_SERVER["REQUEST_URI"] ?? "") === "/tile") {'
+    '<?php $p = parse_url($_SERVER["REQUEST_URI"] ?? "/", PHP_URL_PATH);'
+    . ' if ($p === "/tile") {'
     . ' header("Content-Type: text/plain"); header("Content-Length: 11");'
     . ' if ($_SERVER["REQUEST_METHOD"] !== "HEAD") { echo "HELLO-WORLD"; }'
-    . ' return true; } http_response_code(404); echo "not found"; return true;');
+    . ' return true; }'
+    . ' if ($p === "/big") {'
+    . ' header("Content-Type: application/octet-stream"); header("Content-Length: 102400");'
+    . ' echo str_repeat("B", 102400); return true; }'
+    . ' http_response_code(404); echo "not found"; return true;');
 $originPort = 0;
 $originProc = null;
 $originNull = DIRECTORY_SEPARATOR === '\\' ? 'NUL' : '/dev/null';
@@ -839,6 +853,12 @@ if ($originPort === 0) {
     $smallRes = proxy_request_streams('GET', $tileUrl, [], null, 10, 5);
     T::eq('over-cap body truncates', 200, $smallRes['code'] ?? -1);
     T::eq('...saying so', true, $smallRes['truncated'] ?? null);
+    // A multi-chunk body is assembled whole: the length loop must not stop
+    // after the first read (a weakened arm would hand back a 64 KiB prefix
+    // of every large tile).
+    $bigRes = proxy_request_streams('GET', "http://127.0.0.1:$originPort/big", [], null, 25, 200000);
+    T::eq('large body serves', 200, $bigRes['code'] ?? -1);
+    T::eq('...assembled whole', 102400, strlen($bigRes['body'] ?? ''));
     $headRes = proxy_request_streams('HEAD', $tileUrl, [], null, 10, 8192);
     T::eq('origin HEAD serves', 200, $headRes['code'] ?? -1);
     $postRes = proxy_request_streams('POST', $tileUrl, [], null, 10, 8192);
@@ -871,6 +891,46 @@ T::ok('wholesale failure kicks the healer urgently', $kickSpawned);
 $db->exec('DELETE FROM osm_proxies');
 osm_pool_circuit_clear();
 $db->exec("DELETE FROM settings WHERE key_name IN ('proxy_heal_last', 'proxy_heal_checked', 'proxy_heal_urgent', 'pool_down_until', 'pool_down_fp')");
+set_setting('osm_proxy_enabled', $prevRouting);
+
+// ── Batch fetch prefills failures, never successes ─────────────────────────
+// A zeroed prefill here would report unattempted jobs as HTTP 1xx.
+T::eq('dead batch member stays failure-shaped', [0, ''],
+    proxy_multi_fetch([['k' => 'm', 'url' => 'http://127.0.0.1:9/x', 'proxy' => null]], 2)['m'] ?? null);
+
+// ── Unparseable proxy never goes direct ────────────────────────────────────
+// A dropped parse guard here would fetch owner traffic without cover.
+if ($originPort === 0) {
+    T::ok('stub server unavailable here — proxy-parse gate skipped', true);
+} else {
+    $bogusRes = proxy_request_streams('GET', $tileUrl, [], 'bogus://x', 5, 8192);
+    T::eq('garbage proxy is a transport failure', 0, $bogusRes['code'] ?? -1);
+}
+
+// ── Healer reports its real verdict ───────────────────────────────────────
+// With a healthy pool there is nothing to replace (a dropped guard would
+// walk the empty probe and report a recovery that never happened); and the
+// default call honors no cooldown (a flipped default would sit out ten
+// minutes after every failure).
+$db->exec('DELETE FROM osm_proxies');
+$db->exec("DELETE FROM settings WHERE key_name IN ('proxy_heal_lock', 'proxy_heal_last', 'proxy_heal_checked', 'proxy_heal_urgent', 'proxy_seed_failures', 'osm_proxy_auto_off')");
+settings_invalidate();
+set_setting('osm_proxy_enabled', '1');
+$db->prepare("INSERT INTO osm_proxies (url, source, last_status, last_checked) VALUES ('http://127.0.0.1:9/', 'proxifly', 'ok', NOW())")->execute();
+$calmHeal = osm_proxy_heal(static fn(): array => [], static fn(array $u): array => []);
+T::eq('healthy pool has nothing to replace', 'nothing to replace', $calmHeal['skipped'] ?? null);
+$db->exec('DELETE FROM osm_proxies');
+$db->prepare("INSERT INTO osm_proxies (url, source, last_status, last_checked) VALUES ('http://127.0.0.1:9/', 'proxifly', 'fail', NOW())")->execute();
+set_setting('proxy_heal_last', (string)time());
+settings_invalidate();
+$freshHeal = osm_proxy_heal(
+    static fn(): array => [['url' => 'http://10.9.9.9:80', 'latency_ms' => 100, 'source' => 'test']],
+    static fn(array $u): array => array_fill_keys($u, [0, 0]));
+T::eq('default call heals despite a fresh run', null, $freshHeal['skipped'] ?? null);
+T::eq('...replacing the dead row', 1, $freshHeal['replaced'] ?? null);
+$db->exec('DELETE FROM osm_proxies');
+$db->exec("DELETE FROM settings WHERE key_name IN ('proxy_heal_lock', 'proxy_heal_last', 'proxy_heal_checked', 'proxy_heal_urgent', 'proxy_seed_failures', 'osm_proxy_auto_off')");
+$db->exec("DELETE FROM audit_log WHERE action IN ('proxy_replace', 'proxy_seed')");
 set_setting('osm_proxy_enabled', $prevRouting);
 
 exit(T::done());

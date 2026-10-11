@@ -222,6 +222,17 @@ T::ok('corrupt window status fails closed', rl_status($cscp)['blocked'] === true
 T::ok('corrupt window spend fails closed', rl_hit($cscp)['blocked'] === true);
 T::eq('corrupt row is not reset by the probe', 2, (int)$db->query(
     'SELECT count FROM rate_limits WHERE ip_address = ' . $db->quote($ip) . " AND scope = '$cscp'")->fetchColumn());
+
+// The epoch itself (timestamp 0) is a corrupt window, not an expired one:
+// a loosened bound here would read it as "started ages ago" and wave the
+// traffic through with a fresh budget.
+$epochScope = 'test_epoch';
+$db->prepare('DELETE FROM rate_limits WHERE ip_address = ? AND scope = ?')->execute([$ip, $epochScope]);
+$db->prepare("INSERT INTO rate_limits (ip_address, scope, count, window_start) VALUES (?, ?, 2, '1970-01-01 00:00:00')")
+    ->execute([$ip, $epochScope]);
+T::ok('epoch window status fails closed', rl_status($epochScope)['blocked'] === true);
+T::ok('epoch window spend fails closed', rl_hit($epochScope)['blocked'] === true);
+$db->prepare('DELETE FROM rate_limits WHERE ip_address = ? AND scope = ?')->execute([$ip, $epochScope]);
 $db->prepare('DELETE FROM rate_limits WHERE ip_address = ? AND scope = ?')->execute([$ip, $cscp]);
 
 // ── Refund, never reset: a free request must not wipe earned failures ───────
